@@ -1,0 +1,202 @@
+{
+  "魅魔加拉卡卡九尾双子": {
+    "map": "map_1",
+    "steps": [
+      {"hero": "jiuwei", "drags": [{"from": 13, "to": 2}]},
+      {"hero": "jiala", "drags": [{"from": 13, "to": 7}]},
+      {"hero": "kaka", "drags": [{"from": 13, "to": 4}]},
+      {"hero": "meimo", "drags": [{"from": 13, "to": 12}]},
+      {"hero": "shuangzi", "drags": [{"from": 13, "to": 1}, {"from": 9, "to": 10}]}
+    ]
+  },
+  "戴蒙加拉卡卡九尾双子": {
+    "map": "map_1",
+    "steps": [
+      {"hero": "jiuwei", "drags": [{"from": 13, "to": 2}]},
+      {"hero": "jiala", "drags": [{"from": 13, "to": 7}]},
+      {"hero": "kaka", "drags": [{"from": 13, "to": 4}]},
+      {"hero": "daimeng", "drags": [{"from": 13, "to": 12}]},
+      {"hero": "shuangzi", "drags": [{"from": 13, "to": 1}, {"from": 9, "to": 10}]}
+    ]
+  },
+  "冬炮狐希魅": {
+    "map": "map_1",
+    "steps": [
+      {"hero": "jiuwei", "drags": [{"from": 13, "to": 5}]},
+      {"hero": "paomo", "drags": [{"from": 13, "to": 10}]},
+      {"hero": "meimo", "drags": [{"from": 13, "to": 7}]},
+      {"hero": "donghou", "drags": [{"from": 13, "to": 11}]},
+      {"hero": "xida", "drags": [{"from": 13, "to": 12}]}
+    ]
+  },
+  "冬骨狐希魅": {
+    "map": "map_1",
+    "steps": [
+      {"hero": "meimo", "drags": [{"from": 13, "to": 4}]},
+      {"hero": "jiuwei", "drags": [{"from": 13, "to": 9}]},
+      {"hero": "xida", "drags": [{"from": 13, "to": 12}]},
+      {"hero": "donghou", "drags": [{"from": 13, "to": 11}]},
+      {"hero": "guwang", "drags": [{"from": 13, "to": 13}]}
+    ]
+  },
+  "冬希加拉卡卡": {
+    "map": "map_1",
+    "steps": [
+      {"hero": "jiala", "drags": [{"from": 13, "to": 4}]},
+      {"hero": "kaka", "drags": [{"from": 13, "to": 7}]},
+      {"hero": "xida", "drags": [{"from": 13, "to": 12}]},
+      {"hero": "donghou", "drags": [{"from": 13, "to": 11}]},
+      {"hero": "shuangzi", "drags": [{"from": 13, "to": 1}, {"from": 9, "to": 10}]}
+    ]
+  },
+  "绿箭蝴蝶白狼大树双子": {
+    "map": "map_1",
+    "steps": [
+      {"hero": "lvjian", "drags": [{"from": 13, "to": 7}]},
+      {"hero": "hudie", "drags": [{"from": 13, "to": 4}]},
+      {"hero": "bailang", "drags": [{"from": 13, "to": 12}]},
+      {"hero": "shuangzi", "drags": [{"from": 13, "to": 1}, {"from": 9, "to": 10}]},
+      {"hero": "dashu", "drags": [{"from": 13, "to": 13}]}
+    ]
+  },
+  "猫女戴蒙卡卡九尾双子（腐化伊米尔）": {
+    "map": "map_1",
+    "steps": [
+      {"hero": "kaka", "drags": [{"from": 13, "to": 1}]},
+      {"hero": "maonv", "drags": [{"from": 13, "to": 6}]},
+      {"hero": "jiuwei", "drags": [{"from": 13, "to": 9}]},
+      {"hero": "daimeng", "drags": [{"from": 13, "to": 8}]},
+      {"hero": "shuangzi", "drags": [{"from": 13, "to": 3}]}
+    ]
+  },
+  "花姐加拉卡卡九尾双子（腐化伊米尔）": {
+    "map": "map_1",
+    "steps": [
+      {"hero": "huajie", "drags": [{"from": 13, "to": 2}]},
+      {"hero": "jiala", "drags": [{"from": 13, "to": 4}]},
+      {"hero": "jiuwei", "drags": [{"from": 13, "to": 5}]},
+      {"hero": "kaka", "drags": [{"from": 13, "to": 7}]},
+      {"hero": "shuangzi", "drags": [{"from": 13, "to": 10}, {"from": 12, "to": 1}]}
+    ]
+  },
+  "女妖戴蒙弓神奎因双子（腐化伊米尔）": {
+    "map": "map_1",
+    "steps": [
+      {"hero": "kuishen", "drags": [{"from": 13, "to": 5}]},
+      {"hero": "gongshen", "drags": [{"from": 13, "to": 10}]},
+      {"hero": "nvyao", "drags": [{"from": 13, "to": 9}]},
+      {"hero": "daimeng", "drags": [{"from": 13, "to": 6}]},
+      {"hero": "shuangzi", "drags": [{"from": 13, "to": 3}]}
+    ]
+  },
+  "芙莉莲辛美尔戴蒙加拉双子（腐化伊米尔）": {
+    "map": "map_1",
+    "steps": [
+      {"hero": "fulilian", "drags": [{"from": 13, "to": 4}]},
+      {"hero": "xinmeier", "drags": [{"from": 13, "to": 7}]},
+      {"hero": "jiala", "drags": [{"from": 13, "to": 3}]},
+      {"hero": "daimeng", "drags": [{"from": 13, "to": 12}]},
+      {"hero": "shuangzi", "drags": [{"from": 13, "to": 10}, {"from": 9, "to": 1}]}
+    ]
+  },
+  "芙莉莲辛美尔戴蒙卡卡双子（腐化伊米尔）": {
+    "map": "map_1",
+    "steps": [
+      {"hero": "fulilian", "drags": [{"from": 13, "to": 4}]},
+      {"hero": "xinmeier", "drags": [{"from": 13, "to": 7}]},
+      {"hero": "kaka", "drags": [{"from": 13, "to": 3}]},
+      {"hero": "daimeng", "drags": [{"from": 13, "to": 12}]},
+      {"hero": "shuangzi", "drags": [{"from": 13, "to": 1}, {"from": 9, "to": 10}]}
+    ]
+  },
+  "女妖戴蒙九尾四手双子（魔花始祖）": {
+    "map": "map_1",
+    "steps": [
+      {"hero": "sishou", "drags": [{"from": 13, "to": 9}]},
+      {"hero": "jiuwei", "drags": [{"from": 13, "to": 2}]},
+      {"hero": "nvyao", "drags": [{"from": 13, "to": 4}]},
+      {"hero": "daimeng", "drags": [{"from": 13, "to": 7}]},
+      {"hero": "shuangzi", "drags": [{"from": 13, "to": 1}, {"from": 12, "to": 10}]}
+    ]
+  },
+  "加拉卡卡九尾戴蒙双子（魔花始祖）": {
+    "map": "map_1",
+    "steps": [
+      {"hero": "jiala", "drags": [{"from": 13, "to": 7}]},
+      {"hero": "kaka", "drags": [{"from": 13, "to": 4}]},
+      {"hero": "jiuwei", "drags": [{"from": 13, "to": 2}]},
+      {"hero": "daimeng", "drags": [{"from": 13, "to": 9}]},
+      {"hero": "shuangzi", "drags": [{"from": 13, "to": 1}, {"from": 12, "to": 10}]}
+    ]
+  },
+  "花姐骨王九尾卡卡双子（魔花始祖）": {
+    "map": "map_1",
+    "steps": [
+      {"hero": "huajie", "drags": [{"from": 13, "to": 9}]},
+      {"hero": "jiuwei", "drags": [{"from": 13, "to": 11}]},
+      {"hero": "kaka", "drags": [{"from": 13, "to": 8}]},
+      {"hero": "guwang", "drags": [{"from": 13, "to": 13}]},
+      {"hero": "shuangzi", "drags": [{"from": 12, "to": 3}, {"from": 10, "to": 12}]}
+    ]
+  },
+    "花姐卡卡书魔双子骨王（魔花始祖）": {
+    "map": "map_1",
+    "steps": [
+      {"hero": "huajie", "drags": [{"from": 13, "to": 4}]},
+      {"hero": "kaka", "drags": [{"from": 13, "to": 2}]},
+      {"hero": "shumo", "drags": [{"from": 13, "to": 6}]},
+      {"hero": "guwang", "drags": [{"from": 13, "to": 9}]},
+      {"hero": "shuangzi", "drags": [{"from": 13, "to": 1}, {"from": 12, "to": 7}]}
+    ]
+  },
+    "芙莉莲辛美尔书魔双子戴蒙（魔花始祖）": {
+    "map": "map_1",
+    "steps": [
+      {"hero": "fulilian", "drags": [{"from": 13, "to": 4}]},
+      {"hero": "xinmeier", "drags": [{"from": 13, "to": 7}]},
+      {"hero": "shumo", "drags": [{"from": 13, "to": 12}]},
+      {"hero": "daimeng", "drags": [{"from": 13, "to": 9}]},
+      {"hero": "shuangzi", "drags": [{"from": 13, "to": 1}, {"from": 11, "to": 10}]}
+    ]
+  },
+  "加拉卡卡书魔双子戴蒙（魔花始祖）": {
+    "map": "map_1",
+    "steps": [
+      {"hero": "jiala", "drags": [{"from": 13, "to": 4}]},
+      {"hero": "kaka", "drags": [{"from": 13, "to": 7}]},
+      {"hero": "shumo", "drags": [{"from": 13, "to": 12}]},
+      {"hero": "daimeng", "drags": [{"from": 13, "to": 9}]},
+      {"hero": "shuangzi", "drags": [{"from": 13, "to": 10}, {"from": 11, "to": 1}]}
+    ]
+  },
+  "加拉卡卡九尾戴蒙双子（盗匪首领）": {
+    "map": "map_1",
+    "steps": [
+      {"hero": "jiala", "drags": [{"from": 13, "to": 4}]},
+      {"hero": "kaka", "drags": [{"from": 13, "to": 7}]},
+      {"hero": "jiuwei", "drags": [{"from": 13, "to": 3}]},
+      {"hero": "daimeng", "drags": [{"from": 13, "to": 9}]},
+      {"hero": "shuangzi", "drags": [{"from": 13, "to": 10}, {"from": 12, "to": 1}]}
+    ]
+  },
+  "花姐骨王九尾卡卡双子（盗匪首领）": {
+    "map": "map_1",
+    "steps": [
+      {"hero": "huajie", "drags": [{"from": 13, "to": 9}]},
+      {"hero": "jiuwei", "drags": [{"from": 13, "to": 11}]},
+      {"hero": "kaka", "drags": [{"from": 13, "to": 8}]},
+      {"hero": "guwang", "drags": [{"from": 13, "to": 13}]},
+      {"hero": "shuangzi", "drags": [{"from": 10, "to": 3}]}
+    ]
+  },
+  "芙莉莲卡卡九尾戴蒙双子（盗匪首领）": {
+    "map": "map_1",
+    "steps": [
+      {"hero": "fulilian", "drags": [{"from": 13, "to": 4}]},
+      {"hero": "kaka", "drags": [{"from": 13, "to": 2}]},
+      {"hero": "jiuwei", "drags": [{"from": 13, "to": 3}]},
+      {"hero": "daimeng", "drags": [{"from": 13, "to": 9}]},
+      {"hero": "shuangzi", "drags": [{"from": 13, "to": 10}, {"from": 12, "to": 1}]}
+    ]
+  }
+}
