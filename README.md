@@ -113,8 +113,7 @@ A: 主包不更新我也没办法，随便拿个阵容凑合用吧，支持催�
 
 如果你觉得这个工具有帮助，欢迎赞助支持❤️
 
-<img width="1210" height="1210" alt="mm_reward_qrcode_1783098017346" src="https://github.com/user-attachments/assets/d422eee5-a651-4396-8b32-4bcbf3b59d0c" />
-
+![赞助二维码](sponsor_qrcode.png)
 
 ## 免责声明
 
