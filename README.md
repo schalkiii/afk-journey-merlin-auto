@@ -113,7 +113,7 @@ A: 主包不更新我也没办法，随便拿个阵容凑合用吧，支持催�
 
 如果你觉得这个工具有帮助，欢迎赞助支持❤️
 
-<img src="sponsor_qrcode.png" width="400" alt="赞助二维码" />
+<img src="https://raw.githubusercontent.com/yangyh02/afk-journey-merlin-auto/main/sponsor_qrcode.png" width="400" alt="赞助二维码" />
 
 ## 免责声明
 
