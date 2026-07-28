@@ -4,14 +4,9 @@
 a = Analysis(
     ['goldenhandmaidens.py'],
     pathex=[],
-    binaries=[
-        ('F:\\anaconda\\envs\\opencv_env\\Library\\bin\\libssl-3-x64.dll', '.'),
-        ('F:\\anaconda\\envs\\opencv_env\\Library\\bin\\libcrypto-3-x64.dll', '.'),
-        ('F:\\anaconda\\envs\\opencv_env\\Library\\bin\\tcl86t.dll', '.'),
-        ('F:\\anaconda\\envs\\opencv_env\\Library\\bin\\tk86t.dll', '.'),
-    ],
+    binaries=[],
     datas=[('click_from_file.exe', '.'), ('templates', 'templates'), ('migong_config.json', '.'), ('formations.json', '.'), ('grid_offsets.json', '.')],
-    hiddenimports=['shangcheng', 'youyishangcheng', 'common', 'flow_tower', 'jiance', 'warehouse', 'push', 'flow_push', 'mimengzhiyu', 'nvshenta', 'meirirenwulingqu', 'haoyoujiangli', 'youjian', 'shouquguajijiangli', 'start', 'pata', 'pujing', 'flow_migong', 'formation', 'drag_utils', 'updater', 'version', 'certifi', 'hero_metadata'],
+    hiddenimports=['shangcheng', 'youyishangcheng', 'common', 'flow_tower', 'jiance', 'warehouse', 'push', 'flow_push', 'mimengzhiyu', 'nvshenta', 'meirirenwulingqu', 'haoyoujiangli', 'youjian', 'shouquguajijiangli', 'start', 'pata', 'pujing', 'flow_migong', 'formation', 'drag_utils', 'updater', 'version', 'certifi', 'hero_metadata', 'keyboard'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

@@ -1,4 +1,8 @@
-"""幻灵推图 - 薄封装，实际逻辑在 push.py 中以 mode="huanling" 运行。"""
+"""幻灵推图流程模块（薄封装）。
+
+实际战斗逻辑在 push.py 中以 mode="huanling" 运行，本模块仅做转发与调试开关。
+"""
+
 from push import flow_push_mode1 as _push_flow, debug_lineup_recognition
 
 DEBUG_MODE = False

@@ -1,3 +1,10 @@
+"""拖拽 / 滑动工具模块：封装基于坐标的拖拽与长按操作。
+
+关键接口：
+- send_drag(x1, y1, x2, y2, ...): 将拖拽起止坐标写入 IPC 文件，交由 AHK 执行。
+拖拽动作同样走「写文件 + AHK 注入」的解耦通道（见 common.send_coord 说明）。
+"""
+
 import os
 import time
 from common import get_work_path

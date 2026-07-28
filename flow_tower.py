@@ -1,3 +1,9 @@
+"""爬塔流程模块：自动挑战并识别阵容、提交战斗。
+
+依赖 warehouse 的英雄模板与 common 的匹配/点击能力；战斗前后会读取仓库英雄，
+按配置上阵并识别胜利/失败以决定继续或停止。
+"""
+
 from common import wait_and_click, find_center, screenshot_bgr, send_coord, get_template_path, get_work_path
 from warehouse import (
     init_templates_from_dir,

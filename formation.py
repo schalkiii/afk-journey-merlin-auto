@@ -1,3 +1,10 @@
+"""阵容编辑模块：根据 formations.json 配置上阵英雄。
+
+从游戏内读取当前阵容并保存到 formations.json，或将指定阵容应用到游戏中；
+供推图/爬塔等任务在战斗前快速切换英雄配置。坐标类变量命名均带方位/序号后缀
+（如 slot、confirm_btn）以明确用途。
+"""
+
 import json
 import time
 import os
