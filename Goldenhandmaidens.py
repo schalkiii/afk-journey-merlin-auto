@@ -5,11 +5,15 @@ import time
 import json
 import os
 import sys
+import subprocess
+import shlex
 from datetime import datetime, timedelta
 from version import __version__
 import updater
 from warehouse import ALL_HERO_NAMES, WAREHOUSE_TXT_PATH
 from hero_metadata import HERO_RACE, HERO_JOB, RACE_NAMES, JOB_NAMES, PUSH_COMMON_HEROES, HERO_CN_NAMES
+import ctypes
+from ctypes import wintypes
 
 def get_resource_path(relative_path):
     """获取资源文件的绝对路径，兼容打包后的exe"""
@@ -77,12 +81,142 @@ def _ensure_config_files():
                 pass
 
 
+
+GAME_SHORTCUT_KEYWORDS = ["剑与远征", "启程", "afk", "afkj"]
+
+
+def find_game_shortcut():
+    
+    desktop_dirs = []
+    user_profile = os.environ.get("USERPROFILE") or os.environ.get("HOME")
+    if user_profile:
+        desktop_dirs.append(os.path.join(user_profile, "Desktop"))
+        desktop_dirs.append(os.path.join(user_profile, "OneDrive", "Desktop"))
+    public = os.environ.get("PUBLIC")
+    if public:
+        desktop_dirs.append(os.path.join(public, "Desktop"))
+
+    candidates = []
+    seen = set()
+    for d in desktop_dirs:
+        if not d or d in seen or not os.path.isdir(d):
+            continue
+        seen.add(d)
+        for name in os.listdir(d):
+            if name.lower().endswith(".lnk"):
+                low = name.lower()
+                if any(k.lower() in low for k in GAME_SHORTCUT_KEYWORDS):
+                    candidates.append(os.path.join(d, name))
+    return candidates
+
+
+def read_game_shortcut(lnk_path):
+    
+    ps = (
+        "$WshShell = New-Object -ComObject WScript.Shell;"
+        "$s = $WshShell.CreateShortcut('" + lnk_path.replace("'", "''") + "');"
+        "Write-Output ('TARGET=' + $s.TargetPath);"
+        "Write-Output ('ARGS=' + $s.Arguments);"
+        "Write-Output ('WORKDIR=' + $s.WorkingDirectory);"
+    )
+    proc = subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+        capture_output=True, text=True, encoding="utf-8", errors="ignore",
+    )
+    target, args, workdir = "", "", ""
+    for line in proc.stdout.splitlines():
+        if line.startswith("TARGET="):
+            target = line[len("TARGET="):].strip()
+        elif line.startswith("ARGS="):
+            args = line[len("ARGS="):].strip()
+        elif line.startswith("WORKDIR="):
+            workdir = line[len("WORKDIR="):].strip()
+    return target, args, workdir
+
+
+def launch_game_by_shortcut():
+    
+    candidates = find_game_shortcut()
+    if not candidates:
+        return False, "未找到桌面「剑与远征：启程」快捷方式，无法自动启动游戏"
+    lnk = candidates[0]
+    target, args, workdir = read_game_shortcut(lnk)
+    
+    if target and not target.lower().startswith("shell:appsfolder"):
+        cmd = [target] + (shlex.split(args) if args else [])
+        try:
+            subprocess.Popen(cmd, cwd=workdir or None)
+            return True, f"已按快捷方式启动游戏: {target}"
+        except Exception:
+            
+            pass
+    
+    try:
+        os.startfile(lnk)
+        return True, f"已通过快捷方式启动游戏: {lnk}"
+    except Exception as e:
+        return False, f"启动游戏失败: {e}"
+
+
+
+GAME_WINDOW_KEYWORDS = ("剑与远征：启程", "剑与远征", "启程", "AFK Journey", "AFK")
+
+
+def _find_game_window():
+    
+    try:
+        user32 = ctypes.windll.user32
+        found = []
+
+        @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+        def enum_cb(hwnd, lparam):
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length == 0:
+                return True
+            buf = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, buf, length + 1)
+            title = buf.value
+            if title and any(k in title for k in GAME_WINDOW_KEYWORDS):
+                found.append(hwnd)
+                return False
+            return True
+
+        user32.EnumWindows(enum_cb, 0)
+        return found[0] if found else None
+    except Exception:
+        return None
+
+
+def is_game_running():
+    
+    return _find_game_window() is not None
+
+
+def focus_game_window():
+    
+    try:
+        hwnd = _find_game_window()
+        if hwnd is None:
+            return False, "未找到游戏窗口，无法置于前台（请先启动游戏）"
+        user32 = ctypes.windll.user32
+        SW_RESTORE = 9
+        
+        user32.ShowWindow(hwnd, SW_RESTORE)
+        user32.SetForegroundWindow(hwnd)
+        return True, "已将游戏窗口切换到前台"
+    except Exception as e:
+        return False, f"聚焦游戏窗口失败: {e}"
+
+
 class GameBotGUI:
     def __init__(self, root):
         _ensure_config_files()
         self.root = root
         self.root.title("梅林初号机")
-        self.root.geometry("1050x700")
+        self.root.geometry("1200x880")
+        self.root.minsize(1024, 640)
         
         # 全局默认字体
         style = ttk.Style()
@@ -91,13 +225,29 @@ class GameBotGUI:
         self.is_running = False
         self.current_script_index = 0
         self.stop_event = threading.Event()
+        self._hotkey_lib = None
+
         
-        # 创建隐藏的日志文本框用于存储日志
-        self.log_text = tk.Text(self.root, height=0, width=0, state=tk.NORMAL)
-        
+        self.log_text = None
+        self._log_buffer = []
+
         # 加载配置
         self.config = load_config()
+        self.auto_start_on_launch = self.config.get("auto_start_on_launch", False)
+        self.auto_start_var = tk.BooleanVar(value=self.auto_start_on_launch)
+        self.launch_game_on_open = self.config.get("launch_game_on_open", False)
+        self.launch_game_var = tk.BooleanVar(value=self.launch_game_on_open)
+        self.game_launch_delay = self.config.get("game_launch_delay", 20)
+        self.game_wait_var = tk.IntVar(value=self.game_launch_delay)
         self.is_first_run = not self.config.get("first_run_completed", False)
+
+        
+        self.schedule_time = self.config.get("schedule_time", None)
+        self.schedule_hour_var = tk.IntVar(value=8)
+        self.schedule_min_var = tk.IntVar(value=0)
+        self.schedule_active = False
+        self.scheduled_time = None
+        self.schedule_cancel_event = threading.Event()
         
         self.scripts = [
             ScriptConfig("登录", enabled=True),
@@ -130,36 +280,30 @@ class GameBotGUI:
             script.daily_reset = script_config.get("daily_reset", script.daily_reset)
             script.last_run_time = script_config.get("last_run_time", None)
         
-        # 检查是否需要重置每日重置的脚本
-        self.check_daily_reset()
-        
         self.setup_ui()
+
+        
+        if self.config.get("schedule_time"):
+            try:
+                hh, mm = map(int, str(self.config["schedule_time"]).split(":"))
+                self.schedule_hour_var.set(hh)
+                self.schedule_min_var.set(mm)
+                self.set_schedule()
+            except Exception:
+                pass
+
+        
+        self._register_hotkeys()
+
+        
+        if self.launch_game_on_open or self.auto_start_on_launch:
+            self.root.after(1500, self._auto_open_flow)
 
         # 启动后自动检查更新（后台线程，不阻塞界面）
         self.root.after(1000, self._auto_check_update)
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
     
-    def check_daily_reset(self):
-        """检查是否需要重置每日重置的脚本"""
-        now = datetime.now()
-        today_8am = now.replace(hour=8, minute=0, second=0, microsecond=0)
-        
-        for script in self.scripts:
-            if script.daily_reset and script.last_run_time:
-                # 解析最后执行时间
-                try:
-                    last_run = datetime.fromisoformat(script.last_run_time)
-                    
-                    # 检查最后执行时间是否在今天8点之前
-                    if last_run < today_8am:
-                        # 重置脚本启用状态为True
-                        script.enabled = True
-                        script.last_run_time = None
-                        self.log(f"脚本 '{script.name}' 已重置为默认开启状态")
-                except Exception as e:
-                    print(f"解析最后执行时间失败: {e}")
-        
     def setup_ui(self):
         main_frame = ttk.Frame(self.root, padding="10")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
@@ -168,46 +312,103 @@ class GameBotGUI:
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
         main_frame.rowconfigure(1, weight=1)
+        main_frame.rowconfigure(2, weight=0)
         
         self.create_control_bar(main_frame)
         self.create_dashboard(main_frame)
         self.create_script_panel(main_frame)
+        self.create_log_panel(main_frame)
         
     def create_control_bar(self, parent):
         control_frame = ttk.Frame(parent, padding="10")
         control_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         
+        
+        top_frame = ttk.Frame(control_frame)
+        top_frame.pack(fill=tk.X)
+
         self.master_switch_btn = ttk.Button(
-            control_frame, 
-            text="开始运行", 
+            top_frame,
+            text="开始运行 (F8)",
             command=self.toggle_master_switch
         )
         self.master_switch_btn.pack(side=tk.LEFT, padx=5)
-        
-        self.stop_btn = ttk.Button(
-            control_frame,
-            text="停止运行",
-            command=self.stop_all,
-            state=tk.DISABLED
+
+        self.immediate_btn = ttk.Button(
+            top_frame, text="立即开始", command=self.launch_game_then_start
         )
-        self.stop_btn.pack(side=tk.LEFT, padx=5)
-        
-        self.view_log_btn = ttk.Button(
-            control_frame,
-            text="查看任务日志",
-            command=self.show_log_window
+        self.immediate_btn.pack(side=tk.LEFT, padx=5)
+
+        self.hotkey_hint = ttk.Label(
+            top_frame, text="F8 开始 / F9 停止", foreground="gray"
         )
-        self.view_log_btn.pack(side=tk.LEFT, padx=5)
+        self.hotkey_hint.pack(side=tk.LEFT, padx=10)
+
+        self.version_label = ttk.Label(top_frame, text=__version__, foreground="gray")
+        self.version_label.pack(side=tk.RIGHT, padx=5)
 
         self.update_btn = ttk.Button(
-            control_frame,
-            text="检查更新",
-            command=self._check_update_clicked
+            top_frame, text="检查更新", command=self._check_update_clicked
         )
         self.update_btn.pack(side=tk.RIGHT, padx=5)
 
-        self.version_label = ttk.Label(control_frame, text=__version__, foreground="gray")
-        self.version_label.pack(side=tk.RIGHT, padx=5)
+        
+        opt_frame = ttk.Frame(control_frame)
+        opt_frame.pack(fill=tk.X, pady=(8, 0))
+
+        self.auto_start_check = ttk.Checkbutton(
+            opt_frame,
+            text="启动后自动运行",
+            variable=self.auto_start_var,
+            command=self.on_auto_start_changed
+        )
+        self.auto_start_check.pack(side=tk.LEFT, padx=5)
+
+        self.launch_game_check = ttk.Checkbutton(
+            opt_frame,
+            text="启动时启动游戏",
+            variable=self.launch_game_var,
+            command=self.on_launch_game_changed
+        )
+        self.launch_game_check.pack(side=tk.LEFT, padx=5)
+
+        ttk.Label(opt_frame, text="游戏等待(s)").pack(side=tk.LEFT, padx=(10, 0))
+        self.game_wait_spin = ttk.Spinbox(
+            opt_frame,
+            from_=0, to=120, width=4,
+            textvariable=self.game_wait_var,
+            command=self.on_game_wait_changed
+        )
+        self.game_wait_spin.pack(side=tk.LEFT, padx=2)
+        
+        self.game_wait_spin.bind("<KeyRelease>", lambda e: self.on_game_wait_changed())
+        self.game_wait_spin.bind("<FocusOut>", lambda e: self._sync_game_wait_spin())
+
+        ttk.Label(opt_frame, text="  定时开始:").pack(side=tk.LEFT, padx=(10, 2))
+        self.sched_hour_spin = ttk.Spinbox(
+            opt_frame, from_=0, to=23, width=3,
+            textvariable=self.schedule_hour_var
+        )
+        self.sched_hour_spin.pack(side=tk.LEFT, padx=1)
+        ttk.Label(opt_frame, text="时").pack(side=tk.LEFT)
+        self.sched_min_spin = ttk.Spinbox(
+            opt_frame, from_=0, to=59, width=3,
+            textvariable=self.schedule_min_var
+        )
+        self.sched_min_spin.pack(side=tk.LEFT, padx=1)
+        ttk.Label(opt_frame, text="分").pack(side=tk.LEFT, padx=(0, 6))
+
+        self.sched_set_btn = ttk.Button(
+            opt_frame, text="设定定时", command=self.set_schedule
+        )
+        self.sched_set_btn.pack(side=tk.LEFT, padx=3)
+        self.sched_cancel_btn = ttk.Button(
+            opt_frame, text="取消定时", command=self.cancel_schedule, state=tk.DISABLED
+        )
+        self.sched_cancel_btn.pack(side=tk.LEFT, padx=3)
+
+        self.schedule_status_label = ttk.Label(opt_frame, text="未设定定时", foreground="blue")
+        self.schedule_status_label.pack(side=tk.LEFT, padx=10)
 
     def create_dashboard(self, parent):
         dashboard_frame = ttk.LabelFrame(parent, text="功能", padding="10")
@@ -266,6 +467,29 @@ class GameBotGUI:
         self.param_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         
         self.update_script_panel()
+        
+    def create_log_panel(self, parent):
+        log_frame = ttk.LabelFrame(parent, text="运行日志", padding="10")
+        log_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(10, 0))
+        log_frame.columnconfigure(0, weight=1)
+        log_frame.rowconfigure(0, weight=1)
+
+        text = tk.Text(log_frame, wrap=tk.WORD, height=10, state=tk.DISABLED)
+        text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+
+        scrollbar = ttk.Scrollbar(log_frame, orient=tk.VERTICAL, command=text.yview)
+        scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        text.configure(yscrollcommand=scrollbar.set)
+
+        self.log_text = text
+
+        
+        for line in getattr(self, '_log_buffer', []):
+            text.configure(state=tk.NORMAL)
+            text.insert(tk.END, line)
+            text.configure(state=tk.DISABLED)
+        self._log_buffer = []
+        text.see(tk.END)
         
     def show_log_window(self):
         log_window = tk.Toplevel(self.root)
@@ -645,17 +869,51 @@ class GameBotGUI:
         self.save_config()
         self.update_dashboard_buttons()
         
+    def on_auto_start_changed(self):
+        self.auto_start_on_launch = self.auto_start_var.get()
+        self.save_config()
+
+    def on_launch_game_changed(self):
+        self.launch_game_on_open = self.launch_game_var.get()
+        self.save_config()
+
+    def on_game_wait_changed(self):
+        try:
+            val = int(self.game_wait_var.get())
+        except (ValueError, TypeError):
+            return
+        val = max(0, min(120, val))
+        self.game_launch_delay = val
+        self.save_config()
+
+    def _sync_game_wait_spin(self):
+        
+        try:
+            val = int(self.game_wait_var.get())
+        except (ValueError, TypeError):
+            val = self.game_launch_delay
+        val = max(0, min(120, val))
+        self.game_wait_var.set(val)
+        self.game_launch_delay = val
+        self.save_config()
+
     def toggle_master_switch(self):
         if self.is_running:
             self.stop_all()
         else:
             self.start_all()
-            
+
+    
+    def update_master_button(self):
+        if self.is_running:
+            self.master_switch_btn.configure(text="停止运行 (F9)")
+        else:
+            self.master_switch_btn.configure(text="开始运行 (F8)")
+
     def start_all(self):
         self.is_running = True
         self.stop_event.clear()
-        self.master_switch_btn.configure(text="停止运行")
-        self.stop_btn.configure(state=tk.NORMAL)
+        self.update_master_button()
         
         # 检查是否有脚本启用
         enabled_scripts = [s for s in self.scripts if s.enabled]
@@ -677,8 +935,7 @@ class GameBotGUI:
     def stop_all(self):
         self.stop_event.set()
         self.is_running = False
-        self.master_switch_btn.configure(text="开始运行")
-        self.stop_btn.configure(state=tk.DISABLED)
+        self.update_master_button()
         
         for script in self.scripts:
             if script.status == "运行中":
@@ -689,6 +946,7 @@ class GameBotGUI:
         
     def on_closing(self):
         import subprocess
+        self._unregister_hotkeys()
         if self.is_running:
             if messagebox.askokcancel("退出", "脚本正在运行中，确定要停止并退出吗？"):
                 self.stop_all()
@@ -698,6 +956,157 @@ class GameBotGUI:
             subprocess.run(["taskkill", "/F", "/IM", "click_from_file.exe"], capture_output=True)
             self.root.destroy()
         
+    def launch_game_then_start(self, launch_game=True):
+        
+        if self.is_running:
+            self.log("脚本已在运行中，忽略本次启动请求")
+            return
+        enabled = [s for s in self.scripts if s.enabled]
+        if not enabled:
+            messagebox.showwarning("警告", "没有启用任何脚本！")
+            return
+        if launch_game:
+            self.launch_game_from_shortcut()
+            delay = self.game_launch_delay
+        else:
+            delay = 0
+        self.log(f"{delay} 秒后将开始运行脚本流程")
+        
+        self.root.after(max(0, int(delay)) * 1000, self._start_after_focus)
+
+    def _start_after_focus(self):
+        ok, msg = focus_game_window()
+        self.log(msg)
+        self.start_all()
+
+    def _auto_open_flow(self):
+        
+        if self.launch_game_on_open or self.auto_start_on_launch:
+            self.launch_game_then_start(launch_game=self.launch_game_on_open)
+        else:
+            self.log("未启用启动时自动流程")
+
+    def launch_game_from_shortcut(self):
+        ok, msg = launch_game_by_shortcut()
+        self.log(msg)
+        if ok:
+            self.log(f"游戏启动命令已发送，将在 {self.game_launch_delay} 秒后自动开始脚本流程")
+        return ok
+
+    
+    def set_schedule(self):
+        try:
+            hh = int(self.schedule_hour_var.get())
+            mm = int(self.schedule_min_var.get())
+        except Exception:
+            messagebox.showerror("错误", "请填写有效的小时和分钟")
+            return
+        if not (0 <= hh <= 23 and 0 <= mm <= 59):
+            messagebox.showerror("错误", "时间超出范围 (时 0-23, 分 0-59)")
+            return
+        now = datetime.now()
+        target = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        if target <= now:
+            target = target + timedelta(days=1)
+        self.scheduled_time = target
+        self.schedule_time = f"{hh:02d}:{mm:02d}"
+        self.schedule_active = True
+        self.schedule_cancel_event.clear()
+        self.save_config()
+        self.log(f"已设定定时开始: {self.schedule_time}（{target.strftime('%Y-%m-%d %H:%M')}，每天循环）")
+        threading.Thread(target=self._schedule_loop, daemon=True).start()
+        self.update_schedule_status()
+
+    def cancel_schedule(self):
+        self.schedule_active = False
+        self.schedule_cancel_event.set()
+        self.scheduled_time = None
+        self.schedule_time = None
+        self.save_config()
+        self._set_schedule_status("未设定定时")
+        self.log("已取消定时开始")
+
+    def _schedule_loop(self):
+        while True:
+            if not self.schedule_active or self.schedule_cancel_event.is_set():
+                return
+            remaining = (self.scheduled_time - datetime.now()).total_seconds()
+            if remaining <= 0:
+                self.root.after(0, self._fire_schedule)
+                return
+            self.root.after(0, self.update_schedule_status)
+            self.schedule_cancel_event.wait(timeout=1.0)
+
+    def _fire_schedule(self):
+        self.schedule_active = False
+        self.scheduled_time = None
+        if self.is_running:
+            self.log("定时开始：脚本已在运行中，跳过本次触发")
+            self._set_schedule_status("未设定定时")
+            return
+        
+        if is_game_running():
+            self.log("定时开始时间到，游戏已在运行，直接启动脚本")
+            self.launch_game_then_start(launch_game=False)
+        else:
+            self.log("定时开始时间到，启动游戏并运行脚本")
+            self.launch_game_then_start(launch_game=True)
+        
+        self.set_schedule()
+
+    def update_schedule_status(self):
+        if not self.schedule_active or self.scheduled_time is None:
+            self._set_schedule_status("未设定定时")
+            return
+        remaining = int((self.scheduled_time - datetime.now()).total_seconds())
+        if remaining < 0:
+            remaining = 0
+        h = remaining // 3600
+        m = (remaining % 3600) // 60
+        s = remaining % 60
+        self._set_schedule_status(f"已定时 {self.schedule_time} 倒计时 {h:02d}:{m:02d}:{s:02d}")
+
+    def _set_schedule_status(self, text):
+        if hasattr(self, "schedule_status_label") and self.schedule_status_label is not None:
+            self.schedule_status_label.configure(text=text)
+        if hasattr(self, "sched_cancel_btn") and self.sched_cancel_btn is not None:
+            if text.startswith("已定时"):
+                self.sched_cancel_btn.configure(state=tk.NORMAL)
+            else:
+                self.sched_cancel_btn.configure(state=tk.DISABLED)
+
+    
+    def _register_hotkeys(self):
+        
+        try:
+            import keyboard
+            self._hk_start = keyboard.add_hotkey('f8', lambda: self.root.after(0, self._hotkey_start))
+            self._hk_stop = keyboard.add_hotkey('f9', lambda: self.root.after(0, self._hotkey_stop))
+            self._hotkey_lib = keyboard
+            self.log("已注册全局热键 F8=开始运行 / F9=停止运行")
+        except Exception as e:
+            print(f"全局热键注册失败({e})，回退为窗口聚焦热键")
+            self.root.bind_all('<KeyPress-F8>', lambda e: self._hotkey_start())
+            self.root.bind_all('<KeyPress-F9>', lambda e: self._hotkey_stop())
+            self._hotkey_lib = None
+
+    def _unregister_hotkeys(self):
+        if self._hotkey_lib is not None:
+            try:
+                self._hotkey_lib.remove_hotkey(self._hk_start)
+                self._hotkey_lib.remove_hotkey(self._hk_stop)
+            except Exception:
+                pass
+
+    def _hotkey_start(self):
+        if not self.is_running:
+            self.start_all()
+
+    def _hotkey_stop(self):
+        if self.is_running:
+            self.stop_all()
+
+    
     def run_scripts_thread(self, scripts_to_run):
         # 先杀掉旧进程，再启动新的 click_from_file.exe（确保工作目录正确）
         import subprocess
@@ -963,12 +1372,23 @@ class GameBotGUI:
                 
             time.sleep(2)
         
+        
+        self.save_config()
         self.root.after(0, self.stop_all)
         
     def log(self, message):
         timestamp = time.strftime("%H:%M:%S")
-        self.log_text.insert(tk.END, f"[{timestamp}] {message}\n")
-        self.log_text.see(tk.END)
+        line = f"[{timestamp}] {message}\n"
+        if self.log_text is not None:
+            self.log_text.configure(state=tk.NORMAL)
+            self.log_text.insert(tk.END, line)
+            self.log_text.see(tk.END)
+            self.log_text.configure(state=tk.DISABLED)
+        else:
+            if not hasattr(self, '_log_buffer'):
+                self._log_buffer = []
+            self._log_buffer.append(line)
+    
     
     def save_config(self):
         """保存配置"""
@@ -982,6 +1402,10 @@ class GameBotGUI:
                 "last_run_time": script.last_run_time
             }
         self.config["scripts"] = scripts_config
+        self.config["auto_start_on_launch"] = self.auto_start_on_launch
+        self.config["launch_game_on_open"] = self.launch_game_on_open
+        self.config["game_launch_delay"] = self.game_launch_delay
+        self.config["schedule_time"] = self.schedule_time
         
         # 保存到文件
         if save_config(self.config):
