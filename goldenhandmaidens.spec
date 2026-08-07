@@ -10,7 +10,7 @@ a = Analysis(
         ('F:\\anaconda\\envs\\opencv_env\\Library\\bin\\tcl86t.dll', '.'),
         ('F:\\anaconda\\envs\\opencv_env\\Library\\bin\\tk86t.dll', '.'),
     ],
-    datas=[('click_from_file.exe', '.'), ('templates', 'templates'), ('migong_config.json', '.'), ('formations.json', '.'), ('grid_offsets.json', '.')],
+    datas=[('click_from_file.exe', '.'), ('templates', 'templates'), ('migong_config.json', '.'), ('formations.json', '.'), ('grid_offsets.json', '.'), ('README.md', '.'), ('sponsor_qrcode.png', '.')],
     hiddenimports=['shangcheng', 'youyishangcheng', 'common', 'flow_tower', 'jiance', 'warehouse', 'push', 'flow_push', 'mimengzhiyu', 'nvshenta', 'meirirenwulingqu', 'haoyoujiangli', 'youjian', 'shouquguajijiangli', 'start', 'pata', 'pujing', 'flow_migong', 'formation', 'drag_utils', 'updater', 'version', 'certifi', 'hero_metadata'],
     hookspath=[],
     hooksconfig={},

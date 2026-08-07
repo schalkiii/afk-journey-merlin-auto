@@ -199,6 +199,20 @@ class GameBotGUI:
         )
         self.view_log_btn.pack(side=tk.LEFT, padx=5)
 
+        self.help_btn = ttk.Button(
+            control_frame,
+            text="帮助",
+            command=self.show_help_window
+        )
+        self.help_btn.pack(side=tk.LEFT, padx=5)
+
+        self.sponsor_btn = ttk.Button(
+            control_frame,
+            text="赞助",
+            command=self.show_sponsor
+        )
+        self.sponsor_btn.pack(side=tk.LEFT, padx=5)
+
         self.update_btn = ttk.Button(
             control_frame,
             text="检查更新",
@@ -290,7 +304,39 @@ class GameBotGUI:
         # 复制当前日志内容
         log_text.insert(tk.END, self.log_text.get("1.0", tk.END))
         log_text.see(tk.END)
-        
+
+    def show_help_window(self):
+        help_window = tk.Toplevel(self.root)
+        help_window.title("帮助")
+        help_window.geometry("700x650")
+
+        readme_path = get_resource_path("README.md")
+        if os.path.exists(readme_path):
+            with open(readme_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        else:
+            content = "README.md 未找到。"
+
+        text_frame = ttk.Frame(help_window, padding="10")
+        text_frame.pack(fill=tk.BOTH, expand=True)
+
+        text_widget = tk.Text(text_frame, wrap=tk.WORD, font=("Microsoft YaHei", 10),
+                              padx=10, pady=10, borderwidth=0)
+        text_widget.insert(tk.END, content)
+        text_widget.configure(state=tk.DISABLED)
+
+        text_scrollbar = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=text_widget.yview)
+        text_widget.configure(yscrollcommand=text_scrollbar.set)
+        text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        text_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+    def show_sponsor(self):
+        qr_path = get_resource_path("sponsor_qrcode.png")
+        if os.path.exists(qr_path):
+            os.startfile(qr_path)
+        else:
+            messagebox.showinfo("赞助", "赞助二维码图片未找到。")
+
     def update_dashboard_buttons(self):
         for i, (btn, script) in enumerate(zip(self.script_buttons, self.scripts)):
             if i == self.current_script_index:

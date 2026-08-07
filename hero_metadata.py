@@ -5,7 +5,7 @@
 HERO_RACE = {
     # === 耀光 ===
     "nvqi": "yg", "guangdun": "yg", "luka": "yg", "manman": "yg",
-    "shangren": "yg", "yifu": "yg", "fei": "yg", "hujin": "yg", "mangmang": "yg", "peiji": "yg",
+    "shangren": "yg", "yifu": "yg", "fei": "yg", "hujin": "yg", "mangmang": "yg", "peiji": "yg", "wangzi": "yg",
     "zuya": "yg", "tiaotiao": "yg", "guanggong": "yg", "xiu": "yg", "longgong": "yg",
     "heifa": "yg", "shuifa": "yg", "huonv": "yg",
     "xinbada": "yg", "weila": "yg", "nanqiang": "yg",
@@ -26,6 +26,7 @@ HERO_RACE = {
     "jiala": "mx", "huohuli": "mx", "gungun": "mx",
     "langren": "mx", "heibao": "mx", "gunge": "mx",
     "renma": "mx", "boluotou": "mx", "fuxiong": "mx", "shizi": "mx",
+    "manniao": "mx",
 
     # === 亡灵 ===
     "matong": "wl", "daimeng": "wl", "guwang": "wl",
@@ -42,6 +43,7 @@ HERO_RACE = {
     "fenghuang": "bs", "mengshen": "bs",
     "niaoshen": "bs", "tianfa": "bs",
     "fushen": "bs", "jianshen": "bs",
+    "luolan": "bs",
 
     # === 恶魔 ===
     "xiezi": "em", "paomo": "em",
@@ -64,7 +66,7 @@ HERO_JOB = {
     "zuya": "ss", "tiaotiao": "ss", "guanggong": "ss", "xiu": "ss", "longgong": "ss",
     "heifa": "fs", "shuifa": "fs", "huonv": "fs",
     "xinbada": "yx", "weila": "yx", "nanqiang": "yx",
-    "huajie": "zs", "renhuang": "zs", "kelin": "zs", "weilun": "zs",
+    "huajie": "zs", "renhuang": "zs", "kelin": "zs", "weilun": "zs", "wangzi": "zs",
 
     # === 绿裔 ===
     "douduo": "tk", "dashu": "tk", "popo": "tk",
@@ -81,6 +83,7 @@ HERO_JOB = {
     "jiala": "fs", "huohuli": "fs", "gungun": "fs",
     "langren": "yx", "heibao": "yx", "gunge": "yx",
     "renma": "zs", "boluotou": "zs", "fuxiong": "zs", "shizi": "zs",
+    "manniao": "ss",
 
     # === 亡灵 ===
     "matong": "tk", "daimeng": "tk", "guwang": "tk",
@@ -97,6 +100,7 @@ HERO_JOB = {
     "fenghuang": "fs", "mengshen": "fs",
     "niaoshen": "yx", "tianfa": "yx",
     "fushen": "zs", "jianshen": "zs",
+    "luolan": "fz",
 
     # === 恶魔 ===
     "xiezi": "tk", "paomo": "tk",
@@ -114,10 +118,10 @@ HERO_JOB = {
 
 # 推图常用角色（按种族→职业排序）
 PUSH_COMMON_HEROES = [
-    "yifu", "hujin", "xiu",          # 耀光: 辅助,辅助,射手
+    "yifu", "hujin", "xiu", "wangzi",  # 耀光: 辅助,辅助,射手,战士
     "douduo", "kuishen", "jiuwei", "bailang", "lvjian",  # 绿裔: 坦克,辅助,辅助,游侠,游侠
     "jiala",                          # 蛮血: 法师
-    "donghou", "shuangzi", "niaoshen",  # 半神: 坦克,辅助,游侠
+    "donghou", "shuangzi", "niaoshen", "luolan",  # 半神: 坦克,辅助,游侠,辅助
     "paomo", "shumo", "meimo", "xida",  # 恶魔: 坦克,辅助,法师,游侠
     "fulilian",                       # 虚空: 法师
 ]
@@ -157,4 +161,6 @@ HERO_CN_NAMES = {
     "xinmeier": "辛美尔", "fulilian": "芙莉莲", "yifu": "伊芙", "huopu": "霍普",
     "shumo": "书魔", "longgong": "龙弓", "niaoshen": "鸟神",
     "renyu": "人鱼", "peiji": "佩吉", "liuyan": "六眼",
+    "luolan": "罗兰", "wangzi": "王子",
+    "manniao": "蛮鸟",
 }

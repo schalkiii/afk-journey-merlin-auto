@@ -179,7 +179,10 @@ ALL_HERO_NAMES = [
     "niaoshen",
     "renyu",
     "peiji",
-    "liuyan"
+    "liuyan",
+    "luolan",
+    "wangzi",
+    "manniao"
 ]
 
 # 识别结果输出路径（文本文件）
