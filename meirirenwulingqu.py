@@ -1,10 +1,10 @@
 # F:\afkj\game-bot\meirirenwu.py
 import os
 import time
-from common import wait_and_click, find_center, get_resource_path
+from common import wait_and_click, find_center, get_templates_dir
 
 # 模板路径
-templates_dir = get_resource_path("templates")
+templates_dir = get_templates_dir()
 
 def main():
     print("开始执行每日任务...")

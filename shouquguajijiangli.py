@@ -1,10 +1,10 @@
 # F:\afkj\game-bot\shouquguajijiangli.py
 import os
 import time
-from common import wait_and_click, find_center, get_resource_path
+from common import wait_and_click, find_center, get_templates_dir
 
 # 模板路径
-templates_dir = get_resource_path("templates")
+templates_dir = get_templates_dir()
 
 # 配置参数
 # 设置是否使用付费次数，默认只使用免费次数

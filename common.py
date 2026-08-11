@@ -5,6 +5,11 @@ import pyautogui
 import time
 import os
 import sys
+import hashlib
+import shutil
+
+APP_DATA_ROOT = os.path.join(os.environ.get("APPDATA", ""), "gamebot")
+APP_TEMPLATES_DIR = os.path.join(APP_DATA_ROOT, "templates")
 
 def get_resource_path(relative_path):
     """获取资源文件的绝对路径，兼容打包后的exe"""
@@ -14,11 +19,54 @@ def get_resource_path(relative_path):
         base_path = os.path.dirname(__file__)
     return os.path.join(base_path, relative_path)
 
+def _templates_marker(bundled_dir):
+    """对模板目录内所有文件的相对路径+大小做摘要，用于判断打包内容是否有变化"""
+    entries = []
+    for root, _, files in os.walk(bundled_dir):
+        for fname in sorted(files):
+            fpath = os.path.join(root, fname)
+            rel = os.path.relpath(fpath, bundled_dir)
+            try:
+                size = os.path.getsize(fpath)
+            except OSError:
+                continue
+            entries.append(f"{rel}:{size}")
+    return hashlib.md5("\n".join(entries).encode("utf-8", "surrogatepass")).hexdigest()
+
+def ensure_appdata_templates():
+    """
+    打包后把内置模板复制到 %APPDATA%\\gamebot\\templates，避免杀软清理
+    _MEIPASS 临时目录导致模板文件丢失。启动时对比内容摘要，
+    打包内容变化或副本缺失/损坏时重新复制；复制失败则回退使用内置目录。
+    """
+    if not getattr(sys, "frozen", False) or not APP_DATA_ROOT:
+        return
+    bundled_dir = get_resource_path("templates")
+    if not os.path.isdir(bundled_dir):
+        return
+    try:
+        marker = _templates_marker(bundled_dir)
+        if os.path.isdir(APP_TEMPLATES_DIR):
+            if _templates_marker(APP_TEMPLATES_DIR) == marker:
+                return
+            shutil.rmtree(APP_TEMPLATES_DIR)
+        shutil.copytree(bundled_dir, APP_TEMPLATES_DIR)
+    except Exception:
+        pass
+
+def get_templates_dir():
+    """模板目录：打包后优先 %APPDATA% 副本，其次内置目录；开发模式返回项目目录"""
+    if getattr(sys, "frozen", False) and os.path.isdir(APP_TEMPLATES_DIR):
+        return APP_TEMPLATES_DIR
+    return get_resource_path("templates")
+
 def get_template_path(template_name, subdir=None):
     """获取模板图片路径，可指定子目录"""
     if subdir:
-        return get_resource_path(os.path.join("templates", subdir, template_name))
-    return get_resource_path(os.path.join("templates", template_name))
+        return os.path.join(get_templates_dir(), subdir, template_name)
+    return os.path.join(get_templates_dir(), template_name)
+
+ensure_appdata_templates()
 
 def get_work_path(relative_path):
     """获取工作目录下的文件路径（配置文件等）"""
