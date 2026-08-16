@@ -88,13 +88,49 @@ game_bot_config.json      用户配置（运行时生成）
 
 ## 二次开发（源码运行）
 
-```bash
+`ash
 pip install pyautogui opencv-python numpy pillow requests
 python Goldenhandmaidens.py
-```
-
+`
 打包为单文件 exe（输出到仓库根目录）：
-
-```bash
+`ash
 pyinstaller goldenhandmaidens.spec --distpath . --workpath build --noconfirm
-```
+`
+
+A: 请确保 shared 文件夹已创建，启动时需要当前界面可以看到玩法目录四个字，在其他界面无法顺利运行。
+
+A: 手动退出到玩法目录界面，重新启动程序。
+
+Q: 识别不到按钮？
+
+A: 请检查游戏分辨率是否正确，界面是否与模板匹配。
+
+Q: 如何停止正在运行的任务？
+
+A: 点击界面上的「停止运行」按钮。
+
+Q: 异界迷宫自动退出？
+A: 请检查你使用阵容所需的角色是否已经准备好。
+
+Q: 异界迷宫boss阵容缺失？
+
+A: 主包不更新我也没办法，随便拿个阵容凑合用吧，支持催更若隐寒星和千秋月。
+
+### 7.开发相关
+计划更新家园愿望单相关内容和荣誉对决。
+
+### 8.致谢
+- **异界迷宫烙印选择策略来自** B站 若隐寒星/frosty（https://space.bilibili.com/401793216）
+
+- **异界迷宫阵容参考来自** B站 千秋月（https://space.bilibili.com/3546777955338480）
+
+### 9.赞助
+- **如果你觉得这个工具具有帮助，欢迎赞助支持❤️**
+
+<img src='sponsor_qrcode.png' width='300' alt='赞助二维码' />
+
+### 10.免责声明
+- **本工具仅供学习交流使用，请勿用于任何商业用途。使用本工具产生的任何后果由用户自行承担。**
+
+### 许可证
+MIT License

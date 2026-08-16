@@ -198,5 +198,35 @@
       {"hero": "daimeng", "drags": [{"from": 13, "to": 9}]},
       {"hero": "shuangzi", "drags": [{"from": 13, "to": 10}, {"from": 12, "to": 1}]}
     ]
+  },
+  "双子辛芙罗兰佩吉（蹒跚狂战士）": {
+    "map": "map_1",
+    "steps": [
+      {"hero": "luolan", "drags": [{"from": 13, "to": 2}]},
+      {"hero": "xinmeier", "drags": [{"from": 13, "to": 7}]},
+      {"hero": "fulilian", "drags": [{"from": 13, "to": 4}]},
+      {"hero": "shuangzi", "drags": [{"from": 13, "to": 1}, {"from": 12, "to": 10}]},
+      {"hero": "peiji", "drags": [{"from": 13, "to": 13}]}
+    ]
+  },
+  "芙莉莲加拉卡卡罗兰佩吉（蹒跚狂战士）": {
+    "map": "map_1",
+    "steps": [
+      {"hero": "luolan", "drags": [{"from": 13, "to": 7}]},
+      {"hero": "kaka", "drags": [{"from": 13, "to": 4}]},
+      {"hero": "fulilian", "drags": [{"from": 13, "to": 6}]},
+      {"hero": "jiala", "drags": [{"from": 13, "to": 9}]},
+      {"hero": "peiji", "drags": [{"from": 13, "to": 13}]}
+    ]
+  },
+  "书魔双子罗兰骨王花姐（蹒跚狂战士）": {
+    "map": "map_1",
+    "steps": [
+      {"hero": "luolan", "drags": [{"from": 13, "to": 11}]},
+      {"hero": "huajie", "drags": [{"from": 13, "to": 9}]},
+      {"hero": "shumo", "drags": [{"from": 13, "to": 8}]},
+      {"hero": "guwang", "drags": [{"from": 13, "to": 13}]},
+      {"hero": "shuangzi", "drags": [{"from": 12, "to": 3}, {"from": 10, "to": 12}]}
+    ]
   }
 }

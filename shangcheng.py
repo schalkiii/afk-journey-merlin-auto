@@ -2,11 +2,11 @@
 import os
 import time
 import sys
-from common import wait_and_click, get_template_path, get_resource_path
+from common import wait_and_click, get_template_path, get_templates_dir
 import youyishangcheng
 
 # 模板路径
-templates_dir = get_resource_path("templates")
+templates_dir = get_templates_dir()
 
 def main():
     print("开始执行商城任务...")

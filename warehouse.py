@@ -1,4 +1,4 @@
-from common import screenshot_bgr, wait_and_click, get_template_path, get_resource_path, get_work_path
+from common import screenshot_bgr, wait_and_click, get_template_path, get_work_path, get_templates_dir
 import cv2
 import os
 import time
@@ -53,7 +53,7 @@ JOB_TEMPLATES = {
     "zs": get_template_path("zs.png"),
 }
 
-TEMPLATE_DIR = get_resource_path("templates")
+TEMPLATE_DIR = get_templates_dir()
 
 # 角色头像模板库：同一个英雄可以有多个头像（皮肤）
 # key：英雄名（使用你给的图片基础名，如 'nvyao'）
@@ -179,7 +179,10 @@ ALL_HERO_NAMES = [
     "niaoshen",
     "renyu",
     "peiji",
-    "liuyan"
+    "liuyan",
+    "luolan",
+    "wangzi",
+    "manniao"
 ]
 
 # 识别结果输出路径（文本文件）
