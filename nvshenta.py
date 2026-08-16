@@ -1,4 +1,4 @@
-from common import wait_and_click, find_center, screenshot_bgr, send_coord, get_template_path
+from common import wait_and_click, find_center, screenshot_bgr, send_coord, get_template_path, find_center_silent, try_auto_configure_lineup
 from jiance import check_and_handle_libao
 import cv2
 import time
@@ -7,60 +7,6 @@ import random
 # 随机等待函数，2-3秒
 def random_sleep():
     time.sleep(random.uniform(2.0, 3.0))
-
-# 静默版本的 find_center，不输出匹配得分
-def find_center_silent(template_path, threshold=0.8, region=None):
-    """
-    在指定区域内查找模板
-    
-    template_path: 模板路径
-    threshold: 匹配阈值
-    region: 搜索区域 (x, y, width, height)，None 表示整个屏幕
-    返回：找到的中心点坐标，未找到返回 None
-    """
-    template = cv2.imread(template_path, cv2.IMREAD_COLOR)
-    if template is None:
-        raise ValueError(f"模板读取失败: {template_path}")
-    h, w = template.shape[:2]
-
-    img = screenshot_bgr()
-    
-    # 如果指定了区域，裁剪图像
-    if region:
-        x, y, width, height = region
-        # 确保区域在图像范围内
-        x = max(0, x)
-        y = max(0, y)
-        width = min(width, img.shape[1] - x)
-        height = min(height, img.shape[0] - y)
-        
-        if width <= 0 or height <= 0:
-            return None
-        
-        img_roi = img[y:y+height, x:x+width]
-        if img_roi.shape[0] < h or img_roi.shape[1] < w:
-            return None
-        
-        res = cv2.matchTemplate(img_roi, template, cv2.TM_CCOEFF_NORMED)
-    else:
-        img_roi = img
-        res = cv2.matchTemplate(img, template, cv2.TM_CCOEFF_NORMED)
-
-    _, max_val, _, max_loc = cv2.minMaxLoc(res)
-
-    if max_val < threshold:
-        return None
-
-    top_left = max_loc
-    center_x = top_left[0] + w // 2
-    center_y = top_left[1] + h // 2
-    
-    # 如果指定了区域，需要调整坐标
-    if region:
-        center_x += region[0]
-        center_y += region[1]
-
-    return center_x, center_y
 
 # === 模板路径 ===
 tpl_wanfamulu = get_template_path("wanfamulu.png")
@@ -166,7 +112,7 @@ def do_saodang_and_exit():
     return True
 
 
-def flow_nvshenta():
+def flow_nvshenta(auto_configure_lineup=False):
     """
     功能：女神塔挑战
     
@@ -256,7 +202,13 @@ def flow_nvshenta():
         print("点击 nvshentiaozhan 失败")
         return False
     random_sleep()
-    
+    # 可选：挑战前尝试自动采用通关阵容（检测并点击 tongguanzhenrong / yijiancaiyong）
+    if auto_configure_lineup:
+        if try_auto_configure_lineup():
+            print("【女神塔】已自动采用通关阵容。")
+        else:
+            print("【女神塔】未检测到通关阵容入口，跳过自动配置。")
+
     # 点击 zhandou 战斗
     if not wait_and_click(tpl_zhandou, "zhandou", 0.8):
         print("点击 zhandou 失败")
@@ -305,7 +257,13 @@ def flow_nvshenta():
         # 点击下一层
         send_coord(pos_next[0], pos_next[1])
         random_sleep()
-        
+        # 可选：挑战前尝试自动采用通关阵容（检测并点击 tongguanzhenrong / yijiancaiyong）
+        if auto_configure_lineup:
+            if try_auto_configure_lineup():
+                print("【女神塔】已自动采用通关阵容。")
+            else:
+                print("【女神塔】未检测到通关阵容入口，跳过自动配置。")
+
         # 直接点击 zhandou 战斗
         if not wait_and_click(tpl_zhandou, "zhandou", 0.8):
             print("点击 zhandou 失败")

@@ -4,7 +4,7 @@
 按配置上阵并识别胜利/失败以决定继续或停止。
 """
 
-from common import wait_and_click, find_center, screenshot_bgr, send_coord, get_template_path, get_work_path
+from common import wait_and_click, find_center, screenshot_bgr, send_coord, get_template_path, get_work_path, find_center_silent
 from warehouse import (
     init_templates_from_dir,
     WAREHOUSE_TXT_PATH,
@@ -17,25 +17,6 @@ import random
 # 随机等待函数，2-3秒
 def random_sleep():
     time.sleep(random.uniform(2.0, 3.0))
-
-# 静默版本的 find_center，不输出匹配得分
-def find_center_silent(template_path, threshold=0.8):
-    template = cv2.imread(template_path, cv2.IMREAD_COLOR)
-    if template is None:
-        raise ValueError(f"模板读取失败: {template_path}")
-    h, w = template.shape[:2]
-
-    img = screenshot_bgr()
-    res = cv2.matchTemplate(img, template, cv2.TM_CCOEFF_NORMED)
-    _, max_val, _, max_loc = cv2.minMaxLoc(res)
-
-    if max_val < threshold:
-        return None
-
-    top_left = max_loc
-    center_x = top_left[0] + w // 2
-    center_y = top_left[1] + h // 2
-    return center_x, center_y
 
 # 检测手动战斗标志，返回得分和坐标
 def check_artificial_score(threshold=0.7):

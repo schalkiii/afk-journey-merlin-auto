@@ -28,27 +28,40 @@ import subprocess
 import shlex
 from datetime import datetime, timedelta
 from version import __version__
+import common
+
+
+class _StdoutTee:
+    """把 stdout 同时输出到原始 stdout 与面板日志汇聚回调，
+    使各子脚本中的 print(...) 调试日志也能显示在应用内「运行日志」面板。"""
+    def __init__(self, sink):
+        self._sink = sink
+        self._orig = sys.__stdout__
+
+    def write(self, s):
+        try:
+            self._orig.write(s)
+        except Exception:
+            pass
+        if s and s.strip():
+            try:
+                self._sink(s.rstrip("\n"))
+            except Exception:
+                pass
+
+    def flush(self):
+        try:
+            self._orig.flush()
+        except Exception:
+            pass
 import updater
 from warehouse import ALL_HERO_NAMES, WAREHOUSE_TXT_PATH
 from hero_metadata import HERO_RACE, HERO_JOB, RACE_NAMES, JOB_NAMES, PUSH_COMMON_HEROES, HERO_CN_NAMES
 import ctypes
 from ctypes import wintypes
 
-def get_resource_path(relative_path):
-    """获取资源文件的绝对路径，兼容打包后的exe"""
-    if hasattr(sys, '_MEIPASS'):
-        base_path = sys._MEIPASS
-    else:
-        base_path = os.path.dirname(__file__)
-    return os.path.join(base_path, relative_path)
-
-def get_work_path(relative_path):
-    """获取工作目录下的文件路径（配置文件等）"""
-    if getattr(sys, 'frozen', False):
-        base_path = os.path.dirname(sys.executable)
-    else:
-        base_path = os.path.dirname(__file__)
-    return os.path.join(base_path, relative_path)
+# 路径解析统一复用 common 的实现，避免与底层模块重复定义（见 common.get_resource_path / get_work_path）
+from common import get_resource_path, get_work_path
 
 CONFIG_FILE = get_work_path("game_bot_config.json")
 
@@ -82,22 +95,13 @@ class ScriptConfig:
         self.last_run_time = None  # 最后执行时间
 
 def _ensure_config_files():
-    """首次运行时创建必要目录、从打包资源中复制配置文件到 exe 同目录"""
-    # 确保 shared 目录存在
+    """首次运行时确保 shared 目录存在（坐标 IPC 等文件的工作目录）。
+
+    历史版本曾在此从打包资源复制配置文件到 exe 同目录；现改为 load_config 直接
+    读写 game_bot_config.json，无需复制，故仅保留建目录职责、移除空拷贝循环。
+    """
     shared_dir = get_work_path("shared")
     os.makedirs(shared_dir, exist_ok=True)
-
-    config_files = []
-    for fname in config_files:
-        target = get_work_path(fname)
-        if not os.path.exists(target):
-            try:
-                source = get_resource_path(fname)
-                if os.path.exists(source):
-                    import shutil
-                    shutil.copy2(source, target)
-            except Exception:
-                pass
 
 
 # 桌面快捷方式候选名称（文件名包含其一即视为游戏快捷方式）
@@ -250,6 +254,12 @@ class GameBotGUI:
         self.log_text = None
         self._log_buffer = []
 
+        # 把各子脚本的调试日志（common.log）汇聚到应用内「运行日志」面板
+        common.set_log_sink(self._panel_log)
+        # 注入停止检查器：F9 置位 stop_event 后，子脚本在下一次截图/点击
+        # 原语调用处会抛出 StopRequested，实现「立即停止」而非等脚本跑完
+        common.set_stop_checker(self.stop_event.is_set)
+
         # 加载配置
         self.config = load_config()
         self.auto_start_on_launch = self.config.get("auto_start_on_launch", False)
@@ -259,6 +269,10 @@ class GameBotGUI:
         self.game_launch_delay = self.config.get("game_launch_delay", 20)
         self.game_wait_var = tk.IntVar(value=self.game_launch_delay)
         self.is_first_run = not self.config.get("first_run_completed", False)
+
+        # 「自动配置通关阵容」选项：挑战前尝试自动采用 tongguanzhenrong / yijiancaiyong
+        self.auto_configure_lineup = self.config.get("auto_configure_lineup", False)
+        self.auto_configure_lineup_var = tk.BooleanVar(value=self.auto_configure_lineup)
 
         # 定时开始（每天循环）：存储为 "HH:MM" 或 None
         self.schedule_time = self.config.get("schedule_time", None)
@@ -405,6 +419,14 @@ class GameBotGUI:
         )
         self.launch_game_check.pack(side=tk.LEFT, padx=5)
 
+        self.auto_configure_lineup_check = ttk.Checkbutton(
+            opt_frame,
+            text="自动配置通关阵容",
+            variable=self.auto_configure_lineup_var,
+            command=self.on_auto_configure_changed
+        )
+        self.auto_configure_lineup_check.pack(side=tk.LEFT, padx=5)
+
         ttk.Label(opt_frame, text="游戏等待(s)").pack(side=tk.LEFT, padx=(10, 0))
         self.game_wait_spin = ttk.Spinbox(
             opt_frame,
@@ -494,7 +516,15 @@ class GameBotGUI:
             variable=self.script_enabled_var,
             command=self.on_script_enabled_changed
         )
-        self.script_enabled_check.grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=5)
+        self.script_enabled_check.grid(row=1, column=0, sticky=tk.W, pady=5)
+
+        # 一键全选：每天启动后批量勾选所有功能脚本，省去逐个勾选
+        self.select_all_btn = ttk.Button(
+            self.script_panel,
+            text="一键全选",
+            command=self.enable_all_scripts
+        )
+        self.select_all_btn.grid(row=1, column=1, sticky=tk.E, pady=5)
         
         self.param_frame = ttk.Frame(self.script_panel)
         self.param_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
@@ -639,9 +669,6 @@ class GameBotGUI:
             
         challenge_spinbox.bind("<FocusOut>", lambda e: on_param_change())
         challenge_spinbox.bind("<Return>", lambda e: on_param_change())
-        
-    def create_pujing_params(self, script, row=0):
-        ttk.Label(self.param_frame, text="暂无参数").grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=5)
         
     def create_push_params(self, row=0):
         push_settings = self.config.get("push_settings", {})
@@ -933,13 +960,27 @@ class GameBotGUI:
         script.enabled = self.script_enabled_var.get()
         self.save_config()
         self.update_dashboard_buttons()
-        
+
+    def enable_all_scripts(self):
+        """一键勾选全部功能脚本：每天启动后批量启用，省去逐个勾选。"""
+        for script in self.scripts:
+            script.enabled = True
+        self.update_script_panel()      # 刷新当前脚本「开启」勾选框
+        self.update_dashboard_buttons() # 刷新列表的 ✓ 标记
+        self.save_config()              # 持久化到配置
+        self.log("已一键勾选全部功能")
+
     def on_auto_start_changed(self):
         self.auto_start_on_launch = self.auto_start_var.get()
         self.save_config()
 
     def on_launch_game_changed(self):
         self.launch_game_on_open = self.launch_game_var.get()
+        self.save_config()
+
+    def on_auto_configure_changed(self):
+        self.auto_configure_lineup = self.auto_configure_lineup_var.get()
+        self.config["auto_configure_lineup"] = self.auto_configure_lineup
         self.save_config()
 
     def on_game_wait_changed(self):
@@ -1010,7 +1051,6 @@ class GameBotGUI:
         self.log("所有脚本已停止")
         
     def on_closing(self):
-        import subprocess
         self._unregister_hotkeys()
         if self.is_running:
             if messagebox.askokcancel("退出", "脚本正在运行中，确定要停止并退出吗？"):
@@ -1173,32 +1213,49 @@ class GameBotGUI:
             self.stop_all()
 
     # ===== 运行循环（在线程内依次执行各脚本） =====
-    def run_scripts_thread(self, scripts_to_run):
-        # 先杀掉旧进程，再启动新的 click_from_file.exe（确保工作目录正确）
-        import subprocess
+    def is_click_from_file_running(self):
+        """检测 click_from_file.exe 是否已在运行，避免重复启动造成卡顿与弹框。"""
         try:
-            subprocess.run(["taskkill", "/F", "/IM", "click_from_file.exe"], capture_output=True)
-            time.sleep(0.5)
+            result = subprocess.run(
+                ["tasklist", "/FI", "IMAGENAME eq click_from_file.exe"],
+                capture_output=True, text=True
+            )
+            return "click_from_file.exe" in result.stdout
         except Exception:
-            pass
+            return False
 
-        self.log("运行click_from_file.exe...")
-        try:
-            ahk_exe_path = get_resource_path("click_from_file.exe")
-            work_dir = get_work_path("")
-            self.log(f"脚本路径: {ahk_exe_path}")
-            self.log(f"工作目录: {work_dir}")
+    def run_scripts_thread(self, scripts_to_run):
+        # 先把子脚本的 print 调试日志转发到运行日志面板
+        sys.stdout = _StdoutTee(self._panel_log)
 
-            if not os.path.exists(ahk_exe_path):
-                self.log(f"错误: click_from_file.exe 文件不存在: {ahk_exe_path}")
-            else:
-                subprocess.Popen([ahk_exe_path, work_dir])
-                self.log("click_from_file.exe 启动成功")
-        except Exception as e:
-            self.log(f"运行click_from_file.exe失败: {str(e)}")
-            self.log("警告: click_from_file.exe 未启动，部分功能可能无法正常工作")
-        
-        time.sleep(2)
+        # click_from_file.exe 是常驻监听程序（与各脚本通过 shared 目录 IPC 通信）。
+        # 若已在运行则直接复用，避免每次点「开始」都重启 + 弹出新终端框造成约 1 秒卡顿；
+        # 仅当未运行时才启动，并用 CREATE_NO_WINDOW 隐藏控制台窗口（性能与体验优化）。
+        if self.is_click_from_file_running():
+            self.log("click_from_file.exe 已在运行，复用现有进程（跳过重启）")
+        else:
+            try:
+                subprocess.run(["taskkill", "/F", "/IM", "click_from_file.exe"], capture_output=True)
+                time.sleep(0.3)
+            except Exception:
+                pass
+            self.log("运行click_from_file.exe...")
+            try:
+                ahk_exe_path = get_resource_path("click_from_file.exe")
+                work_dir = get_work_path("")
+                self.log(f"脚本路径: {ahk_exe_path}")
+                self.log(f"工作目录: {work_dir}")
+
+                if not os.path.exists(ahk_exe_path):
+                    self.log(f"错误: click_from_file.exe 文件不存在: {ahk_exe_path}")
+                else:
+                    # CREATE_NO_WINDOW：Windows 下不弹出控制台黑框，消除「启动终端框」的视觉卡顿
+                    subprocess.Popen([ahk_exe_path, work_dir], creationflags=subprocess.CREATE_NO_WINDOW)
+                    self.log("click_from_file.exe 启动成功")
+            except Exception as e:
+                self.log(f"运行click_from_file.exe失败: {str(e)}")
+                self.log("警告: click_from_file.exe 未启动，部分功能可能无法正常工作")
+            time.sleep(2)
         
         # 顺序调用其他脚本
         script_order = [
@@ -1217,7 +1274,12 @@ class GameBotGUI:
             script.status = "运行中"
             self.root.after(0, self.update_script_panel)
             self.log(f"开始执行: {script.name}")
-            
+
+            # 任务切换兜底：上一任务结束可能弹出礼包广告 / 结算 / 战斗失败弹窗，
+            # 先尝试点击「点击空白处关闭」，检测不到再点击屏幕空白处退出，
+            # 避免残留弹窗卡死后续任务（含战斗类任务失败后的清理）。
+            common.dismiss_popup()
+
             try:
                 # 检查是否需要停止
                 if self.stop_event.is_set():
@@ -1278,7 +1340,10 @@ class GameBotGUI:
                         try:
                             from mimengzhiyu import flow_mimengzhiyu
                             challenge_count = script.params.get("challenge_count")
-                            result = flow_mimengzhiyu(challenge_count=challenge_count)
+                            result = flow_mimengzhiyu(
+                                challenge_count=challenge_count,
+                                auto_configure_lineup=self.auto_configure_lineup,
+                            )
                         except ImportError as e:
                             self.log(f"迷梦之域模块导入失败: {str(e)}")
                             script.status = "错误"
@@ -1286,7 +1351,7 @@ class GameBotGUI:
                     elif script.name == "女神塔":
                         try:
                             import nvshenta
-                            nvshenta.flow_nvshenta()
+                            nvshenta.flow_nvshenta(auto_configure_lineup=self.auto_configure_lineup)
                             result = True
                         except ImportError as e:
                             self.log(f"女神塔模块导入失败: {str(e)}")
@@ -1427,6 +1492,11 @@ class GameBotGUI:
                     script.status = "失败"
                     self.log(f"{script.name} 执行失败")
                     
+            except common.StopRequested:
+                script.status = "已停止"
+                self.log(f"{script.name} 已被停止 (F9)")
+                self.root.after(0, self.update_script_panel)
+                break
             except Exception as e:
                 script.status = "错误"
                 self.log(f"{script.name} 执行出错: {str(e)}")
@@ -1439,9 +1509,17 @@ class GameBotGUI:
             time.sleep(2)
         
         # 运行结束后保存（使 auto-disable / last_run_time 等状态持久化）
+        sys.stdout = sys.__stdout__
         self.save_config()
         self.root.after(0, self.stop_all)
         
+    def _panel_log(self, message):
+        """线程安全的日志汇聚回调：把子脚本日志调度到主线程写入日志面板。"""
+        try:
+            self.root.after(0, lambda m=str(message): self.log(m))
+        except Exception:
+            pass
+
     def log(self, message):
         timestamp = time.strftime("%H:%M:%S")
         line = f"[{timestamp}] {message}\n"
@@ -1472,6 +1550,7 @@ class GameBotGUI:
         self.config["launch_game_on_open"] = self.launch_game_on_open
         self.config["game_launch_delay"] = self.game_launch_delay
         self.config["schedule_time"] = self.schedule_time
+        self.config["auto_configure_lineup"] = self.auto_configure_lineup
         
         # 保存到文件
         if save_config(self.config):

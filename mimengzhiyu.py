@@ -1,5 +1,6 @@
-from common import wait_and_click, find_center, screenshot_bgr, send_coord, get_template_path
+from common import (wait_and_click, screenshot_bgr, send_coord, get_template_path, find_center_silent, try_auto_configure_lineup, click_blank_to_exit)
 from jiance import check_and_handle_libao
+from flow_enter import flow_return_main
 import cv2
 import time
 import random
@@ -7,25 +8,6 @@ import random
 # 随机等待函数，2-3秒
 def random_sleep():
     time.sleep(random.uniform(2.0, 3.0))
-
-# 静默版本的 find_center，不输出匹配得分
-def find_center_silent(template_path, threshold=0.8):
-    template = cv2.imread(template_path, cv2.IMREAD_COLOR)
-    if template is None:
-        raise ValueError(f"模板读取失败: {template_path}")
-    h, w = template.shape[:2]
-
-    img = screenshot_bgr()
-    res = cv2.matchTemplate(img, template, cv2.TM_CCOEFF_NORMED)
-    _, max_val, _, max_loc = cv2.minMaxLoc(res)
-
-    if max_val < threshold:
-        return None
-
-    top_left = max_loc
-    center_x = top_left[0] + w // 2
-    center_y = top_left[1] + h // 2
-    return center_x, center_y
 
 # === 模板路径，对应你的文件名 ===
 tpl_wanfamulu         = get_template_path("wanfamulu.png")
@@ -38,28 +20,10 @@ tpl_goumaimimeng      = get_template_path("goumaimimeng.png")
 tpl_querengoumaimenpiao = get_template_path("querengoumaimenpiao.png")
 tpl_cishubugou        = get_template_path("cishubugou.png")
 tpl_exit              = get_template_path("exit.png")
+tpl_dianjikongbaichuguanbi = get_template_path("dianjikongbaichuguanbi.png")
 
 # 一场战斗最长等待多久（秒）
 MAX_BATTLE_TIME = 180
-
-# 等待某张图出现
-def wait_for_appearance(template_path, name, threshold=0.8, timeout=MAX_BATTLE_TIME, interval=0.5):
-    """循环等待某张图出现，出现返回坐标，超时返回 None。"""
-    start = time.time()
-    attempt = 0
-    while True:
-        attempt += 1
-        pos = find_center_silent(template_path, threshold)
-        if pos:
-            print(f"{name} 出现，第 {attempt} 次检测，坐标: {pos}")
-            return pos
-
-        elapsed = time.time() - start
-        if elapsed > timeout:
-            print(f"{name} 在 {timeout} 秒内未出现，放弃等待。")
-            return None
-
-        time.sleep(interval)
 
 # 等待多张图中的任意一张出现
 def wait_for_any(templates, threshold=0.8, timeout=MAX_BATTLE_TIME, interval=0.5):
@@ -89,35 +53,73 @@ def wait_for_any(templates, threshold=0.8, timeout=MAX_BATTLE_TIME, interval=0.5
 
         time.sleep(interval)
 
+# 战斗结束后清理「点击空白处关闭」结算弹窗
+def close_result_popups(timeout=10.0):
+    """循环点击「点击空白处关闭」，直到弹窗消失（连续 2 秒不再出现则停止）。
+    迷梦之域结算后常弹出奖励/分享界面，不关闭会卡在该界面导致后续流程失败。"""
+    print("【迷梦之域】开始清理结算弹窗（点击空白处关闭）...")
+    start = time.time()
+    last_seen = time.time()
+    while time.time() - start < timeout:
+        pos = find_center_silent(tpl_dianjikongbaichuguanbi, 0.8)
+        if pos:
+            print("【迷梦之域】检测到「点击空白处关闭」，点击关闭")
+            send_coord(pos[0], pos[1])
+            last_seen = time.time()
+            random_sleep()
+        else:
+            if time.time() - last_seen > 2.0:
+                # 兜底：检测不到「点击空白处关闭」时，点击屏幕空白处尝试关闭残留弹窗
+                click_blank_to_exit()
+                break
+            time.sleep(0.5)
+    print("【迷梦之域】结算弹窗清理完成")
+
+
 # 处理战斗界面逻辑
 def handle_battle():
-    """处理战斗界面，优先点击tiaoguozhandou，如果没有则点击zhandou"""
-    # 先检查是否存在tiaoguozhandou
+    """处理战斗界面：优先 tiaoguozhandou(跳过战斗)；否则点 zhandou 开战，
+    开战后若中途出现 tiaoguozhandou 也点击以快进（首次无预跳过时可中途跳过）；
+    战斗结束后清理结算弹窗，避免卡在「点击空白处关闭」界面。"""
+    # 先检查是否存在 tiaoguozhandou（预跳过）
     pos_tiaoguozhandou = find_center_silent(tpl_tiaoguozhandou, threshold=0.8)
     if pos_tiaoguozhandou:
-        print("检测到tiaoguozhandou，优先点击。")
+        print("【迷梦之域】检测到 tiaoguozhandou（跳过战斗），优先点击。")
         send_coord(pos_tiaoguozhandou[0], pos_tiaoguozhandou[1])
         random_sleep()
     else:
-        # 检查是否存在zhandou
+        # 检查是否存在 zhandou
         pos_zhandou = find_center_silent(tpl_zhandou, threshold=0.8)
         if pos_zhandou:
-            print("检测到zhandou，点击。")
+            print("【迷梦之域】未检测到预跳过，点击 zhandou 开始战斗（首次通常需要观战）。")
             send_coord(pos_zhandou[0], pos_zhandou[1])
             random_sleep()
+            # 开战后轮询：若出现 tiaoguozhandou 则点击快进跳过（解决首次无预跳过的问题）
+            for _ in range(15):
+                if find_center_silent(tpl_pujingjieshu, 0.8):
+                    break
+                pos_mid = find_center_silent(tpl_tiaoguozhandou, 0.8)
+                if pos_mid:
+                    print("【迷梦之域】战斗中检测到 tiaoguozhandou，点击快进跳过。")
+                    send_coord(pos_mid[0], pos_mid[1])
+                    random_sleep()
+                    break
+                time.sleep(1.0)
         else:
-            print("未检测到zhandou或tiaoguozhandou，处理战斗界面失败。")
+            print("【迷梦之域】未检测到 zhandou 或 tiaoguozhandou，处理战斗界面失败。")
             return False
 
-    # 等待战斗结束，点击pujingjieshu，超时时间120秒
+    # 等待战斗结束，点击 pujingjieshu，超时时间 120 秒
     if not wait_and_click(tpl_pujingjieshu, "pujingjieshu", 0.8, timeout=120):
-        print("点击pujingjieshu失败。")
+        print("【迷梦之域】点击 pujingjieshu 失败，处理战斗界面失败。")
         return False
     random_sleep()
 
+    # 清理结算弹窗（点击空白处关闭），避免卡在结算界面
+    close_result_popups()
     return True
 
-def flow_mimengzhiyu(challenge_count=None):
+def flow_mimengzhiyu(challenge_count=None, auto_configure_lineup=False):
     """
     功能：迷梦之域挑战
 
@@ -166,10 +168,19 @@ def flow_mimengzhiyu(challenge_count=None):
             # 调用 jiance.py 检测礼包弹窗
             check_and_handle_libao()
             print("礼包弹窗检测完成")
+            # 清理结算弹窗并回到主界面，避免卡在结算/玩法界面
+            close_result_popups()
+            flow_return_main()
             print("迷梦之域流程结束。")
             return True
 
         # 3. 点击 tiaozhan 挑战
+        # 可选：挑战前先尝试自动配置通关阵容（检测并点击 tongguanzhenrong / yijiancaiyong）
+        if auto_configure_lineup:
+            if try_auto_configure_lineup():
+                print("【迷梦之域】已自动采用通关阵容。")
+            else:
+                print("【迷梦之域】未检测到通关阵容入口，跳过自动配置。")
         if not wait_and_click(tpl_tiaozhan, "tiaozhan", 0.8):
             print("点击 tiaozhan 失败，迷梦之域流程结束。")
             return False
@@ -185,6 +196,9 @@ def flow_mimengzhiyu(challenge_count=None):
             # 调用 jiance.py 检测礼包弹窗
             check_and_handle_libao()
             print("礼包弹窗检测完成")
+            # 清理结算弹窗并回到主界面，避免卡在结算/玩法界面
+            close_result_popups()
+            flow_return_main()
             print("次数用完，迷梦之域流程结束。")
             return True
 
