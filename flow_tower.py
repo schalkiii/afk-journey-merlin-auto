@@ -15,6 +15,7 @@ from common import (
     find_center_silent,
     get_template_path,
     get_work_path,
+    is_lineup_acceptable as _is_lineup_acceptable_impl,
     screenshot_bgr,
     send_coord,
     wait_and_click,
@@ -434,38 +435,8 @@ def _recognize_lineup_with_levels():
 
 
 def _is_lineup_acceptable(hero_levels, lineup_heroes):
-    """
-    根据仓库练度 hero_levels 和 当前阵容 lineup_heroes 判断是否可以采用：
-    - 普通角色：自家练度 >= 阵容要求练度；
-    - SPECIAL_HERO_SET 中的角色：只要不是“未拥有”即可（高/低都行）。
-    """
-    for hero_id, need_level in lineup_heroes:
-        own_level = hero_levels.get(hero_id, "未拥有")
-
-        # 特殊标注：只要拥有即可
-        if hero_id in SPECIAL_HERO_SET:
-            if own_level == "未拥有":
-                print(f"[阵容拒绝] 特殊角色 {hero_id} 未拥有。")
-                return False
-            print(f"[阵容通过] 特殊角色 {hero_id} 拥有（{own_level}），忽略需求 {need_level}。")
-            continue
-
-        own_score = LEVEL_SCORE.get(own_level, 0)
-        need_score = LEVEL_SCORE.get(need_level, 1)  # 未能识别需求时，默认按“低”处理
-
-        if own_score < need_score:
-            print(
-                f"[阵容拒绝] 角色 {hero_id} 自家练度={own_level}({own_score}) "
-                f"< 需求练度={need_level}({need_score})"
-            )
-            return False
-
-        print(
-            f"[阵容通过] 角色 {hero_id} 自家练度={own_level}({own_score}) "
-            f">= 需求练度={need_level}({need_score})"
-        )
-
-    return True
+    """阵容可采纳判定（判定逻辑见 common.is_lineup_acceptable，注入本模块练度常量以维持原有行为）。"""
+    return _is_lineup_acceptable_impl(hero_levels, lineup_heroes, LEVEL_SCORE, SPECIAL_HERO_SET)
 
 
 def debug_lineup_recognition():

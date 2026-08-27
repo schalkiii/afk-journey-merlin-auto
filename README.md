@@ -129,6 +129,9 @@
 - **`goldenhandmaidens.spec` 的 `hiddenimports` 改为自动收集**：原先新增一个 flow 脚本需手改 spec 的模块清单（漏改会导致打包后 `ImportError`）。现改为 `glob` 自动收集项目内所有顶层脚本模块，仅 `certifi` / `keyboard` 等第三方包仍显式列出——新增任务脚本后打包零额外配置。
 - **测试基线**：新增 `tests/test_smoke.py`（pytest），覆盖全部模块可导入 + 阵容可采纳判定 `_is_lineup_acceptable` 的核心逻辑，为后续重构提供回归保护。
 - 另对全仓做了 ruff 机械整改（未用 import / 死代码 / 简化），并修复 `flow_migong` 中 lambda 延迟绑定循环变量的隐患（B023）。
+- **点击辅助统一到 `common`**：`click_and_wait`（点击 A→轮询 B 的冷却双检跳转辅助）与通用 `click_template` 已抽到 `common`；`flow_migong.click_mg` 保留为薄包装（仅做 migong 模板命名 / `cfg` 阈值解析后调 `common.click_template`）——消除各流程脚本重复包装 `wait_and_click`，且 `click_and_wait` 与具体模板命名解耦、可复用。
+- **阵容可采纳判定去重**：`push` 与 `flow_tower` 中两份完全相同的 `_is_lineup_acceptable` 收敛为 `common.is_lineup_acceptable`（参数化 `level_score` / `special_hero_set`），两模块保留 1 行包装注入各自常量（`push` 的 `SPECIAL_HERO_SET` 含 `meimo`、`flow_tower` 为空）——**逻辑单源、行为完全不变**。
+- **巨型主文件拆分**：`Goldenhandmaidens.py` 的顶层独立工具（stdout 接管、配置读写、`ScriptConfig`、桌面快捷方式 / 游戏窗口聚焦等）抽到 `bot_runtime.py`，主文件由约 1637 行降至约 1443 行；保留类内 `import updater` 与 `hero_metadata` / `warehouse` 导入，所有原引用经 `from bot_runtime import (...)` 保持不变——**无行为变化**。`bot_runtime` 由 spec 的 `glob` 自动收集，无需手改打包配置。
 
 ---
 

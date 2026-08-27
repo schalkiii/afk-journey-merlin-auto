@@ -479,3 +479,119 @@ def wait_and_click(template_path, name, threshold=0.8, timeout=None,
 
         print(f"{name} 第 {attempt} 次未找到，{INTERVAL} 秒后重试（已等待 {elapsed:.1f} 秒）...")
         time.sleep(INTERVAL)
+
+
+# ===== 阵容可采纳判定（push / flow_tower 共用，常量由调用方注入以避免行为分叉） =====
+# 视为"低/高/未拥有"的数值，用于比较"仓库练度 >= 阵容要求练度"
+LINEUP_DEFAULT_LEVEL_SCORE = {"未拥有": 0, "低": 1, "高": 2}
+LINEUP_DEFAULT_SPECIAL_HERO_SET = set()
+
+
+def is_lineup_acceptable(hero_levels, lineup_heroes, level_score=None, special_hero_set=None):
+    """
+    根据仓库练度 hero_levels 与当前阵容 lineup_heroes 判断是否可以采用：
+    - 普通角色：自家练度 >= 阵容要求练度；
+    - special_hero_set 中的角色：只要不是"未拥有"即可（高/低都行）。
+
+    level_score / special_hero_set 由调用方注入，确保 push（SPECIAL_HERO_SET 含 meimo）
+    与 flow_tower（不含）各自维持原有判定行为，避免共享常量导致分叉。两份原先各自维护的
+    相同实现已收敛到此处，逻辑单源、行为完全不变。
+    """
+    if level_score is None:
+        level_score = LINEUP_DEFAULT_LEVEL_SCORE
+    if special_hero_set is None:
+        special_hero_set = LINEUP_DEFAULT_SPECIAL_HERO_SET
+
+    for hero_id, need_level in lineup_heroes:
+        own_level = hero_levels.get(hero_id, "未拥有")
+
+        # 特殊标注：只要拥有即可
+        if hero_id in special_hero_set:
+            if own_level == "未拥有":
+                print(f"[阵容拒绝] 特殊角色 {hero_id} 未拥有。")
+                return False
+            print(f"[阵容通过] 特殊角色 {hero_id} 拥有（{own_level}），忽略需求 {need_level}。")
+            continue
+
+        own_score = level_score.get(own_level, 0)
+        need_score = level_score.get(need_level, 1)  # 未能识别需求时，默认按"低"处理
+
+        if own_score < need_score:
+            print(
+                f"[阵容拒绝] 角色 {hero_id} 自家练度={own_level}({own_score}) "
+                f"< 需求练度={need_level}({need_score})"
+            )
+            return False
+
+        print(
+            f"[阵容通过] 角色 {hero_id} 自家练度={own_level}({own_score}) "
+            f">= 需求练度={need_level}({need_score})"
+        )
+
+    return True
+
+
+def click_template(template_path, label=None, threshold=0.8, timeout=None):
+    """通用"等待模板出现并点击"，薄封装 wait_and_click，供各 flow 脚本复用。
+
+    flow_migong 的 click_mg 等按特定命名/阈值封装的点击均以此为基础，
+    避免各脚本重复包装 wait_and_click。
+    """
+    if label is None:
+        label = template_path
+    return wait_and_click(template_path, label, threshold, timeout=timeout)
+
+
+def click_and_wait(click_name, next_name, timeout=10, cooldown=0.8,
+                   click_finder=None, next_finder=None):
+    """点击 A → 轮询检测 B → 冷却期后双检 A+B，A 仍在则重试。
+
+    抽出自 flow_migong 的通用跳转辅助；仅依赖 send_coord 与 finder 回调，已与具体
+    模板命名解耦。click_finder / next_finder 默认取 find_center（传路径），调用方通常
+    传入自己的命名解析 finder（如 flow_migong 的 _find_root / find_mg）。
+
+    timeout: 单次尝试超时（默认10s，覆盖慢加载空窗期）
+    cooldown: 冷却期（0.8s，覆盖 A 残留/渐变消失）
+    """
+    if click_finder is None:
+        click_finder = find_center
+    if next_finder is None:
+        next_finder = click_finder
+
+    print(f"  {click_name} → {next_name}")
+
+    for attempt in range(3):
+        pos_a = click_finder(click_name)
+        if pos_a is not None:
+            send_coord(pos_a[0], pos_a[1])
+
+        cooldown_start = time.time()
+        overall_start = time.time()
+        in_cooldown = True
+
+        while time.time() - overall_start < timeout:
+            pos_b = next_finder(next_name)
+            if pos_b is not None:
+                time.sleep(0.3)
+                return True
+
+            if in_cooldown:
+                if time.time() - cooldown_start < cooldown:
+                    time.sleep(0.12)
+                    continue
+                in_cooldown = False
+
+            pos_a = click_finder(click_name, threshold=0.88)
+            if pos_a is not None:
+                print(f"    {click_name} 仍在，重试 ({attempt+1})")
+                send_coord(pos_a[0], pos_a[1])
+                cooldown_start = time.time()
+                in_cooldown = True
+                continue
+
+            time.sleep(0.2)
+
+        print(f"    {next_name} 超时 ({attempt+1}/3)")
+
+    print(f"  ❌ {click_name} → {next_name} 失败")
+    return False

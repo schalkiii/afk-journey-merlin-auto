@@ -70,6 +70,15 @@
 - 测试基线：新增 `tests/test_smoke.py`（pytest），覆盖全模块导入 + `_is_lineup_acceptable` 判定（2 passed）。
 - 修复 `flow_migong` lambda 延迟绑定循环变量隐患（B023）。
 
+### 工程化（第二批）
+- 点击辅助统一到 `common`：`click_and_wait`（冷却双检跳转）与通用 `click_template` 抽到 `common`；
+  `flow_migong.click_mg` 保留为薄包装（migong 模板命名 / `cfg` 阈值解析后调 `common.click_template`），消除各脚本重复包装 `wait_and_click`。
+- 阵容可采纳判定去重：`push` / `flow_tower` 两份相同 `_is_lineup_acceptable` 收敛为 `common.is_lineup_acceptable`
+  （参数化 `level_score` / `special_hero_set`），两模块保留 1 行包装注入各自常量（push 含 `meimo`、flow_tower 为空），行为不变。
+- 巨型主文件拆分：`Goldenhandmaidens.py` 顶层独立工具（stdout 接管 / 配置 / `ScriptConfig` / 快捷方式 / 窗口聚焦）抽到 `bot_runtime.py`，
+  主文件由约 1637 行降至约 1443 行；原引用经 `from bot_runtime import (...)` 不变，无行为变化；`bot_runtime` 由 spec `glob` 自动收集。
+- 验证：pytest 2 passed（全模块导入 + `_is_lineup_acceptable` 判定）；ruff F/B/SIM/UP/C4 全绿；`goldenhandmaidens.exe` 用 `runw.exe` 窗口引导器重建。
+
 ## 重新打包 exe 与清理冗余
 - 用 PyInstaller 6.22.0 + `goldenhandmaidens.spec` 重新打包，根目录 `goldenhandmaidens.exe` 已更新
   （含本轮全部源码改动：日志队列节流、`find_center_silent` 统一、任务字典分发、停止检查加固等）。

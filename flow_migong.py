@@ -6,6 +6,8 @@ import json
 import time
 
 from common import (
+    click_and_wait,
+    click_template,
     find_center,
     get_resource_path,
     get_template_path,
@@ -60,7 +62,7 @@ def click_mg(name, label=None, threshold=None, timeout=None):
         label = name
     if threshold is None:
         threshold = cfg("thresholds", {}).get("default", 0.8)
-    return wait_and_click(tpl(name), label, threshold, timeout=timeout)
+    return click_template(tpl(name), label, threshold, timeout=timeout)
 
 def click_root(name, label=None, threshold=0.8):
     if label is None:
@@ -145,57 +147,6 @@ def _find_root(name, threshold=None):
     if threshold is None:
         threshold = cfg("thresholds", {}).get("default", 0.8)
     return find_center(tpl_root(name), threshold)
-
-
-def click_and_wait(click_name, next_name, timeout=10, cooldown=0.8,
-                   click_finder=None, next_finder=None):
-    """
-    点击 A → 轮询检测 B → 冷却期后双检 A+B，A 仍在则重试。
-    timeout: 单次尝试超时（默认10s，覆盖慢加载空窗期）
-    cooldown: 冷却期（0.8s，覆盖 A 残留/渐变消失）
-    """
-    if click_finder is None:
-        click_finder = find_mg
-    if next_finder is None:
-        next_finder = click_finder
-
-    print(f"  {click_name} → {next_name}")
-
-    for attempt in range(3):
-        pos_a = click_finder(click_name)
-        if pos_a is not None:
-            send_coord(pos_a[0], pos_a[1])
-
-        cooldown_start = time.time()
-        overall_start = time.time()
-        in_cooldown = True
-
-        while time.time() - overall_start < timeout:
-            pos_b = next_finder(next_name)
-            if pos_b is not None:
-                time.sleep(0.3)
-                return True
-
-            if in_cooldown:
-                if time.time() - cooldown_start < cooldown:
-                    time.sleep(0.12)
-                    continue
-                in_cooldown = False
-
-            pos_a = click_finder(click_name, threshold=0.88)
-            if pos_a is not None:
-                print(f"    {click_name} 仍在，重试 ({attempt+1})")
-                send_coord(pos_a[0], pos_a[1])
-                cooldown_start = time.time()
-                in_cooldown = True
-                continue
-
-            time.sleep(0.2)
-
-        print(f"    {next_name} 超时 ({attempt+1}/3)")
-
-    print(f"  ❌ {click_name} → {next_name} 失败")
-    return False
 
 
 # ============================================================
