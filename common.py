@@ -374,8 +374,10 @@ def try_auto_configure_lineup(threshold=0.8, retries=3):
 def send_coord(x, y):
     """将待点击坐标写入 IPC 文件，等待 AHK 消费完成后返回。
 
-    先自旋等待上一个坐标被消费（文件消失），避免 AHK 尚未读取就被覆盖；
-    写入后短暂延时，确保 AHK 有足够时间读到本次坐标。
+    先自旋等待上一条坐标被消费（文件消失），避免 AHK 尚未读取就被覆盖；
+    写入后等待 AHK 读走本次坐标（文件被删除）再返回，替代原先无条件 0.5s 睡等——
+    既更快（命中即返回），又更稳健（确保点击已发生）；AHK 未运行则退化为 0.5s 超时，
+    行为与旧版一致（不崩溃）。期间 check_stop 允许 F9 中断。
     """
     check_stop()
     wait_count = 0
@@ -386,7 +388,14 @@ def send_coord(x, y):
 
     with open(coord_path, "w", encoding="utf-8") as f:
         f.write(f"{x} {y}")
-    time.sleep(0.5)
+
+    # 等 AHK 读走本次坐标（文件被删除）再返回；最多 0.5s，超时则按旧逻辑直接返回
+    deadline = time.time() + 0.5
+    while os.path.exists(coord_path):
+        check_stop()
+        if time.time() >= deadline:
+            break
+        time.sleep(0.02)
 
 
 # ===== 子脚本日志汇聚 =====

@@ -132,6 +132,7 @@
 - **点击辅助统一到 `common`**：`click_and_wait`（点击 A→轮询 B 的冷却双检跳转辅助）与通用 `click_template` 已抽到 `common`；`flow_migong.click_mg` 保留为薄包装（仅做 migong 模板命名 / `cfg` 阈值解析后调 `common.click_template`）——消除各流程脚本重复包装 `wait_and_click`，且 `click_and_wait` 与具体模板命名解耦、可复用。
 - **阵容可采纳判定去重**：`push` 与 `flow_tower` 中两份完全相同的 `_is_lineup_acceptable` 收敛为 `common.is_lineup_acceptable`（参数化 `level_score` / `special_hero_set`），两模块保留 1 行包装注入各自常量（`push` 的 `SPECIAL_HERO_SET` 含 `meimo`、`flow_tower` 为空）——**逻辑单源、行为完全不变**。
 - **巨型主文件拆分**：`Goldenhandmaidens.py` 的顶层独立工具（stdout 接管、配置读写、`ScriptConfig`、桌面快捷方式 / 游戏窗口聚焦等）抽到 `bot_runtime.py`，主文件由约 1637 行降至约 1443 行；保留类内 `import updater` 与 `hero_metadata` / `warehouse` 导入，所有原引用经 `from bot_runtime import (...)` 保持不变——**无行为变化**。`bot_runtime` 由 spec 的 `glob` 自动收集，无需手改打包配置。
+- **坐标 IPC 维持文件通道（不做内存级改造）**：AHK 端 `click_from_file.exe` 为编译产物、无 `.ahk` 源码，文件 IPC（`send_coord` → `shared\target_coord.txt` → AHK 读取点击）保持不变；仅将尾部固定 `time.sleep(0.5)` 改为「写后等待 AHK 消费（文件被删除）再返回」——命中即返回更快、且保证点击已发生更稳健，AHK 未运行退化为 0.5s 超时，**行为不变**。
 
 ---
 
