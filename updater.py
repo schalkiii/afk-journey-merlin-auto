@@ -1,9 +1,10 @@
 """检查 GitHub Release 更新"""
 import json
-import urllib.request
 import os
 import re
 import sys
+import urllib.request
+
 from version import __version__
 
 GITHUB_API = "https://api.github.com/repos/yangyh02/afk-journey-merlin-auto/releases/latest"
@@ -11,8 +12,9 @@ GITHUB_API = "https://api.github.com/repos/yangyh02/afk-journey-merlin-auto/rele
 
 def _ssl_context():
     try:
-        import certifi
         import ssl
+
+        import certifi
         return ssl.create_default_context(cafile=certifi.where())
     except ImportError:
         import ssl

@@ -1,4 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
+import glob
+import os
 
 
 a = Analysis(
@@ -6,7 +8,11 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[('click_from_file.exe', '.'), ('templates', 'templates'), ('migong_config.json', '.'), ('formations.json', '.'), ('grid_offsets.json', '.')],
-    hiddenimports=['shangcheng', 'youyishangcheng', 'common', 'flow_tower', 'jiance', 'warehouse', 'push', 'flow_push', 'mimengzhiyu', 'nvshenta', 'meirirenwulingqu', 'haoyoujiangli', 'youjian', 'shouquguajijiangli', 'start', 'pata', 'pujing', 'flow_migong', 'flow_enter', 'formation', 'drag_utils', 'updater', 'version', 'certifi', 'hero_metadata', 'keyboard'],
+    # 自动收集项目内所有顶层脚本模块，新增 flow 脚本无需手改本清单；
+    # certifi / keyboard 为第三方包，仍需显式列出。
+    hiddenimports=[os.path.splitext(f)[0] for f in glob.glob("*.py")
+                   if not f.startswith("_") and f != "goldenhandmaidens.py"] \
+                  + ["certifi", "keyboard"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

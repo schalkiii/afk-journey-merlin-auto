@@ -1,7 +1,8 @@
 # F:\afkj\game-bot\shouquguajijiangli.py
 import os
 import time
-from common import wait_and_click, find_center, get_templates_dir
+
+from common import find_center, get_templates_dir, wait_and_click
 
 # 模板路径
 templates_dir = get_templates_dir()
@@ -75,7 +76,7 @@ def main(paid_times=0):
     
     # 1. 识别并点击wanfamulu
     wanfamulu_path = os.path.join(templates_dir, "wanfamulu.png")
-    if not wait_and_click(wanfamulu_path, "wanfamulu", threshold=0.7):
+    if not wait_and_click(wanfamulu_path, "wanfamulu", threshold=0.7, recover_threshold=20):
         print("未找到wanfamulu，任务终止")
         return
     time.sleep(2)

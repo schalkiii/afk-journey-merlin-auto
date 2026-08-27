@@ -4,11 +4,18 @@
 """
 import json
 import time
-import os
-from common import find_center, send_coord, wait_and_click, get_template_path, get_work_path, get_resource_path, screenshot_bgr
-from warehouse import init_templates_from_dir, HERO_TEMPLATES
-from formation import deploy_formation
+
+from common import (
+    find_center,
+    get_resource_path,
+    get_template_path,
+    screenshot_bgr,
+    send_coord,
+    wait_and_click,
+)
 from drag_utils import send_drag
+from formation import deploy_formation
+from warehouse import HERO_TEMPLATES, init_templates_from_dir
 
 # ============================================================
 # 配置
@@ -20,7 +27,7 @@ _run_params = {}
 
 def load_config():
     global _config
-    with open(get_resource_path("migong_config.json"), "r", encoding="utf-8") as f:
+    with open(get_resource_path("migong_config.json"), encoding="utf-8") as f:
         _config = json.load(f)
     return _config
 
@@ -570,7 +577,7 @@ def handle_shop():
             time.sleep(0.5)
             # 购买后烙印选取
             if not handle_brand_selection():
-                print(f"    未检测到烙印选择，跳过，继续购买下一个")
+                print("    未检测到烙印选择，跳过，继续购买下一个")
             bought += 1
             time.sleep(3.0)
         else:
@@ -858,7 +865,7 @@ def flow_migong(challenges=1, shouling_action="jieshutansuo", formation_name="",
         result = run_one_challenge()
 
         if result == "fail":
-            challenges = handle_failure(lambda: challenges - 1)
+            challenges = handle_failure(lambda challenges=challenges: challenges - 1)
             if challenges <= 0:
                 break
             print(f"还有 {challenges} 次挑战，点击 jinru 继续")

@@ -9,7 +9,8 @@
 
 import os
 import time
-from common import wait_and_click, find_center, get_resource_path
+
+from common import find_center, get_resource_path, wait_and_click
 
 # 模板图片目录（兼容打包后的 exe）
 templates_dir = get_resource_path("templates")

@@ -1,5 +1,7 @@
-from common import find_center, send_coord, get_template_path
 import time
+
+from common import find_center, get_template_path, send_coord
+
 
 def check_and_handle_libao(timeout=5.0, interval=0.5):
     """
@@ -34,8 +36,6 @@ def check_and_handle_libao(timeout=5.0, interval=0.5):
                 send_coord(close_pos[0], close_pos[1])
             else:
                 print("未检测到退出礼包按钮")
-            
-            time.sleep(interval)
         else:
             if last_detected_time is not None:
                 elapsed = time.time() - last_detected_time

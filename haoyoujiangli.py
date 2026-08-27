@@ -6,7 +6,8 @@
 
 import os
 import time
-from common import wait_and_click, find_center, get_templates_dir, send_coord
+
+from common import find_center, get_templates_dir, send_coord, wait_and_click
 from flow_enter import flow_return_main
 
 # 模板路径

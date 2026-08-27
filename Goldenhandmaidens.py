@@ -17,18 +17,21 @@
 - 运行循环（run_scripts_thread）
 """
 
-import tkinter as tk
-from tkinter import ttk, messagebox
-import threading
-import time
+import contextlib
 import json
 import os
-import sys
-import subprocess
+import queue
 import shlex
+import subprocess
+import sys
+import threading
+import time
+import tkinter as tk
 from datetime import datetime, timedelta
-from version import __version__
+from tkinter import messagebox, ttk
+
 import common
+from version import __version__
 
 
 class _StdoutTee:
@@ -39,29 +42,40 @@ class _StdoutTee:
         self._orig = sys.__stdout__
 
     def write(self, s):
-        try:
-            self._orig.write(s)
-        except Exception:
-            pass
+        with contextlib.suppress(Exception):
+            self._orig.write(s)  # type: ignore[union-attr]
         if s and s.strip():
-            try:
+            with contextlib.suppress(Exception):
                 self._sink(s.rstrip("\n"))
-            except Exception:
-                pass
 
     def flush(self):
-        try:
-            self._orig.flush()
-        except Exception:
-            pass
-import updater
-from warehouse import ALL_HERO_NAMES, WAREHOUSE_TXT_PATH
-from hero_metadata import HERO_RACE, HERO_JOB, RACE_NAMES, JOB_NAMES, PUSH_COMMON_HEROES, HERO_CN_NAMES
+        with contextlib.suppress(Exception):
+            self._orig.flush()  # type: ignore[union-attr]
+
+
+# 启动早期（GUI 实例创建前）的 stdout 缓冲：窗口模式下 sys.stdout 初始为 None，
+# 必须尽早接管 stdout，否则启动期 print 会写入 None 而崩溃。
+_early_stdout_buffer = []
+def _early_stdout_sink(msg):
+    _early_stdout_buffer.append(msg)
+
+
 import ctypes
 from ctypes import wintypes
 
+import updater
+
 # 路径解析统一复用 common 的实现，避免与底层模块重复定义（见 common.get_resource_path / get_work_path）
 from common import get_resource_path, get_work_path
+from hero_metadata import (
+    HERO_CN_NAMES,
+    HERO_JOB,
+    HERO_RACE,
+    JOB_NAMES,
+    PUSH_COMMON_HEROES,
+    RACE_NAMES,
+)
+from warehouse import ALL_HERO_NAMES, WAREHOUSE_TXT_PATH
 
 CONFIG_FILE = get_work_path("game_bot_config.json")
 
@@ -69,7 +83,7 @@ def load_config():
     """加载配置文件"""
     if os.path.exists(CONFIG_FILE):
         try:
-            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+            with open(CONFIG_FILE, encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
             print(f"加载配置文件失败: {e}")
@@ -92,7 +106,7 @@ class ScriptConfig:
         self.params = params or {}
         self.status = "就绪"
         self.daily_reset = daily_reset  # 是否每日重置
-        self.last_run_time = None  # 最后执行时间
+        self.last_run_time: str | None = None  # 最后执行时间
 
 def _ensure_config_files():
     """首次运行时确保 shared 目录存在（坐标 IPC 等文件的工作目录）。
@@ -253,9 +267,12 @@ class GameBotGUI:
         # 日志：先建缓冲，setup_ui 中创建可见日志框后再冲刷
         self.log_text = None
         self._log_buffer = []
+        # 日志队列：工作线程只入队，主线程通过 after() 节流刷新，避免高频直冲 Tk 卡顿
+        self._log_queue = queue.Queue()
 
         # 把各子脚本的调试日志（common.log）汇聚到应用内「运行日志」面板
-        common.set_log_sink(self._panel_log)
+        # 注意：sink 仅把消息放入队列（线程安全），真正的 UI 刷新由 _drain_log_queue 完成
+        common.set_log_sink(self._enqueue_log)
         # 注入停止检查器：F9 置位 stop_event 后，子脚本在下一次截图/点击
         # 原语调用处会抛出 StopRequested，实现「立即停止」而非等脚本跑完
         common.set_stop_checker(self.stop_event.is_set)
@@ -555,6 +572,8 @@ class GameBotGUI:
         text.see(tk.END)
         
     def show_log_window(self):
+        if self.log_text is None:
+            return
         log_window = tk.Toplevel(self.root)
         log_window.title("任务日志")
         log_window.geometry("800x600")
@@ -574,9 +593,11 @@ class GameBotGUI:
         scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
         log_text.configure(yscrollcommand=scrollbar.set)
         
-        # 复制当前日志内容
-        log_text.insert(tk.END, self.log_text.get("1.0", tk.END))
-        log_text.see(tk.END)
+        # 复制当前日志内容（仅追加主面板现有文本，不重建整个控件）
+        existing = self.log_text.get("1.0", tk.END)
+        if existing:
+            log_text.insert(tk.END, existing)
+            log_text.see(tk.END)
 
     def show_help_window(self):
         help_window = tk.Toplevel(self.root)
@@ -585,7 +606,7 @@ class GameBotGUI:
 
         readme_path = get_resource_path("README.md")
         if os.path.exists(readme_path):
-            with open(readme_path, "r", encoding="utf-8") as f:
+            with open(readme_path, encoding="utf-8") as f:
                 content = f.read()
         else:
             content = "README.md 未找到。"
@@ -611,7 +632,7 @@ class GameBotGUI:
             messagebox.showinfo("赞助", "赞助二维码图片未找到。")
 
     def update_dashboard_buttons(self):
-        for i, (btn, script) in enumerate(zip(self.script_buttons, self.scripts)):
+        for i, (btn, script) in enumerate(zip(self.script_buttons, self.scripts, strict=False)):
             if i == self.current_script_index:
                 btn.state(['pressed'])
             else:
@@ -726,7 +747,7 @@ class GameBotGUI:
         # 从 warehouse_heroes.txt 加载已有数据
         hero_levels = {}
         if os.path.exists(WAREHOUSE_TXT_PATH):
-            with open(WAREHOUSE_TXT_PATH, 'r', encoding='utf-8') as f:
+            with open(WAREHOUSE_TXT_PATH, encoding='utf-8') as f:
                 for line in f:
                     line = line.strip()
                     if ',' in line:
@@ -861,7 +882,7 @@ class GameBotGUI:
                     level = hero_levels.get(hero_name, "高")
                     f.write(f"{hero_name},{level}\n")
         except Exception as e:
-            self.log(f"写入仓库文件失败: {str(e)}")
+            self.log(f"写入仓库文件失败: {e!s}")
     
     def create_shouquguajijiangli_params(self, script, row=0):
         ttk.Label(self.param_frame, text="付费购买次数 (0-2):").grid(row=row, column=0, sticky=tk.W, pady=2)
@@ -891,7 +912,7 @@ class GameBotGUI:
         # 加载 formations.json 获取阵容列表（从 EXE 资源读取）
         formations = {}
         try:
-            with open(get_resource_path("formations.json"), "r", encoding="utf-8") as f:
+            with open(get_resource_path("formations.json"), encoding="utf-8") as f:
                 formations = json.load(f)
         except Exception:
             pass
@@ -1028,7 +1049,7 @@ class GameBotGUI:
             self.stop_all()
             return
             
-        self.log(f"开始运行脚本")
+        self.log("开始运行脚本")
         
         for script in self.scripts:
             script.status = "等待中"
@@ -1135,6 +1156,8 @@ class GameBotGUI:
         while True:
             if not self.schedule_active or self.schedule_cancel_event.is_set():
                 return
+            if self.scheduled_time is None:
+                return
             remaining = (self.scheduled_time - datetime.now()).total_seconds()
             if remaining <= 0:
                 self.root.after(0, self._fire_schedule)
@@ -1164,8 +1187,7 @@ class GameBotGUI:
             self._set_schedule_status("未设定定时")
             return
         remaining = int((self.scheduled_time - datetime.now()).total_seconds())
-        if remaining < 0:
-            remaining = 0
+        remaining = max(remaining, 0)
         h = remaining // 3600
         m = (remaining % 3600) // 60
         s = remaining % 60
@@ -1224,9 +1246,164 @@ class GameBotGUI:
         except Exception:
             return False
 
+    # ===== 任务分发（字典映射替代巨型 if/elif，降低维护成本）=====
+    # 每个 _run_* 方法对应一个任务，返回 True 表示执行成功、False 表示失败；
+    # 内部 import 失败抛 ImportError 由 _run_script_dispatch 统一捕获并记日志。
+    def _run_login(self, script):
+        import start
+        start.main()
+        return True
+
+    def _run_warehouse(self, script):
+        if not os.path.exists(WAREHOUSE_TXT_PATH):
+            self._write_warehouse_txt()
+        self.log("仓库英雄数据已就绪")
+        return True
+
+    def _run_youjian(self, script):
+        import youjian
+        youjian.main()
+        return True
+
+    def _run_haoyou(self, script):
+        import haoyoujiangli
+        haoyoujiangli.main()
+        return True
+
+    def _run_pujing(self, script):
+        import pujing
+        pujing.flow_pujing()
+        return True
+
+    def _run_mimeng(self, script):
+        from mimengzhiyu import flow_mimengzhiyu
+        challenge_count = script.params.get("challenge_count")
+        return flow_mimengzhiyu(
+            challenge_count=challenge_count,
+            auto_configure_lineup=self.auto_configure_lineup,
+        )
+
+    def _run_nvshenta(self, script):
+        import nvshenta
+        nvshenta.flow_nvshenta(auto_configure_lineup=self.auto_configure_lineup)
+        return True
+
+    def _run_guajijiangli(self, script):
+        import shouquguajijiangli
+        paid_times = script.params.get("paid_times", 0)
+        shouquguajijiangli.main(paid_times=paid_times)
+        return True
+
+    def _run_shangcheng(self, script):
+        import shangcheng
+        shangcheng.main()
+        return True
+
+    def _run_meiri(self, script):
+        import meirirenwulingqu
+        meirirenwulingqu.main()
+        return True
+
+    def _run_pata(self, script):
+        import pata
+        pata.main()
+        return True
+
+    def _run_huanling(self, script):
+        import flow_push
+        ps = self.config.get("push_settings", {})
+        flow_push.main(
+            skip_manual=ps.get("skip_manual", True),
+            retry_count=ps.get("retry_count", 3),
+        )
+        return True
+
+    def _run_tu_tu(self, script):
+        import push
+        ps = self.config.get("push_settings", {})
+        push.main(
+            skip_manual=ps.get("skip_manual", True),
+            retry_count=ps.get("retry_count", 3),
+        )
+        return True
+
+    def _run_xunhuan(self, script):
+        import flow_push
+        import push
+        ps = self.config.get("push_settings", {})
+        skip_manual = ps.get("skip_manual", True)
+        retry_count = ps.get("retry_count", 3)
+        loop_count = 0
+        while not self.stop_event.is_set():
+            loop_count += 1
+            self.log(f"循环推图 第 {loop_count} 轮 - 幻灵推图开始")
+            try:
+                flow_push.main(skip_manual=skip_manual, retry_count=retry_count)
+            except Exception as e:
+                self.log(f"幻灵推图出错: {e!s}")
+
+            if self.stop_event.is_set():
+                break
+
+            self.log(f"循环推图 第 {loop_count} 轮 - 推图开始")
+            try:
+                push.main(skip_manual=skip_manual, retry_count=retry_count)
+            except Exception as e:
+                self.log(f"推图出错: {e!s}")
+
+            if self.stop_event.is_set():
+                break
+
+            self.log(f"循环推图 第 {loop_count} 轮完成，继续下一轮...")
+            time.sleep(2)
+        return True
+
+    def _run_migong(self, script):
+        import flow_migong
+        challenges = script.params.get("challenges", 1)
+        shouling_action = "jieshutansuo" if script.params.get("floors") == "15" else "jixutansuo"
+        formation_name = script.params.get("formation_name", "")
+        shenceng_formation_name = script.params.get("shenceng_formation_name", "")
+        flow_migong.flow_migong(
+            challenges=challenges,
+            shouling_action=shouling_action,
+            formation_name=formation_name,
+            shenceng_formation_name=shenceng_formation_name,
+        )
+        return True
+
+    def _run_script_dispatch(self, script_name, script):
+        """按脚本名分发到对应执行函数；未实现或导入失败返回 False。"""
+        runners = {
+            "登录": self._run_login,
+            "仓库管理": self._run_warehouse,
+            "邮件": self._run_youjian,
+            "好友奖励": self._run_haoyou,
+            "普竞": self._run_pujing,
+            "迷梦之域": self._run_mimeng,
+            "女神塔": self._run_nvshenta,
+            "挂机奖励": self._run_guajijiangli,
+            "商城": self._run_shangcheng,
+            "日常任务": self._run_meiri,
+            "爬塔": self._run_pata,
+            "幻灵推图": self._run_huanling,
+            "推图": self._run_tu_tu,
+            "循环推图": self._run_xunhuan,
+            "异界迷宫": self._run_migong,
+        }
+        runner = runners.get(script_name)
+        if runner is None:
+            self.log(f"{script.name} 脚本暂未实现")
+            return False
+        try:
+            return runner(script)
+        except ImportError as e:
+            self.log(f"{script.name} 模块导入失败: {e!s}")
+            return False
+
     def run_scripts_thread(self, scripts_to_run):
-        # 先把子脚本的 print 调试日志转发到运行日志面板
-        sys.stdout = _StdoutTee(self._panel_log)
+        # 先把子脚本的 print 调试日志转发到运行日志面板（经队列，主线程节流刷新）
+        sys.stdout = _StdoutTee(self._enqueue_log)
 
         # click_from_file.exe 是常驻监听程序（与各脚本通过 shared 目录 IPC 通信）。
         # 若已在运行则直接复用，避免每次点「开始」都重启 + 弹出新终端框造成约 1 秒卡顿；
@@ -1253,7 +1430,7 @@ class GameBotGUI:
                     subprocess.Popen([ahk_exe_path, work_dir], creationflags=subprocess.CREATE_NO_WINDOW)
                     self.log("click_from_file.exe 启动成功")
             except Exception as e:
-                self.log(f"运行click_from_file.exe失败: {str(e)}")
+                self.log(f"运行click_from_file.exe失败: {e!s}")
                 self.log("警告: click_from_file.exe 未启动，部分功能可能无法正常工作")
             time.sleep(2)
         
@@ -1275,10 +1452,13 @@ class GameBotGUI:
             self.root.after(0, self.update_script_panel)
             self.log(f"开始执行: {script.name}")
 
-            # 任务切换兜底：上一任务结束可能弹出礼包广告 / 结算 / 战斗失败弹窗，
-            # 先尝试点击「点击空白处关闭」，检测不到再点击屏幕空白处退出，
-            # 避免残留弹窗卡死后续任务（含战斗类任务失败后的清理）。
+            # 任务切换兜底：
+            # 1) 先关闭上一任务残留的礼包广告 / 结算 / 战斗失败弹窗；
+            # 2) 再确保已回到主界面（wanfamulu 可见）。若上一任务卡在子界面未退出，
+            #    逐层退出回到主界面，避免本次 wanfamulu 检测失败、连锁卡死后续所有任务。
             common.dismiss_popup()
+            if script.name != "登录":
+                common.ensure_main_interface()
 
             try:
                 # 检查是否需要停止
@@ -1287,196 +1467,10 @@ class GameBotGUI:
                     self.log(f"{script.name} 已停止")
                     result = False
                 else:
-                    if script.name == "登录":
-                        try:
-                            import start
-                            start.main()
-                            result = True
-                        except ImportError as e:
-                            self.log(f"登录模块导入失败: {str(e)}")
-                            script.status = "错误"
-                            result = False
-                    elif script.name == "仓库管理":
-                        try:
-                            # 手动模式：直接写入 warehouse_heroes.txt
-                            # 如果用户已在面板中勾选过，文件已是最新；否则生成默认文件
-                            import warehouse
-                            if not os.path.exists(WAREHOUSE_TXT_PATH):
-                                self._write_warehouse_txt()
-                            self.log("仓库英雄数据已就绪")
-                            result = True
-                        except ImportError as e:
-                            self.log(f"仓库管理模块导入失败: {str(e)}")
-                            script.status = "错误"
-                            result = False
-                    elif script.name == "邮件":
-                        try:
-                            import youjian
-                            youjian.main()
-                            result = True
-                        except ImportError as e:
-                            self.log(f"邮件模块导入失败: {str(e)}")
-                            script.status = "错误"
-                            result = False
-                    elif script.name == "好友奖励":
-                        try:
-                            import haoyoujiangli
-                            haoyoujiangli.main()
-                            result = True
-                        except ImportError as e:
-                            self.log(f"好友奖励模块导入失败: {str(e)}")
-                            script.status = "错误"
-                            result = False
-                    elif script.name == "普竞":
-                        try:
-                            import pujing
-                            pujing.flow_pujing()
-                            result = True
-                        except ImportError as e:
-                            self.log(f"普竞模块导入失败: {str(e)}")
-                            script.status = "错误"
-                            result = False
-                    elif script.name == "迷梦之域":
-                        try:
-                            from mimengzhiyu import flow_mimengzhiyu
-                            challenge_count = script.params.get("challenge_count")
-                            result = flow_mimengzhiyu(
-                                challenge_count=challenge_count,
-                                auto_configure_lineup=self.auto_configure_lineup,
-                            )
-                        except ImportError as e:
-                            self.log(f"迷梦之域模块导入失败: {str(e)}")
-                            script.status = "错误"
-                            result = False
-                    elif script.name == "女神塔":
-                        try:
-                            import nvshenta
-                            nvshenta.flow_nvshenta(auto_configure_lineup=self.auto_configure_lineup)
-                            result = True
-                        except ImportError as e:
-                            self.log(f"女神塔模块导入失败: {str(e)}")
-                            script.status = "错误"
-                            result = False
-                    elif script.name == "挂机奖励":
-                        try:
-                            import shouquguajijiangli
-                            paid_times = script.params.get("paid_times", 0)
-                            shouquguajijiangli.main(paid_times=paid_times)
-                            result = True
-                        except ImportError as e:
-                            self.log(f"挂机奖励模块导入失败: {str(e)}")
-                            script.status = "错误"
-                            result = False
-                    elif script.name == "商城":
-                        try:
-                            import shangcheng
-                            shangcheng.main()
-                            result = True
-                        except ImportError as e:
-                            self.log(f"商城模块导入失败: {str(e)}")
-                            script.status = "错误"
-                            result = False
-                    elif script.name == "日常任务":
-                        try:
-                            import meirirenwulingqu
-                            meirirenwulingqu.main()
-                            result = True
-                        except ImportError as e:
-                            self.log(f"日常任务模块导入失败: {str(e)}")
-                            script.status = "错误"
-                            result = False
-                    elif script.name == "爬塔":
-                        try:
-                            import pata
-                            pata.main()
-                            result = True
-                        except ImportError as e:
-                            self.log(f"爬塔模块导入失败: {str(e)}")
-                            script.status = "错误"
-                            result = False
-                    elif script.name == "幻灵推图":
-                        try:
-                            import flow_push
-                            ps = self.config.get("push_settings", {})
-                            flow_push.main(
-                                skip_manual=ps.get("skip_manual", True),
-                                retry_count=ps.get("retry_count", 3)
-                            )
-                            result = True
-                        except ImportError as e:
-                            self.log(f"幻灵推图模块导入失败: {str(e)}")
-                            script.status = "错误"
-                            result = False
-                    elif script.name == "推图":
-                        try:
-                            import push
-                            ps = self.config.get("push_settings", {})
-                            push.main(
-                                skip_manual=ps.get("skip_manual", True),
-                                retry_count=ps.get("retry_count", 3)
-                            )
-                            result = True
-                        except ImportError as e:
-                            self.log(f"推图模块导入失败: {str(e)}")
-                            script.status = "错误"
-                            result = False
-                    elif script.name == "循环推图":
-                        try:
-                            import flow_push
-                            import push
-                            ps = self.config.get("push_settings", {})
-                            skip_manual = ps.get("skip_manual", True)
-                            retry_count = ps.get("retry_count", 3)
-                            loop_count = 0
-                            while not self.stop_event.is_set():
-                                loop_count += 1
-                                self.log(f"循环推图 第 {loop_count} 轮 - 幻灵推图开始")
-                                try:
-                                    flow_push.main(skip_manual=skip_manual, retry_count=retry_count)
-                                except Exception as e:
-                                    self.log(f"幻灵推图出错: {str(e)}")
-                                
-                                if self.stop_event.is_set():
-                                    break
-                                
-                                self.log(f"循环推图 第 {loop_count} 轮 - 推图开始")
-                                try:
-                                    push.main(skip_manual=skip_manual, retry_count=retry_count)
-                                except Exception as e:
-                                    self.log(f"推图出错: {str(e)}")
-                                
-                                if self.stop_event.is_set():
-                                    break
-                                
-                                self.log(f"循环推图 第 {loop_count} 轮完成，继续下一轮...")
-                                time.sleep(2)
-                            result = True
-                        except ImportError as e:
-                            self.log(f"循环推图模块导入失败: {str(e)}")
-                            script.status = "错误"
-                            result = False
-                    elif script.name == "异界迷宫":
-                        try:
-                            import flow_migong
-                            challenges = script.params.get("challenges", 1)
-                            shouling_action = "jieshutansuo" if script.params.get("floors") == "15" else "jixutansuo"
-                            formation_name = script.params.get("formation_name", "")
-                            shenceng_formation_name = script.params.get("shenceng_formation_name", "")
-                            flow_migong.flow_migong(
-                                challenges=challenges,
-                                shouling_action=shouling_action,
-                                formation_name=formation_name,
-                                shenceng_formation_name=shenceng_formation_name,
-                            )
-                            result = True
-                        except ImportError as e:
-                            self.log(f"异界迷宫模块导入失败: {str(e)}")
-                            script.status = "错误"
-                            result = False
-                    else:
-                        self.log(f"{script.name} 脚本暂未实现")
-                        result = False
-                    
+                    # 字典分发：_run_script_dispatch 按脚本名调用对应 _run_* 方法，
+                    # 导入失败统一捕获并返回 False（状态由下方 if/else 置为「失败」）
+                    result = self._run_script_dispatch(script.name, script)
+
                 if result:
                     script.status = "完成"
                     self.log(f"{script.name} 执行完成")
@@ -1499,7 +1493,7 @@ class GameBotGUI:
                 break
             except Exception as e:
                 script.status = "错误"
-                self.log(f"{script.name} 执行出错: {str(e)}")
+                self.log(f"{script.name} 执行出错: {e!s}")
                 
             self.root.after(0, self.update_script_panel)
             
@@ -1509,29 +1503,54 @@ class GameBotGUI:
             time.sleep(2)
         
         # 运行结束后保存（使 auto-disable / last_run_time 等状态持久化）
-        sys.stdout = sys.__stdout__
+        # 保持 tee 接管（窗口模式下 sys.__stdout__ 为 None，直接重置会令后续 print 崩溃）
+        sys.stdout = _StdoutTee(self._enqueue_log)
         self.save_config()
         self.root.after(0, self.stop_all)
         
-    def _panel_log(self, message):
-        """线程安全的日志汇聚回调：把子脚本日志调度到主线程写入日志面板。"""
+    def _enqueue_log(self, message):
+        """日志汇聚回调（工作线程调用）：仅把消息放入队列，线程安全、零 Tk 操作。"""
+        with contextlib.suppress(Exception):
+            self._log_queue.put_nowait(str(message))
+
+    def _drain_log_queue(self):
+        """主线程定时（节流）冲刷日志队列：批量追加、限制行数、一次性滚到底部。
+
+        相比「每来一条就 configure/insert/see 三次 Tk 操作」的旧实现，
+        批量写入 + 行数封顶显著降低高频日志下的 UI 卡顿。约每 120ms 刷新一次。
+        """
         try:
-            self.root.after(0, lambda m=str(message): self.log(m))
+            if not self._log_queue.empty():
+                lines = []
+                while True:
+                    try:
+                        lines.append(self._log_queue.get_nowait())
+                    except queue.Empty:
+                        break
+                if lines:
+                    buf = "".join(f"[{time.strftime('%H:%M:%S')}] {m}\n" for m in lines)
+                    if self.log_text is not None:
+                        self.log_text.configure(state=tk.NORMAL)
+                        self.log_text.insert(tk.END, buf)
+                        # 行数封顶，避免日志无限增长拖慢控件
+                        max_lines = 2000
+                        cnt = int(self.log_text.index("end-1c").split(".")[0])
+                        if cnt > max_lines:
+                            self.log_text.delete("1.0", f"{cnt - max_lines}.0")
+                        self.log_text.see(tk.END)
+                        self.log_text.configure(state=tk.DISABLED)
+                    else:
+                        if not hasattr(self, '_log_buffer'):
+                            self._log_buffer = []
+                        self._log_buffer.extend(f"[{time.strftime('%H:%M:%S')}] {m}\n" for m in lines)
         except Exception:
             pass
+        finally:
+            self.root.after(120, self._drain_log_queue)
 
     def log(self, message):
-        timestamp = time.strftime("%H:%M:%S")
-        line = f"[{timestamp}] {message}\n"
-        if self.log_text is not None:
-            self.log_text.configure(state=tk.NORMAL)
-            self.log_text.insert(tk.END, line)
-            self.log_text.see(tk.END)
-            self.log_text.configure(state=tk.DISABLED)
-        else:
-            if not hasattr(self, '_log_buffer'):
-                self._log_buffer = []
-            self._log_buffer.append(line)
+        """兼容旧调用：直接入队（主线程也可调用），由 _drain_log_queue 统一刷新。"""
+        self._enqueue_log(message)
     
     # ===== 配置持久化（load_config / save_config） =====
     def save_config(self):
@@ -1616,8 +1635,19 @@ class GameBotGUI:
             updater.install_and_restart(new_path)
 
 def main():
+    # 窗口模式下 sys.stdout 初始为 None，必须尽早接管 print，避免启动期写入 None 崩溃；
+    # 早期日志先缓冲，待 GUI 实例创建后灌入面板。
+    sys.stdout = _StdoutTee(_early_stdout_sink)
     root = tk.Tk()
     app = GameBotGUI(root)
+    # 切换到正式 sink（写面板，调试模式下同时写回真实终端），并补刷早期缓冲
+    sys.stdout = _StdoutTee(app._enqueue_log)
+    for _m in _early_stdout_buffer:
+        with contextlib.suppress(Exception):
+            app._enqueue_log(_m)
+    _early_stdout_buffer.clear()
+    # 启动日志队列节流刷新（主线程 after 循环），避免工作线程高频直冲 Tk 卡顿
+    root.after(120, app._drain_log_queue)
     root.mainloop()
 
 if __name__ == "__main__":

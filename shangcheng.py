@@ -1,9 +1,9 @@
 # F:\afkj\game-bot\shangcheng.py
 import os
 import time
-import sys
-from common import wait_and_click, get_template_path, get_templates_dir
+
 import youyishangcheng
+from common import get_templates_dir, wait_and_click
 
 # 模板路径
 templates_dir = get_templates_dir()

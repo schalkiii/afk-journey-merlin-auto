@@ -1,7 +1,8 @@
 # F:\afkj\game-bot\youjian.py
 import os
 import time
-from common import wait_and_click, find_center, get_templates_dir
+
+from common import find_center, get_templates_dir, wait_and_click
 
 # 模板路径
 templates_dir = get_templates_dir()

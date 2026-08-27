@@ -1,7 +1,8 @@
-from common import wait_and_click, find_center, screenshot_bgr, send_coord, get_template_path, find_center_silent
-import cv2
-import time
 import random
+import time
+
+from common import find_center_silent, get_template_path, send_coord, wait_and_click
+
 
 # 随机等待函数，2-3秒
 def random_sleep():
@@ -40,7 +41,7 @@ def flow_pata():
     9. 结束脚本
     """
     # 1. 点击 wanfamulu 进入玩法目录界面
-    if not wait_and_click(tpl_wanfamulu, "wanfamulu", 0.7):
+    if not wait_and_click(tpl_wanfamulu, "wanfamulu", 0.7, recover_threshold=20):
         print("点击 wanfamulu 进入玩法目录界面失败。")
         return False
     random_sleep()

@@ -7,7 +7,8 @@
 
 import os
 import time
-from common import get_work_path
+
+from common import check_stop, get_work_path
 
 # ============================================================
 # 常量
@@ -41,6 +42,7 @@ def wait_for_drag_complete(check_interval: float = 0.05, timeout: float = 10.0) 
     """
     elapsed = 0.0
     while os.path.exists(DRAG_COORD_PATH):
+        check_stop()
         time.sleep(check_interval)
         elapsed += check_interval
         if elapsed > timeout:

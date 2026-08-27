@@ -1,0 +1,6 @@
+{
+  "scripts": {},
+  "auto_start_on_launch": false,
+  "launch_game_on_open": true,
+  "game_launch_delay": 15
+}

@@ -6,10 +6,10 @@
 """
 
 import json
-import time
 import os
+import time
 
-from common import find_center, send_coord, get_work_path, get_template_path, get_resource_path
+from common import find_center, get_resource_path, get_template_path, send_coord
 from drag_utils import send_drag
 
 
@@ -27,7 +27,7 @@ def deploy_formation(formation_name: str,
         print(f"阵容配置文件不存在: {cfg_path}")
         return False
 
-    with open(cfg_path, "r", encoding="utf-8") as f:
+    with open(cfg_path, encoding="utf-8") as f:
         formations = json.load(f)
 
     if formation_name not in formations:
@@ -52,7 +52,7 @@ def deploy_formation(formation_name: str,
         print(f"格子偏移文件不存在: {offsets_path}")
         return False
 
-    with open(offsets_path, "r", encoding="utf-8") as f:
+    with open(offsets_path, encoding="utf-8") as f:
         grid_data = json.load(f)
 
     if map_id not in grid_data:

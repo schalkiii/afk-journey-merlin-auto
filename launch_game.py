@@ -17,12 +17,12 @@ launch_game.py — 通过桌面「剑与远征：启程」快捷方式启动游�
     - 带 --bot 时，脚本启动后会按 GUI 中「启动后自动运行」的勾选状态决定是否立即开始运行。
 """
 
+import argparse
 import os
-import sys
-import time
 import shlex
 import subprocess
-import argparse
+import sys
+import time
 
 # 桌面快捷方式候选名称（文件名包含其一即视为匹配）
 SHORTCUT_KEYWORDS = ["剑与远征", "启程", "afk", "afkj"]

@@ -1,8 +1,16 @@
-from common import wait_and_click, find_center, screenshot_bgr, send_coord, get_template_path, find_center_silent, try_auto_configure_lineup
-from jiance import check_and_handle_libao
-import cv2
-import time
 import random
+import time
+
+from common import (
+    find_center_silent,
+    get_template_path,
+    screenshot_bgr,
+    send_coord,
+    try_auto_configure_lineup,
+    wait_and_click,
+)
+from jiance import check_and_handle_libao
+
 
 # 随机等待函数，2-3秒
 def random_sleep():
@@ -136,7 +144,7 @@ def flow_nvshenta(auto_configure_lineup=False):
     """
     
     # 1. 点击 wanfamulu 进入玩法目录
-    if not wait_and_click(tpl_wanfamulu, "wanfamulu", 0.7):
+    if not wait_and_click(tpl_wanfamulu, "wanfamulu", 0.7, recover_threshold=20):
         print("点击 wanfamulu 失败")
         return False
     random_sleep()
@@ -216,7 +224,6 @@ def flow_nvshenta(auto_configure_lineup=False):
     random_sleep()
     
     # 定义战斗标记模板
-    import os
     tpl_nvshenta_zhandou_biaoji = get_template_path("nvshentazhandoubiaoji.png")
     
     # 等待战斗结束：检测战斗标记消失
@@ -271,7 +278,6 @@ def flow_nvshenta(auto_configure_lineup=False):
         random_sleep()
         
         # 定义战斗标记模板
-        import os
         tpl_nvshenta_zhandou_biaoji = get_template_path("nvshentazhandoubiaoji.png")
         
         # 等待战斗结束：检测战斗标记消失

@@ -93,6 +93,15 @@
   因此**所有战斗类任务**（迷梦之域 / 女神塔 / 普竞 / 爬塔 / 推图 / 幻灵推图 / 异界迷宫等）失败残留的弹窗
   都会在下一任务开始前被清理；同时覆盖「任务结束后弹出礼包广告」的场景，避免残留弹窗卡死后续任务。
   结尾兜底清理弹窗并 `flow_return_main()` 回到主界面；移除原 `__main__` 独立调试入口。
+- **卡死自动兜底回主界面（防连锁卡死）**：新增 `common.recover_to_main_interface()` 与 `common.ensure_main_interface()`。
+  - `recover_to_main_interface()`：任务卡在某界面（弹窗 / 子界面）反复检测不到目标时，依次尝试点击
+    「点击空白处关闭」(`dianjikongbaichuguanbi`) / `tuichulibao` / `exitck` / `exit` 逐层退出，直到主界面
+    `wanfamulu` 可见，无任何退出按钮时点击屏幕空白处兜底。`flow_return_main()` 现已复用此逻辑。
+  - `wait_and_click()` 新增 `recover_threshold` 参数：某目标**连续检测失败达到该次数（默认关闭）**即自动触发
+    一次兜底回主界面、从卡住处退出后继续等待目标，实现「反复检测不到 → 兜底退出 → 重新继续当前任务」。
+    各任务入口的 `wanfamulu` 检测已启用 `recover_threshold=20`。
+  - `ensure_main_interface()`：在每个任务开始前（除「登录」外）调用，先 `dismiss_popup()` 关闭残留弹窗，
+    再确保已回到主界面；即使上一任务卡在子界面未退出，本次 `wanfamulu` 检测也能正常进行，避免连锁卡死后续所有任务。
 
 ### 7. 命令行启动游戏 + 联动启动脚本（`launch_game.py`）
 
@@ -112,6 +121,14 @@
 - `_ensure_config_files()` 简化为仅确保 `shared` 目录存在（移除已无用的空拷贝循环）。
 - `goldenhandmaidens.spec` 的 `hiddenimports` 补充 `flow_enter`，确保打包后导入无误。
 - 新增 `config.json`（启动器/脚本的默认配置）。
+
+### 9. 工程化增强：识别去重 / 截屏缓存 / 依赖自动收集 / 测试基线
+
+- **英雄识别逻辑统一（消除多份实现分叉）**：上游/原仓库在 `warehouse` / `flow_tower` / `push` 中各自维护一份 `_recognize_hero` 与底层 `_best_multiscale_match_score` / `_iter_scales`，三份的裁切区域与尺度范围并不一致（仓库扫描用上半 60% 裁切 + `HERO_TEMPLATE_SCALE_*`，阵容识别用整卡 + `LINEUP_HERO_TEMPLATE_SCALE_*`），存在“仓库练度判定”与“阵容识别”结果相互矛盾的隐患。现已抽出统一的 `warehouse._match_best_hero(face_roi, scale_min, scale_max, scale_step)`，由各入口按界面传入对应尺度范围与阈值——**匹配算法单源、行为完全不变**，彻底消除分叉。
+- **截屏缓存下沉到 `screenshot_bgr`**：原先缓存仅作用于模板匹配（`get_cached_screenshot`），英雄识别循环仍每次全屏截屏。现在缓存逻辑内置进 `screenshot_bgr` 本身（短 TTL 0.05s，且每次仍调用 `check_stop` 保证 F9 即时中断），并在 `wait_and_click` 点击后调用 `invalidate_screenshot_cache()` 使下一帧为最新——长任务（推图/爬塔/迷宫）的重复截屏开销显著降低。
+- **`goldenhandmaidens.spec` 的 `hiddenimports` 改为自动收集**：原先新增一个 flow 脚本需手改 spec 的模块清单（漏改会导致打包后 `ImportError`）。现改为 `glob` 自动收集项目内所有顶层脚本模块，仅 `certifi` / `keyboard` 等第三方包仍显式列出——新增任务脚本后打包零额外配置。
+- **测试基线**：新增 `tests/test_smoke.py`（pytest），覆盖全部模块可导入 + 阵容可采纳判定 `_is_lineup_acceptable` 的核心逻辑，为后续重构提供回归保护。
+- 另对全仓做了 ruff 机械整改（未用 import / 死代码 / 简化），并修复 `flow_migong` 中 lambda 延迟绑定循环变量的隐患（B023）。
 
 ---
 

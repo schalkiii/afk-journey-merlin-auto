@@ -1,10 +1,16 @@
-from common import screenshot_bgr, wait_and_click, get_template_path, get_work_path, get_templates_dir
-import cv2
 import os
 import time
-import numpy as np
-from typing import Optional
 
+import cv2
+import numpy as np
+
+from common import (
+    get_template_path,
+    get_templates_dir,
+    get_work_path,
+    screenshot_bgr,
+    wait_and_click,
+)
 
 # === 模板路径（需要你自己准备对应截图）===
 # 进入英雄厅堂仓库用的按钮 ck
@@ -209,7 +215,7 @@ def init_templates_from_dir():
             continue
 
         lower = fname.lower()
-        if not (lower.endswith(".png") or lower.endswith(".jpg") or lower.endswith(".jpeg")):
+        if not (lower.endswith((".png", ".jpg", ".jpeg"))):
             continue
 
         name_no_ext, _ = os.path.splitext(fname)
@@ -397,10 +403,15 @@ def _iter_scales(min_s: float, max_s: float, step: float):
         s += float(step)
 
 
-def _best_multiscale_match_score(search_bgr, template_bgr) -> float:
+def _best_multiscale_match_score(search_bgr, template_bgr,
+                                 scale_min=HERO_TEMPLATE_SCALE_MIN,
+                                 scale_max=HERO_TEMPLATE_SCALE_MAX,
+                                 scale_step=HERO_TEMPLATE_SCALE_STEP) -> float:
     """
     在 search_bgr 上对 template_bgr 做多尺度匹配，返回最佳得分（TM_CCOEFF_NORMED）。
     只做评分，不返回位置；用于“选出是哪一个英雄”的场景。
+    scale_min/scale_max/scale_step 可覆盖，以适配不同界面下英雄头像的尺度范围
+    （仓库扫描用 HERO_TEMPLATE_SCALE_*，阵容识别用 LINEUP_HERO_TEMPLATE_SCALE_*）。
     """
     if search_bgr is None or template_bgr is None:
         return -1.0
@@ -411,9 +422,9 @@ def _best_multiscale_match_score(search_bgr, template_bgr) -> float:
         return -1.0
 
     best = -1.0
-    for s in _iter_scales(HERO_TEMPLATE_SCALE_MIN, HERO_TEMPLATE_SCALE_MAX, HERO_TEMPLATE_SCALE_STEP):
-        tw = int(round(tw0 * s))
-        th = int(round(th0 * s))
+    for s in _iter_scales(scale_min, scale_max, scale_step):
+        tw = round(tw0 * s)
+        th = round(th0 * s)
         if tw < 2 or th < 2:
             continue
         if th > sh or tw > sw:
@@ -428,20 +439,17 @@ def _best_multiscale_match_score(search_bgr, template_bgr) -> float:
     return best
 
 
-def _recognize_hero(card_roi):
+def _match_best_hero(face_roi,
+                     scale_min=HERO_TEMPLATE_SCALE_MIN,
+                     scale_max=HERO_TEMPLATE_SCALE_MAX,
+                     scale_step=HERO_TEMPLATE_SCALE_STEP):
     """
-    识别卡片中的英雄 ID。
-    在 card_roi 上半部分裁剪头像区域，与 HERO_TEMPLATES 做模板匹配。
+    遍历 HERO_TEMPLATES 对 face_roi 做多尺度匹配，返回 (best_hero_id, best_score)。
+    抽出自仓库扫描与阵容识别共用的匹配循环，避免三处重复实现分叉；
+    scale_* 由调用方按界面传入（仓库用 HERO_TEMPLATE_SCALE_*，阵容用 LINEUP_HERO_TEMPLATE_SCALE_*）。
     """
-    if card_roi is None:
-        return None
-
-    h, w = card_roi.shape[:2]
-    face_roi = card_roi[0:int(h * 0.6), 0:w]
-
     best_hero = None
     best_score = 0.0
-
     for hero_id, tpl_list in HERO_TEMPLATES.items():
         for tpl_path in tpl_list:
             if not os.path.exists(tpl_path):
@@ -449,11 +457,27 @@ def _recognize_hero(card_roi):
             tpl = cv2.imread(tpl_path, cv2.IMREAD_COLOR)
             if tpl is None:
                 continue
-
-            max_val = _best_multiscale_match_score(face_roi, tpl)
+            max_val = _best_multiscale_match_score(face_roi, tpl, scale_min, scale_max, scale_step)
             if max_val > best_score:
                 best_score = max_val
                 best_hero = hero_id
+    return best_hero, best_score
+
+
+def _recognize_hero(card_roi):
+    """
+    识别卡片中的英雄 ID（仓库扫描入口）。
+    在 card_roi 上半部分裁剪头像区域，与 HERO_TEMPLATES 做多尺度匹配。
+    匹配循环统一委托 _match_best_hero，仓库默认使用 HERO_TEMPLATE_SCALE_* 尺度范围
+    与 0.6 默认阈值（gubian/dashu/luka/kaka/bailang 另行抬高）。
+    """
+    if card_roi is None:
+        return None
+
+    h, w = card_roi.shape[:2]
+    face_roi = card_roi[0:int(h * 0.6), 0:w]
+
+    best_hero, best_score = _match_best_hero(face_roi)
 
     # 调试：总是打印最佳匹配
     if best_hero:
@@ -500,10 +524,7 @@ def has_fancy_border(card_roi,
 
     # 上方统计范围：至少覆盖 t 行，避免 t>top_h 时上边框被截断
     top_ratio = float(top_ratio)
-    if top_ratio <= 0:
-        top_h = t
-    else:
-        top_h = max(t, int(round(h * min(top_ratio, 1.0))))
+    top_h = t if top_ratio <= 0 else max(t, round(h * min(top_ratio, 1.0)))
 
     # 在上方 top_h 行里，仅保留边框厚度 t 的区域（更聚焦“框”而不是头像内容）
     # 1) 顶边：0~t 行
@@ -519,9 +540,7 @@ def has_fancy_border(card_roi,
     if edge_count < empty_thresh:
         # 空槽，后续不再尝试识别英雄
         return None
-    if edge_count >= fancy_thresh:
-        return True
-    return False
+    return edge_count >= fancy_thresh
 
 
 def _top_band_edge_count(card_roi, top_ratio: float = BORDER_TOP_RATIO) -> int:
@@ -555,10 +574,7 @@ def _save_heroes_to_txt(hero_dict):
             status_str = "未拥有"
         else:
             # border_status 目前为 "有花边" 或 "平框"
-            if border_status == "有花边":
-                status_str = "高"
-            else:
-                status_str = "低"
+            status_str = "高" if border_status == "有花边" else "低"
         lines.append(f"{hero_name},{status_str}")
 
     content = "\n".join(lines)
@@ -578,7 +594,7 @@ def _recognize_grid_from_first_card(
     card_height=None,
     col_gap=None,
     row_gap=None,
-    max_consecutive_unrecognized: Optional[int] = None,
+    max_consecutive_unrecognized: int | None = None,
 ):
     """
     从首个卡片左上角坐标 (x0, y0) 开始，按给定行数/列数遍历卡片。
@@ -796,7 +812,6 @@ def recognize_knights_for_current_filter(all_heroes: dict):
 
     # 共鸣骑士：取消绿框之间的水平间隔，并在上一版基础上略微调整宽度
     knight_card_width = int(CARD_WIDTH * 11.0 / 10.0 * 0.95)
-    knight_card_height = int(CARD_HEIGHT * 1.15)
     heroes = _recognize_grid_from_first_card(
         img,
         x0,

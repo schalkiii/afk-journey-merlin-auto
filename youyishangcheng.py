@@ -1,7 +1,8 @@
 # F:\afkj\game-bot\youyishangcheng.py
 import os
 import time
-from common import wait_and_click, get_templates_dir
+
+from common import get_templates_dir, wait_and_click
 
 # 模板路径
 templates_dir = get_templates_dir()

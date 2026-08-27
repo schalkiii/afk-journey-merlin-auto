@@ -1,34 +1,20 @@
-from common import wait_and_click, find_center, screenshot_bgr, get_template_path, get_work_path
-from warehouse import (
-    init_templates_from_dir,
-    WAREHOUSE_TXT_PATH,
-)
-import cv2
 import os
 import time
 
-# 静默版本的 find_center，不输出匹配得分
-def find_center_silent(template_path, threshold=0.7, timeout=3.0):
-    template = cv2.imread(template_path, cv2.IMREAD_COLOR)
-    if template is None:
-        raise ValueError(f"模板读取失败: {template_path}")
-    h, w = template.shape[:2]
+import cv2
 
-    start_time = time.time()
-    while time.time() - start_time < timeout:
-        img = screenshot_bgr()
-        res = cv2.matchTemplate(img, template, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, max_loc = cv2.minMaxLoc(res)
+from common import find_center_silent as _common_find_center_silent
+from common import get_template_path, get_work_path, screenshot_bgr, wait_and_click
+from warehouse import (
+    WAREHOUSE_TXT_PATH,
+    init_templates_from_dir,
+)
 
-        if max_val >= threshold:
-            top_left = max_loc
-            center_x = top_left[0] + w // 2
-            center_y = top_left[1] + h // 2
-            return center_x, center_y
-        
-        time.sleep(0.5)
-    
-    return None
+
+# 委托 common.find_center_silent：保留 push 内部「最多轮询等待 3s」的语义，
+# 避免与 common 重复实现导致逻辑分叉（统一支持 region / 缓存截图 / F9 停止）。
+def find_center_silent(template_path, threshold=0.7):
+    return _common_find_center_silent(template_path, threshold=threshold, timeout=3.0)
 
 # === 模板路径，对应你的文件名 ===
 tpl_advance       = get_template_path("guajiguanqia.png")
@@ -102,13 +88,13 @@ LINEUP_FIRST_OFFSET_Y = 200
 
 # 调试用整体偏移（像素）：正数表示向右/向下移动
 # 参考：如果你想"向下 1 个框高"，就填 LINEUP_CARD_HEIGHT；"向右 1.3 个框宽"，就填 round(1.3 * LINEUP_CARD_WIDTH)
-LINEUP_SHIFT_X_PX = int(round(1.6 * LINEUP_CARD_WIDTH))
-LINEUP_SHIFT_Y_PX = int(round(0.75 * LINEUP_CARD_HEIGHT))
+LINEUP_SHIFT_X_PX = round(1.6 * LINEUP_CARD_WIDTH)
+LINEUP_SHIFT_Y_PX = round(0.75 * LINEUP_CARD_HEIGHT)
 
 # 第二套布局：整体在 X 方向再额外平移的比例/像素
 # 默认向左平移半个头像宽度，你可以调下面这两个变量：
 LINEUP_SECOND_LAYOUT_SHIFT_X_FACTOR = -0.5
-LINEUP_SECOND_LAYOUT_SHIFT_X_PX = int(round(LINEUP_SECOND_LAYOUT_SHIFT_X_FACTOR * LINEUP_CARD_WIDTH))
+LINEUP_SECOND_LAYOUT_SHIFT_X_PX = round(LINEUP_SECOND_LAYOUT_SHIFT_X_FACTOR * LINEUP_CARD_WIDTH)
 
 # 阵容界面头像明显比仓库里小，为了匹配稳定，
 # 这里专门为阵容识别准备一套"更偏向缩小"的多尺度列表。
@@ -170,75 +156,28 @@ def has_fancy_border_lineup(
     return edge_count
 
 
-def _iter_scales(min_s: float, max_s: float, step: float):
-    if step <= 0:
-        return
-    s = float(min_s)
-    # 用 +1e-9 避免浮点误差导致漏掉 max_s
-    while s <= float(max_s) + 1e-9:
-        yield round(s, 4)
-        s += float(step)
-
-
-def _best_multiscale_match_score(search_bgr, template_bgr) -> float:
-    """
-    在 search_bgr 上对 template_bgr 做多尺度匹配，返回最佳得分（TM_CCOEFF_NORMED）。
-    只做评分，不返回位置；用于"选出是哪一个英雄"的场景。
-    """
-    if search_bgr is None or template_bgr is None:
-        return -1.0
-
-    sh, sw = search_bgr.shape[:2]
-    th0, tw0 = template_bgr.shape[:2]
-    if sh < 2 or sw < 2 or th0 < 2 or tw0 < 2:
-        return -1.0
-
-    best = -1.0
-    for s in _iter_scales(LINEUP_HERO_TEMPLATE_SCALE_MIN, LINEUP_HERO_TEMPLATE_SCALE_MAX, LINEUP_HERO_TEMPLATE_SCALE_STEP):
-        tw = int(round(tw0 * s))
-        th = int(round(th0 * s))
-        if tw < 2 or th < 2:
-            continue
-        if th > sh or tw > sw:
-            continue
-
-        tpl = cv2.resize(template_bgr, (tw, th), interpolation=cv2.INTER_AREA if s < 1.0 else cv2.INTER_CUBIC)
-        res = cv2.matchTemplate(search_bgr, tpl, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, _ = cv2.minMaxLoc(res)
-        if max_val > best:
-            best = float(max_val)
-
-    return best
+from warehouse import _match_best_hero  # 统一的多尺度英雄匹配循环
 
 
 def _recognize_hero(card_roi):
     """
-    识别卡片中的英雄 ID。
-    在 card_roi 上半部分裁剪头像区域，与 HERO_TEMPLATES 做模板匹配。
+    识别卡片中的英雄 ID（阵容识别入口）。
+    使用整卡区域匹配（与仓库扫描的上半 60% 裁切不同），并采用阵容专属的
+    LINEUP_HERO_TEMPLATE_SCALE_* 尺度范围与 0.75 默认阈值（gubian/dashu/luka 0.8）。
+    匹配循环统一委托 warehouse._match_best_hero，避免与仓库实现分叉。
     """
-    from warehouse import HERO_TEMPLATES
-    
     if card_roi is None:
         return None
 
     h, w = card_roi.shape[:2]
     face_roi = card_roi[0:h, 0:w]
 
-    best_hero = None
-    best_score = 0.0
-
-    for hero_id, tpl_list in HERO_TEMPLATES.items():
-        for tpl_path in tpl_list:
-            if not os.path.exists(tpl_path):
-                continue
-            tpl = cv2.imread(tpl_path, cv2.IMREAD_COLOR)
-            if tpl is None:
-                continue
-
-            max_val = _best_multiscale_match_score(face_roi, tpl)
-            if max_val > best_score:
-                best_score = max_val
-                best_hero = hero_id
+    best_hero, best_score = _match_best_hero(
+        face_roi,
+        LINEUP_HERO_TEMPLATE_SCALE_MIN,
+        LINEUP_HERO_TEMPLATE_SCALE_MAX,
+        LINEUP_HERO_TEMPLATE_SCALE_STEP,
+    )
 
     # 不同英雄使用不同的匹配阈值
     if best_hero:
@@ -319,7 +258,7 @@ def _load_warehouse_levels():
         print(f"未找到仓库练度文件：{WAREHOUSE_TXT_PATH}，将视为全部未拥有。")
         return hero_levels
 
-    with open(WAREHOUSE_TXT_PATH, "r", encoding="utf-8") as f:
+    with open(WAREHOUSE_TXT_PATH, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line or "," not in line:
@@ -349,19 +288,15 @@ def _capture_lineup_slots(debug_label="lineup", extra_shift_x_px: int = 0):
     # 估算第一张头像左上角
     x0 = max(
         0,
-        int(
-            round(
+        round(
                 (btn_x - LINEUP_FIRST_OFFSET_X) + LINEUP_SHIFT_X_PX
-            )
-        ),
+            ),
     ) + extra_shift_x_px
     y0 = max(
         0,
-        int(
-            round(
+        round(
                 (btn_y - LINEUP_FIRST_OFFSET_Y) + LINEUP_SHIFT_Y_PX
-            )
-        ),
+            ),
     )
 
     slots = []
@@ -427,7 +362,7 @@ def _recognize_lineup_with_levels():
         img = screenshot_bgr()
         vis = img.copy()
 
-        for idx, (roi, (x, y, w, h)) in enumerate(slots):
+        for _idx, (roi, (x, y, w, h)) in enumerate(slots):
             edge_cnt = has_fancy_border_lineup(roi)
             need_level = "高" if edge_cnt > 0 else "低"
 
@@ -546,7 +481,7 @@ def debug_lineup_recognition():
             continue
 
         print(f"--------- {layout_name} 阵容头像调试结果（索引 / 英雄ID / 花边状态 / 边缘像素数）---------")
-        for idx, (roi, (x, y, w, h)) in enumerate(slots):
+        for idx, (roi, (_x, _y, _w, _h)) in enumerate(slots):
             edge_cnt = has_fancy_border_lineup(roi)
             border_str = "有花边" if edge_cnt > 0 else "无花边"
 
@@ -671,7 +606,7 @@ def flow_push_mode1(mode="normal", skip_manual=True, retry_count=3):
     init_templates_from_dir()
 
     # 1. 点击 wanfamulu 进入玩法目录
-    if not wait_and_click(tpl_wanfamulu, "wanfamulu", 0.7):
+    if not wait_and_click(tpl_wanfamulu, "wanfamulu", 0.7, recover_threshold=20):
         print("点击 wanfamulu 进入玩法目录失败。")
         return False
 
