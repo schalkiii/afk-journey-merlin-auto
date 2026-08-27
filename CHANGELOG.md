@@ -60,6 +60,16 @@
 - 重新打包引导器选 `runw.exe` 窗口版，根 `goldenhandmaidens.exe` 已更新为无控制台；日志仍进「运行日志」面板，
   `click_from_file.exe` 早已 `CREATE_NO_WINDOW` 隐藏。
 
+### 架构去重与工程化（本轮）
+- 英雄识别去重：抽出 `warehouse._match_best_hero(face_roi, scale_min, scale_max, scale_step)`，统一三处
+  `_recognize_hero` / `_best_multiscale_match_score` / `_iter_scales`（仓库扫描用 `HERO_TEMPLATE_SCALE_*`、
+  阵容识别用 `LINEUP_HERO_TEMPLATE_SCALE_*`），匹配算法单源、行为完全不变，消除仓库扫描与阵容识别分叉隐患。
+- 截屏缓存下沉：缓存逻辑内置进 `screenshot_bgr`（短 TTL 0.05s，每次仍 `check_stop` 保证 F9 即时中断），
+  `wait_and_click` 点击后 `invalidate_screenshot_cache()` 使下一帧为最新；长任务重复截屏开销降低。
+- `goldenhandmaidens.spec` 的 `hiddenimports` 改为 `glob` 自动收集顶层模块，新增 flow 脚本无需手改。
+- 测试基线：新增 `tests/test_smoke.py`（pytest），覆盖全模块导入 + `_is_lineup_acceptable` 判定（2 passed）。
+- 修复 `flow_migong` lambda 延迟绑定循环变量隐患（B023）。
+
 ## 重新打包 exe 与清理冗余
 - 用 PyInstaller 6.22.0 + `goldenhandmaidens.spec` 重新打包，根目录 `goldenhandmaidens.exe` 已更新
   （含本轮全部源码改动：日志队列节流、`find_center_silent` 统一、任务字典分发、停止检查加固等）。
