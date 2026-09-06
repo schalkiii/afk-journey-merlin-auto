@@ -81,6 +81,10 @@
   尾部无条件 `time.sleep(0.5)` 改为「写后等 AHK 读走（文件被删除）再返回」，命中即返回更快且保证点击已发生，AHK 未运行退化为 0.5s 超时，行为不变。
 - 验证：pytest 2 passed（全模块导入 + `_is_lineup_acceptable` 判定）；ruff F/B/SIM/UP/C4 全绿；`goldenhandmaidens.exe` 用 `runw.exe` 窗口引导器重建。
 
+### 功能面板：一键全不选
+- 配置面板「开启」勾选框旁在「一键全选」基础上并排新增「一键全不选」按钮，调用 `GameBotGUI.disable_all_scripts()`：
+  一键将所有功能脚本 `enabled` 置 False（仅改启用状态，不影响各脚本 `daily_reset` 每日重置标记），刷新当前面板勾选框与列表 `✓` 标记并持久化到配置。
+
 ## 重新打包 exe 与清理冗余
 - 用 PyInstaller 6.22.0 + `goldenhandmaidens.spec` 重新打包，根目录 `goldenhandmaidens.exe` 已更新
   （含本轮全部源码改动：日志队列节流、`find_center_silent` 统一、任务字典分发、停止检查加固等）。

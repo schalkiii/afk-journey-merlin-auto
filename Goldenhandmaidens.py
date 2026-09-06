@@ -351,13 +351,17 @@ class GameBotGUI:
         )
         self.script_enabled_check.grid(row=1, column=0, sticky=tk.W, pady=5)
 
-        # 一键全选：每天启动后批量勾选所有功能脚本，省去逐个勾选
+        # 一键全选 / 全不选：每天启动后批量勾选 / 取消勾选所有功能脚本
+        select_btns = ttk.Frame(self.script_panel)
+        select_btns.grid(row=1, column=1, sticky=tk.E, pady=5)
         self.select_all_btn = ttk.Button(
-            self.script_panel,
-            text="一键全选",
-            command=self.enable_all_scripts
+            select_btns, text="一键全选", command=self.enable_all_scripts
         )
-        self.select_all_btn.grid(row=1, column=1, sticky=tk.E, pady=5)
+        self.select_all_btn.pack(side=tk.LEFT, padx=(0, 5))
+        self.deselect_all_btn = ttk.Button(
+            select_btns, text="一键全不选", command=self.disable_all_scripts
+        )
+        self.deselect_all_btn.pack(side=tk.LEFT)
         
         self.param_frame = ttk.Frame(self.script_panel)
         self.param_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
@@ -806,6 +810,15 @@ class GameBotGUI:
         self.update_dashboard_buttons() # 刷新列表的 ✓ 标记
         self.save_config()              # 持久化到配置
         self.log("已一键勾选全部功能")
+
+    def disable_all_scripts(self):
+        """一键取消勾选全部功能脚本：批量停用，省去逐个取消。"""
+        for script in self.scripts:
+            script.enabled = False
+        self.update_script_panel()      # 刷新当前脚本「开启」勾选框
+        self.update_dashboard_buttons() # 刷新列表的 ✓ 标记
+        self.save_config()              # 持久化到配置
+        self.log("已一键取消勾选全部功能")
 
     def on_auto_start_changed(self):
         self.auto_start_on_launch = self.auto_start_var.get()
