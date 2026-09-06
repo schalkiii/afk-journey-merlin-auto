@@ -87,6 +87,7 @@
 
 ### 文档同步（neat-freak 收尾）
 - README「项目结构」补齐实际模块：`push.py`（主线推图流程，原缺失）、`bot_runtime.py`（主文件拆分抽出的独立工具，原缺失）、`pata.py`（爬塔入口，被「爬塔」任务分发且内部调用 `flow_tower`，原缺失）；`flow_push.py` 标注由「推图流程」修正为「幻灵推图流程（薄封装）」，`flow_tower.py` 修正为「爬塔内部流程模块（被 pata.py 调用）」，与运行分发（`_run_pata`→`pata.main()`→`flow_tower.flow_tower()`）一致。
+- README「项目结构」进一步补齐其余任务脚本（`youjian.py` 邮件、`pujing.py` 普竞、`nvshenta.py` 女神塔、`shouquguajijiangli.py` 挂机奖励、`shangcheng.py` 商城、`meirirenwulingqu.py` 日常任务）与工具（`youyishangcheng.py` 友谊商城、被商城调用；`jiance.py` 礼包/弹窗检测、被多任务复用），现已覆盖全部根目录任务 / 流程脚本。
 - README「快速开始」补充推图 / 幻灵推图 / 循环推图 三者关系（源自 `run_scripts_thread` 运行分发代码）。
 - README「巨型主文件拆分」行数声明同步为「约 1443 行（经后续增强，当前约 1483 行）」，与 `Goldenhandmaidens.py` 现状一致。
 

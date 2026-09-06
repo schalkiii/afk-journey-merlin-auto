@@ -180,10 +180,18 @@ pata.py                   爬塔入口（被「爬塔」任务分发，内部调
 flow_tower.py             爬塔内部流程模块（逐塔挑战 / 阵容识别，被 pata.py 调用）
 mimengzhiyu.py           迷梦之域挑战（接入自动配置阵容、结算弹窗清理、返回主界面）
 haoyoujiangli.py          好友赠送（重写：弹窗清理 + 容错退出 + 返回主界面）
+youjian.py               邮件（领取）
+pujing.py                普竞（普通竞技场）
+nvshenta.py              女神塔（接入自动配置阵容、礼包检测）
+shouquguajijiangli.py    挂机奖励（免费 / 付费次数领取）
+shangcheng.py            商城（含友意商城 youyishangcheng）
+youyishangcheng.py       友谊商城（被 shangcheng.py 调用）
+meirirenwulingqu.py      日常任务（领取）
 formation.py              阵容编辑（读取 formations.json 配置上阵英雄）
 hero_metadata.py          英雄元数据（ID / 位置 / 模板）
 drag_utils.py             拖拽 / 滑动工具
 warehouse.py              仓库相关
+jiance.py                礼包 / 弹窗检测工具（check_and_handle_libao，被多任务复用）
 updater.py                检查更新与自更新
 version.py                本地版本号
 launch_game.py            命令行启动游戏并可联动启动本项目脚本（新增）
