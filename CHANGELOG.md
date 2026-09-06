@@ -86,7 +86,7 @@
   一键将所有功能脚本 `enabled` 置 False（仅改启用状态，不影响各脚本 `daily_reset` 每日重置标记），刷新当前面板勾选框与列表 `✓` 标记并持久化到配置。
 
 ### 文档同步（neat-freak 收尾）
-- README「项目结构」补齐实际模块：`push.py`（主线推图流程，原缺失）、`bot_runtime.py`（主文件拆分抽出的独立工具，原缺失）；`flow_push.py` 标注由「推图流程」修正为「幻灵推图流程（薄封装）」，与运行分发（`_run_huanling`→`flow_push.main`）一致。
+- README「项目结构」补齐实际模块：`push.py`（主线推图流程，原缺失）、`bot_runtime.py`（主文件拆分抽出的独立工具，原缺失）、`pata.py`（爬塔入口，被「爬塔」任务分发且内部调用 `flow_tower`，原缺失）；`flow_push.py` 标注由「推图流程」修正为「幻灵推图流程（薄封装）」，`flow_tower.py` 修正为「爬塔内部流程模块（被 pata.py 调用）」，与运行分发（`_run_pata`→`pata.main()`→`flow_tower.flow_tower()`）一致。
 - README「快速开始」补充推图 / 幻灵推图 / 循环推图 三者关系（源自 `run_scripts_thread` 运行分发代码）。
 - README「巨型主文件拆分」行数声明同步为「约 1443 行（经后续增强，当前约 1483 行）」，与 `Goldenhandmaidens.py` 现状一致。
 

@@ -176,7 +176,8 @@ flow_enter.py             进入游戏 / 返回主界面(flow_return_main)
 flow_migong.py            迷宫探索（含小地图特征匹配加速）
 push.py                   推图流程（主线）
 flow_push.py              幻灵推图流程（薄封装，分发到 push.main）
-flow_tower.py             爬塔流程
+pata.py                   爬塔入口（被「爬塔」任务分发，内部调用 flow_tower）
+flow_tower.py             爬塔内部流程模块（逐塔挑战 / 阵容识别，被 pata.py 调用）
 mimengzhiyu.py           迷梦之域挑战（接入自动配置阵容、结算弹窗清理、返回主界面）
 haoyoujiangli.py          好友赠送（重写：弹窗清理 + 容错退出 + 返回主界面）
 formation.py              阵容编辑（读取 formations.json 配置上阵英雄）
