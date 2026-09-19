@@ -1,4 +1,4 @@
-from common import wait_and_click, find_center, screenshot_bgr, send_coord, get_template_path
+from common import wait_and_click, find_center, screenshot_bgr, send_coord, get_template_path, load_template
 from jiance import check_and_handle_libao
 import cv2
 import time
@@ -18,7 +18,7 @@ def find_center_silent(template_path, threshold=0.8, region=None):
     region: 搜索区域 (x, y, width, height)，None 表示整个屏幕
     返回：找到的中心点坐标，未找到返回 None
     """
-    template = cv2.imread(template_path, cv2.IMREAD_COLOR)
+    template = load_template(template_path)
     if template is None:
         raise ValueError(f"模板读取失败: {template_path}")
     h, w = template.shape[:2]

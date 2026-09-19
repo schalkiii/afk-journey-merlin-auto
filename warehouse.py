@@ -1,4 +1,4 @@
-from common import screenshot_bgr, wait_and_click, get_template_path, get_work_path, get_templates_dir
+from common import screenshot_bgr, wait_and_click, get_template_path, get_work_path, get_templates_dir, load_template
 import cv2
 import os
 import time
@@ -263,7 +263,7 @@ def _match_template(img, template_path, threshold=0.8):
         print(f"模板不存在: {template_path}")
         return None
 
-    template = cv2.imread(template_path, cv2.IMREAD_COLOR)
+    template = load_template(template_path)
     if template is None:
         print(f"模板读取失败: {template_path}")
         return None
@@ -295,7 +295,7 @@ def _match_template_with_box(img, template_path, threshold=0.8):
         print(f"模板不存在: {template_path}")
         return None
 
-    template = cv2.imread(template_path, cv2.IMREAD_COLOR)
+    template = load_template(template_path)
     if template is None:
         print(f"模板读取失败: {template_path}")
         return None
@@ -446,7 +446,7 @@ def _recognize_hero(card_roi):
         for tpl_path in tpl_list:
             if not os.path.exists(tpl_path):
                 continue
-            tpl = cv2.imread(tpl_path, cv2.IMREAD_COLOR)
+            tpl = load_template(tpl_path)
             if tpl is None:
                 continue
 

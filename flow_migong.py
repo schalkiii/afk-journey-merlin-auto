@@ -5,7 +5,7 @@
 import json
 import time
 import os
-from common import find_center, send_coord, wait_and_click, get_template_path, get_work_path, get_resource_path, screenshot_bgr
+from common import find_center, send_coord, wait_and_click, get_template_path, get_work_path, get_resource_path, screenshot_bgr, load_template
 from warehouse import init_templates_from_dir, HERO_TEMPLATES
 from formation import deploy_formation
 from drag_utils import send_drag
@@ -91,7 +91,7 @@ def find_all_mg_fast(names, threshold=None, img=None):
         img = screenshot_bgr()
     found = {}
     for name in names:
-        template = cv2.imread(tpl(name), cv2.IMREAD_COLOR)
+        template = load_template(tpl(name))
         if template is None:
             continue
         res = cv2.matchTemplate(img, template, cv2.TM_CCOEFF_NORMED)
@@ -277,7 +277,7 @@ def find_all_instances_mg(name, threshold=None, min_gap=30, img=None):
     if threshold is None:
         threshold = cfg("thresholds", {}).get("default", 0.8)
     tpl_path = tpl(name)
-    template = cv2.imread(tpl_path, cv2.IMREAD_COLOR)
+    template = load_template(tpl_path)
     if template is None:
         return []
     th, tw = template.shape[:2]

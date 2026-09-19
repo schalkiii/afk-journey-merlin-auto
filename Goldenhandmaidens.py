@@ -917,11 +917,10 @@ class GameBotGUI:
                         try:
                             import push
                             ps = self.config.get("push_settings", {})
-                            push.main(
+                            result = push.main(
                                 skip_manual=ps.get("skip_manual", True),
                                 retry_count=ps.get("retry_count", 3)
                             )
-                            result = True
                         except ImportError as e:
                             self.log(f"推图模块导入失败: {str(e)}")
                             script.status = "错误"
@@ -934,29 +933,59 @@ class GameBotGUI:
                             skip_manual = ps.get("skip_manual", True)
                             retry_count = ps.get("retry_count", 3)
                             loop_count = 0
+                            fast_rounds = 0
+                            cycle_ok = True
                             while not self.stop_event.is_set():
                                 loop_count += 1
+                                round_start = time.time()
                                 self.log(f"循环推图 第 {loop_count} 轮 - 幻灵推图开始")
                                 try:
-                                    flow_push.main(skip_manual=skip_manual, retry_count=retry_count)
+                                    huanling_result = flow_push.main(skip_manual=skip_manual, retry_count=retry_count)
+                                    if huanling_result is False:
+                                        self.log("幻灵推图流程失败，停止循环推图。")
+                                        cycle_ok = False
+                                        break
                                 except Exception as e:
                                     self.log(f"幻灵推图出错: {str(e)}")
+                                    self.log("检测到推图模块异常，停止循环推图，避免高速空转。")
+                                    cycle_ok = False
+                                    break
                                 
                                 if self.stop_event.is_set():
                                     break
                                 
                                 self.log(f"循环推图 第 {loop_count} 轮 - 推图开始")
                                 try:
-                                    push.main(skip_manual=skip_manual, retry_count=retry_count)
+                                    push_result = push.main(skip_manual=skip_manual, retry_count=retry_count)
+                                    if push_result is False:
+                                        self.log("推图流程失败，停止循环推图。")
+                                        cycle_ok = False
+                                        break
                                 except Exception as e:
                                     self.log(f"推图出错: {str(e)}")
+                                    self.log("检测到推图模块异常，停止循环推图，避免高速空转。")
+                                    cycle_ok = False
+                                    break
                                 
                                 if self.stop_event.is_set():
                                     break
-                                
+
+                                round_cost = time.time() - round_start
+                                # 一轮正常推图至少包含一次战斗，通常需要几十秒以上；
+                                # 30 秒内就结束的轮次视为异常（快速失败/空转）。
+                                if round_cost < 30:
+                                    fast_rounds += 1
+                                    self.log(f"本轮耗时 {round_cost:.1f} 秒，异常快速结束（连续 {fast_rounds} 轮）")
+                                else:
+                                    fast_rounds = 0
+
+                                if fast_rounds >= 3:
+                                    self.log("循环推图连续 3 轮在 30 秒内异常结束，判定流程异常，停止循环推图。")
+                                    break
+
                                 self.log(f"循环推图 第 {loop_count} 轮完成，继续下一轮...")
                                 time.sleep(2)
-                            result = True
+                            result = cycle_ok
                         except ImportError as e:
                             self.log(f"循环推图模块导入失败: {str(e)}")
                             script.status = "错误"

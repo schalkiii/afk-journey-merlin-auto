@@ -1,4 +1,4 @@
-from common import wait_and_click, find_center, screenshot_bgr, send_coord, get_template_path
+from common import wait_and_click, find_center, screenshot_bgr, send_coord, get_template_path, load_template
 from jiance import check_and_handle_libao
 import cv2
 import time
@@ -10,7 +10,7 @@ def random_sleep():
 
 # 静默版本的 find_center，不输出匹配得分
 def find_center_silent(template_path, threshold=0.8):
-    template = cv2.imread(template_path, cv2.IMREAD_COLOR)
+    template = load_template(template_path)
     if template is None:
         raise ValueError(f"模板读取失败: {template_path}")
     h, w = template.shape[:2]

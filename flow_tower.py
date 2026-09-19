@@ -1,4 +1,4 @@
-from common import wait_and_click, find_center, screenshot_bgr, send_coord, get_template_path, get_work_path
+from common import wait_and_click, find_center, screenshot_bgr, send_coord, get_template_path, get_work_path, load_template
 from warehouse import (
     init_templates_from_dir,
     WAREHOUSE_TXT_PATH,
@@ -14,7 +14,7 @@ def random_sleep():
 
 # 静默版本的 find_center，不输出匹配得分
 def find_center_silent(template_path, threshold=0.8):
-    template = cv2.imread(template_path, cv2.IMREAD_COLOR)
+    template = load_template(template_path)
     if template is None:
         raise ValueError(f"模板读取失败: {template_path}")
     h, w = template.shape[:2]
@@ -33,7 +33,7 @@ def find_center_silent(template_path, threshold=0.8):
 
 # 检测手动战斗标志，返回得分和坐标
 def check_artificial_score(threshold=0.7):
-    template = cv2.imread(tpl_artificial, cv2.IMREAD_COLOR)
+    template = load_template(tpl_artificial)
     if template is None:
         raise ValueError(f"模板读取失败: {tpl_artificial}")
     h, w = template.shape[:2]
@@ -232,7 +232,7 @@ def _recognize_hero(card_roi):
         for tpl_path in tpl_list:
             if not os.path.exists(tpl_path):
                 continue
-            tpl = cv2.imread(tpl_path, cv2.IMREAD_COLOR)
+            tpl = load_template(tpl_path)
             if tpl is None:
                 continue
 

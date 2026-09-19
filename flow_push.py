@@ -11,5 +11,6 @@ def flow_push_mode1(skip_manual=True, retry_count=3):
 def main(skip_manual=True, retry_count=3):
     if DEBUG_MODE:
         debug_lineup_recognition()
+        return True
     else:
-        flow_push_mode1(skip_manual=skip_manual, retry_count=retry_count)
+        return flow_push_mode1(skip_manual=skip_manual, retry_count=retry_count)
