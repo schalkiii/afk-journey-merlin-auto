@@ -8,6 +8,7 @@ from common import (
     get_template_path,
     get_templates_dir,
     get_work_path,
+    load_template,
     screenshot_bgr,
     wait_and_click,
 )
@@ -269,7 +270,7 @@ def _match_template(img, template_path, threshold=0.8):
         print(f"模板不存在: {template_path}")
         return None
 
-    template = cv2.imread(template_path, cv2.IMREAD_COLOR)
+    template = load_template(template_path)
     if template is None:
         print(f"模板读取失败: {template_path}")
         return None
@@ -301,7 +302,7 @@ def _match_template_with_box(img, template_path, threshold=0.8):
         print(f"模板不存在: {template_path}")
         return None
 
-    template = cv2.imread(template_path, cv2.IMREAD_COLOR)
+    template = load_template(template_path)
     if template is None:
         print(f"模板读取失败: {template_path}")
         return None
@@ -454,7 +455,7 @@ def _match_best_hero(face_roi,
         for tpl_path in tpl_list:
             if not os.path.exists(tpl_path):
                 continue
-            tpl = cv2.imread(tpl_path, cv2.IMREAD_COLOR)
+            tpl = load_template(tpl_path)
             if tpl is None:
                 continue
             max_val = _best_multiscale_match_score(face_roi, tpl, scale_min, scale_max, scale_step)

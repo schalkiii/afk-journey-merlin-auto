@@ -15,6 +15,7 @@ from common import (
     find_center_silent,
     get_template_path,
     get_work_path,
+    load_template,
     is_lineup_acceptable as _is_lineup_acceptable_impl,
     screenshot_bgr,
     send_coord,
@@ -32,7 +33,7 @@ def random_sleep():
 
 # 检测手动战斗标志，返回得分和坐标
 def check_artificial_score(threshold=0.7):
-    template = cv2.imread(tpl_artificial, cv2.IMREAD_COLOR)
+    template = load_template(tpl_artificial)
     if template is None:
         raise ValueError(f"模板读取失败: {tpl_artificial}")
     h, w = template.shape[:2]

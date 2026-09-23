@@ -1,10 +1,5 @@
-import os
-import time
-
-import cv2
-
-from common import find_center_silent as _common_find_center_silent
 from common import (
+    find_center_silent,
     get_template_path,
     get_work_path,
     is_lineup_acceptable as _is_lineup_acceptable_impl,
@@ -13,14 +8,12 @@ from common import (
 )
 from warehouse import (
     WAREHOUSE_TXT_PATH,
+    _match_best_hero,
     init_templates_from_dir,
 )
-
-
-# 委托 common.find_center_silent：保留 push 内部「最多轮询等待 3s」的语义，
-# 避免与 common 重复实现导致逻辑分叉（统一支持 region / 缓存截图 / F9 停止）。
-def find_center_silent(template_path, threshold=0.7):
-    return _common_find_center_silent(template_path, threshold=threshold, timeout=3.0)
+import cv2
+import os
+import time
 
 # === 模板路径，对应你的文件名 ===
 tpl_advance       = get_template_path("guajiguanqia.png")
@@ -46,6 +39,7 @@ tpl_guajijixian   = get_template_path("guajijixian.png")
 tpl_querengoumaimenpiao = get_template_path("querengoumaimenpiao.png")
 
 tpl_huidaoguaji   = get_template_path("huidaoguaji.png")
+tpl_tuichulibao   = get_template_path("tuichulibao.png")
 
 # 推图模式配置：不同模式使用不同的入口模板
 MODE_CONFIG = {
@@ -94,13 +88,13 @@ LINEUP_FIRST_OFFSET_Y = 200
 
 # 调试用整体偏移（像素）：正数表示向右/向下移动
 # 参考：如果你想"向下 1 个框高"，就填 LINEUP_CARD_HEIGHT；"向右 1.3 个框宽"，就填 round(1.3 * LINEUP_CARD_WIDTH)
-LINEUP_SHIFT_X_PX = round(1.6 * LINEUP_CARD_WIDTH)
-LINEUP_SHIFT_Y_PX = round(0.75 * LINEUP_CARD_HEIGHT)
+LINEUP_SHIFT_X_PX = int(round(1.6 * LINEUP_CARD_WIDTH))
+LINEUP_SHIFT_Y_PX = int(round(0.75 * LINEUP_CARD_HEIGHT))
 
 # 第二套布局：整体在 X 方向再额外平移的比例/像素
 # 默认向左平移半个头像宽度，你可以调下面这两个变量：
 LINEUP_SECOND_LAYOUT_SHIFT_X_FACTOR = -0.5
-LINEUP_SECOND_LAYOUT_SHIFT_X_PX = round(LINEUP_SECOND_LAYOUT_SHIFT_X_FACTOR * LINEUP_CARD_WIDTH)
+LINEUP_SECOND_LAYOUT_SHIFT_X_PX = int(round(LINEUP_SECOND_LAYOUT_SHIFT_X_FACTOR * LINEUP_CARD_WIDTH))
 
 # 阵容界面头像明显比仓库里小，为了匹配稳定，
 # 这里专门为阵容识别准备一套"更偏向缩小"的多尺度列表。
@@ -162,9 +156,6 @@ def has_fancy_border_lineup(
     return edge_count
 
 
-from warehouse import _match_best_hero  # 统一的多尺度英雄匹配循环
-
-
 def _recognize_hero(card_roi):
     """
     识别卡片中的英雄 ID（阵容识别入口）。
@@ -201,58 +192,6 @@ def _recognize_hero(card_roi):
     return None
 
 
-def wait_for_appearance(template_path, name, threshold=0.8, timeout=MAX_BATTLE_TIME, interval=0.5):
-    """循环等待某张图出现，出现返回坐标，超时返回 None。"""
-    start = time.time()
-    attempt = 0
-    while True:
-        attempt += 1
-        pos = find_center_silent(template_path, threshold)
-        if pos:
-            if PRINT_WAIT_TIMEOUT:
-                print(f"{name} 出现，第 {attempt} 次检测，坐标: {pos}")
-            return pos
-
-        elapsed = time.time() - start
-        if elapsed > timeout:
-            if PRINT_WAIT_TIMEOUT:
-                print(f"{name} 在 {timeout} 秒内未出现，放弃等待。")
-            return None
-
-        if PRINT_WAIT_TIMEOUT:
-            print(f"{name} 第 {attempt} 次未出现，{interval} 秒后重试（已等待 {elapsed:.1f} 秒）...")
-        time.sleep(interval)
-
-
-def wait_for_any(templates, threshold=0.8, timeout=MAX_BATTLE_TIME, interval=0.5):
-    """
-    循环等待多张图中的任意一张出现。
-
-    templates: List[Tuple[template_path, name]]
-    返回：
-        - (template_path, name, pos) 命中
-        - None 超时
-    """
-    start = time.time()
-    attempt = 0
-    while True:
-        attempt += 1
-        for template_path, name in templates:
-            pos = find_center_silent(template_path, threshold)
-            if pos:
-                if PRINT_WAIT_TIMEOUT:
-                    print(f"{name} 出现，第 {attempt} 次检测，坐标: {pos}")
-                return template_path, name, pos
-
-        elapsed = time.time() - start
-        if elapsed > timeout:
-            if PRINT_WAIT_TIMEOUT:
-                names = " / ".join([n for _, n in templates])
-                print(f"{names} 在 {timeout} 秒内未出现，放弃等待。")
-            return None
-
-        time.sleep(interval)
-
 
 def _load_warehouse_levels():
     """
@@ -283,7 +222,7 @@ def _capture_lineup_slots(debug_label="lineup", extra_shift_x_px: int = 0):
     - 如果 DEBUG_MODE 为 True，同时输出一张画有绿框的调试大图到 DEBUG_DIR。
     """
     img = screenshot_bgr()
-    pos_btn = find_center_silent(tpl_oneclick, threshold=0.8)
+    pos_btn = find_center_silent(tpl_oneclick, threshold=0.8, timeout=3.0)  # 原 push 内 find_center_silent 默认轮询 3s，显式保留
     if not pos_btn:
         print("未找到一键采用按钮，无法估算阵容 5 个头像位置。")
         return []
@@ -294,15 +233,19 @@ def _capture_lineup_slots(debug_label="lineup", extra_shift_x_px: int = 0):
     # 估算第一张头像左上角
     x0 = max(
         0,
-        round(
+        int(
+            round(
                 (btn_x - LINEUP_FIRST_OFFSET_X) + LINEUP_SHIFT_X_PX
-            ),
+            )
+        ),
     ) + extra_shift_x_px
     y0 = max(
         0,
-        round(
+        int(
+            round(
                 (btn_y - LINEUP_FIRST_OFFSET_Y) + LINEUP_SHIFT_Y_PX
-            ),
+            )
+        ),
     )
 
     slots = []
@@ -431,6 +374,7 @@ def _is_lineup_acceptable(hero_levels, lineup_heroes):
     return _is_lineup_acceptable_impl(hero_levels, lineup_heroes, LEVEL_SCORE, SPECIAL_HERO_SET)
 
 
+
 def debug_lineup_recognition():
     """
     调试函数（仅阵容识别，不参与推图流程）：
@@ -469,292 +413,438 @@ def debug_lineup_recognition():
     print("如需查看框位置，请打开 debug 目录中的 lineup_debug_layout*_*.png 截图。")
 
 
-def select_lineup(start_index: int, skip_manual: bool = True):
-    """
-    在"通关阵容界面"里，从编号 start_index 开始往后找可用阵容。
+# ===== 推图状态机 =====
+# 把原来"一个大 while + 多个标志位"的推图流程改成显式状态机：
+# - 每个状态只做一件事，结束后显式返回下一个状态；
+# - 所有内部循环都有上限（阵容扫描套数、状态切换次数、战斗等待时间），不会死循环；
+# - 每次切换都打印日志，出问题时能直接看出卡在哪个状态、哪一步。
 
-    skip_manual=True: 跳过含手动战斗标志 artificial(g) 的阵容
-    skip_manual=False: 不检测手动标志，仅判断练度
-    """
-    # 1. 先把光标移到 start_index 对应的阵容（跳过之前用过的）
-    current_index = 0
-    if start_index > 0:
-        print(f"进入阵容界面，先向右点击 {start_index} 次，跳过已经用过的阵容。")
-    else:
-        print("进入阵容界面，先向右点击 0 次，跳过已经用过的阵容。")
+STATE_ENTER = "enter"                    # 进入推图玩法
+STATE_LIMIT = "limit"                    # 处理挂机极限/购买门票弹窗
+STATE_NEED_ENTRY = "need_entry"          # 重新点模式入口（end(k) 后）
+STATE_START_BATTLE = "start_battle"      # 点击自动挑战
+STATE_MONITOR_BATTLE = "monitor_battle"  # 监控战斗结果
+STATE_ON_END = "on_end"                  # 处理 end(k)
+STATE_ON_FAIL = "on_fail"                # 处理 fail(d)
+STATE_LINEUP_OPEN = "lineup_open"        # 打开通关阵容界面
+STATE_LINEUP_SELECT = "lineup_select"    # 在阵容界面挑选
+STATE_EXIT = "exit"                      # 退出推图
+STATE_DONE = "done"                      # 流程结束
 
-    while current_index < start_index:
-        if not wait_and_click(tpl_right, f"right(h) 跳过阵容 {current_index}", 0.8):
-            # 还没跳够 start_index 次就已经点不到 right 了，说明本来阵容数就没那么多
-            print("阵容数量不足以跳到指定起点，采用当前可见阵容并视为无更多阵容。")
-            if not wait_and_click(tpl_oneclick, "oneclick(i_at_end)", 0.8):
-                return None
-            return None
-        current_index += 1
-        time.sleep(0.5)
+# 单次进入阵容界面最多检查的阵容套数（防止阵容列表无限循环滚动导致死循环）
+MAX_LINEUP_SCAN = 30
 
-    # 2. 从 current_index（>= start_index）开始往后找可用阵容
-    while True:
-        if skip_manual:
-            print(f"检查阵容编号 {current_index} 是否含有手动战斗标志 g。")
-            pos_g = find_center_silent(tpl_artificial, threshold=0.8)
+# 整个推图流程最多允许的状态切换次数（安全阀）
+MAX_TRANSITIONS = 500
+
+
+class PushFlow:
+    """推图流程状态机。run() 返回 True=正常结束（战斗超时无法判断），False=流程结束。"""
+
+    def __init__(self, mode="normal", skip_manual=True, retry_count=3):
+        self.mode = mode
+        self.entry_templates = MODE_CONFIG[mode]["entry_templates"]
+        self.mode_label = "幻灵推图" if mode == "huanling" else "推图"
+        self.skip_manual = skip_manual
+        self.retry_count = retry_count
+
+        self.state = STATE_ENTER
+        self.transitions = 0
+        self.finished_ok = False
+
+        # 推图进度数据
+        self.have_lineup = False
+        self.lineup_index = -1
+        self.lineup_fail = 0
+        self.lineup_start = 0
+
+        self._handlers = {
+            STATE_ENTER: self._st_enter,
+            STATE_LIMIT: self._st_limit,
+            STATE_NEED_ENTRY: self._st_need_entry,
+            STATE_START_BATTLE: self._st_start_battle,
+            STATE_MONITOR_BATTLE: self._st_monitor_battle,
+            STATE_ON_END: self._st_on_end,
+            STATE_ON_FAIL: self._st_on_fail,
+            STATE_LINEUP_OPEN: self._st_lineup_open,
+            STATE_LINEUP_SELECT: self._st_lineup_select,
+            STATE_EXIT: self._st_exit,
+        }
+
+    def _done(self, ok):
+        """标记最终结果并进入结束状态。"""
+        self.finished_ok = ok
+        return STATE_DONE
+
+    def run(self):
+        print(f"===== {self.mode_label} 状态机开始 =====")
+        while self.state != STATE_DONE:
+            if self.transitions >= MAX_TRANSITIONS:
+                print(f"状态切换超过 {MAX_TRANSITIONS} 次，触发安全阀，结束流程。")
+                self.finished_ok = False
+                break
+
+            handler = self._handlers.get(self.state)
+            if handler is None:
+                print(f"未知状态 {self.state}，结束流程。")
+                self.finished_ok = False
+                break
+
+            prev_state = self.state
+            next_state = handler()
+            if next_state is None:
+                print(f"状态 {prev_state} 未返回下一状态，结束流程。")
+                self.finished_ok = False
+                break
+
+            self.state = next_state
+            self.transitions += 1
+            print(f"[状态机] {prev_state} -> {next_state}")
+
+        print(f"===== {self.mode_label} 状态机结束（正常退出={self.finished_ok}）=====")
+        return self.finished_ok
+
+    # ---------- 各状态处理 ----------
+
+    def _wait_for_any_state(self, candidates, timeout=10.0, interval=0.25, allow_gift_recovery=True):
+        """等待目标状态模板出现，返回命中的模板路径；超时返回 None。"""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            for template_path, threshold in candidates:
+                if find_center_silent(template_path, threshold=threshold, timeout=0.25):
+                    return template_path
+            time.sleep(interval)
+
+        # 目标状态完全没有出现时，可能被礼包界面遮挡；只在超时恢复路径处理。
+        if allow_gift_recovery and find_center_silent(tpl_tuichulibao, threshold=0.8, timeout=0.5):
+            print("未识别到目标状态，检测到礼包界面，尝试点击 tuichulibao...")
+            if wait_and_click(tpl_tuichulibao, "tuichulibao", 0.8, timeout=3.0):
+                time.sleep(0.5)
+                return self._wait_for_any_state(
+                    candidates,
+                    timeout=min(timeout, 5.0),
+                    interval=interval,
+                    allow_gift_recovery=False,
+                )
+        return None
+
+    def _wait_for_entry(self, timeout=10.0):
+        """等待当前模式入口出现；普通推图允许两个入口模板。"""
+        return self._wait_for_any_state(
+            [(get_template_path(name), 0.8) for name in self.entry_templates],
+            timeout=timeout,
+        )
+
+    def _wait_after_action(self, candidates, action_name, timeout=10.0):
+        """动作发送后必须看到目标模板，确认界面真的切换。"""
+        hit = self._wait_for_any_state(candidates, timeout=timeout)
+        if hit:
+            print(f"{action_name} 后确认目标状态: {os.path.basename(hit)}")
         else:
-            pos_g = None
+            print(f"{action_name} 后未确认目标状态。")
+        return hit
 
-        if not pos_g:
-            # 没有 g，继续做练度匹配判断
-            hero_levels = _load_warehouse_levels()
-            lineup_heroes, _debug_path = _recognize_lineup_with_levels()
-            if _is_lineup_acceptable(hero_levels, lineup_heroes):
-                if not wait_and_click(tpl_oneclick, f"oneclick(i) 采用阵容 {current_index}", 0.8):
-                    return None
-                
-                # 点击一键采用后，等待一段时间检测是否出现 not owned.png
-                time.sleep(1.0)
-                pos_not_owned = find_center_silent(tpl_not_owned, threshold=0.8)
-                
-                if pos_not_owned:
-                    # 检测到 not owned.png，说明该阵容不可用，点击取消并继续检查下一个阵容
-                    print(f"阵容 {current_index} 检测到未拥有标志，点击取消并跳过。")
-                    if not wait_and_click(tpl_quxiao, "quxiao(m) 取消当前阵容", 0.8):
-                        print("点击取消失败，跳过当前阵容。")
-                    # 等待返回阵容选择界面
-                    time.sleep(1.0)
-                    # 继续检查下一个阵容
-                    print(f"阵容 {current_index} 不可用，尝试切到下一套。")
-                    if not wait_and_click(tpl_right, f"right(h) 从阵容 {current_index} 切到下一套", 0.8):
-                        # 点不到 right 说明已经是最后一套
-                        print("已经是最后一套阵容，且检测到未拥有标志，仍然采用当前阵容后返回 None。")
-                        if not wait_and_click(tpl_oneclick, "oneclick(i_last)", 0.8):
-                            return None
-                        return None
-                    current_index += 1
-                    time.sleep(0.5)
-                    continue  # 继续检查下一个阵容
-                
-                # 没有检测到 not owned.png，正常采用该阵容
-                print(f"采用当前阵容，编号为 {current_index}。")
-                return current_index
+    def _st_enter(self):
+        """进入推图玩法：wanfamulu -> advance -> 模式入口。"""
+        if not wait_and_click(tpl_wanfamulu, "wanfamulu", 0.7):
+            print("点击 wanfamulu 进入玩法目录失败。")
+            return self._done(False)
+        if not self._wait_after_action(
+            [(tpl_advance, 0.8)], "wanfamulu", timeout=8.0
+        ):
+            return self._done(False)
+        if not wait_and_click(tpl_advance, "advance(a)", 0.8):
+            print("点击 advance(a) 进入推图失败。")
+            return self._done(False)
 
-            print(f"阵容 {current_index} 练度不足，尝试切到下一套。")
-            # 练度不满足，视作"不可用"，继续下面像含 g 一样处理
+        print(f"等待 {self.mode_label} 入口...")
+        entry_path = self._wait_for_entry(timeout=10.0)
+        if not entry_path:
+            names = " / ".join(self.entry_templates)
+            print(f"未检测到 {names}，点击 exit 退出")
+            wait_and_click(tpl_exit, "exit(j)", 0.8)
+            return self._done(False)
 
-        # 有 g：尝试切到下一套阵容
-        print(f"阵容 {current_index} 含 g 或练度不满足，尝试点击 right(h) 切到下一套。")
-        if not wait_and_click(tpl_right, f"right(h) 从阵容 {current_index} 切到下一套", 0.8):
-            # 点不到 right 说明已经是最后一套
-            print("已经是最后一套阵容，且含 g，仍然采用当前阵容后返回 None。")
-            if not wait_and_click(tpl_oneclick, "oneclick(i_last)", 0.8):
-                return None
-            return None
+        if not wait_and_click(entry_path, os.path.basename(entry_path), 0.8):
+            return self._done(False)
+        next_path = self._wait_after_action(
+            [(tpl_guajijixian, 0.7), (tpl_autocha, 0.8)],
+            f"{os.path.basename(entry_path)}",
+            timeout=10.0,
+        )
+        if not next_path:
+            return self._done(False)
 
-        current_index += 1
-        time.sleep(0.5)
+        print(f"进入 {self.mode_label} 成功")
+        return STATE_LIMIT if next_path == tpl_guajijixian else STATE_START_BATTLE
 
+    def _st_limit(self):
+        """检查挂机极限弹窗，出现则点击购买门票确认。"""
+        if find_center_silent(tpl_guajijixian, threshold=0.7, timeout=0.5):
+            print("检测到 guajijixian，点击 querengoumaimenpiao...")
+            if not wait_and_click(tpl_querengoumaimenpiao, "querengoumaimenpiao", 0.7):
+                return self._done(False)
+            if not self._wait_after_action(
+                [(tpl_autocha, 0.8)], "querengoumaimenpiao", timeout=10.0
+            ):
+                return self._done(False)
+        elif not find_center_silent(tpl_autocha, threshold=0.8, timeout=0.5):
+            print("limit 状态既没有弹窗也没有 autocha，无法确认界面。")
+            return self._done(False)
+        return STATE_START_BATTLE
 
-def _try_detect_and_click_entry(entry_templates, timeout=3):
-    """检测入口模板列表中的任意一个，检测到后点击。返回 True 表示成功。"""
-    start_time = time.time()
-    while time.time() - start_time < timeout:
-        for tpl_name in entry_templates:
-            tpl_path = get_template_path(tpl_name)
-            if find_center_silent(tpl_path, threshold=0.8):
-                print(f"检测到 {tpl_name}，点击进入")
-                if not wait_and_click(tpl_path, tpl_name, 0.8):
-                    print(f"点击 {tpl_name} 失败")
-                    return False
-                return True
-        time.sleep(0.5)
-    return False
+    def _st_need_entry(self):
+        """end(k) 后回到玩法界面，需要重新点击模式入口。"""
+        entry_path = self._wait_for_entry(timeout=10.0)
+        if not entry_path:
+            names = " / ".join(self.entry_templates)
+            print(f"未检测到 {names}，退出推图")
+            return self._done(False)
+        if not wait_and_click(entry_path, os.path.basename(entry_path), 0.8):
+            return self._done(False)
+        next_path = self._wait_after_action(
+            [(tpl_guajijixian, 0.7), (tpl_autocha, 0.8)],
+            f"{os.path.basename(entry_path)}",
+            timeout=10.0,
+        )
+        if not next_path:
+            return self._done(False)
+        return STATE_LIMIT if next_path == tpl_guajijixian else STATE_START_BATTLE
+
+    def _st_start_battle(self):
+        if not wait_and_click(tpl_autocha, "autocha(c)", 0.8):
+            print("未找到 autocha(c)，推图流程结束。")
+            return self._done(False)
+        next_path = self._wait_after_action(
+            [(tpl_fail, 0.8), (tpl_end, 0.8), (tpl_zidongtiaozhanzhong, 0.8)],
+            "autocha(c)",
+            timeout=12.0,
+        )
+        if next_path == tpl_fail:
+            return STATE_ON_FAIL
+        if next_path == tpl_end:
+            return STATE_ON_END
+        if next_path == tpl_zidongtiaozhanzhong:
+            return STATE_MONITOR_BATTLE
+        return self._done(False)
+
+    def _st_monitor_battle(self):
+        """
+        监控战斗结果：
+        - fail(d)：当前关卡失败；
+        - end(k)：通过若干关卡后失败；
+        - 只要定期看到 zidongtiaozhanzhong，就认为还在正常推图；
+        - 超过 5 秒没看到时尝试处理误触弹窗（huidaoguaji）；
+        - 3 分钟都没有任何标志时判定"无法判断"，结束流程。
+        """
+        last_seen_zidong = time.time()
+        while True:
+            # 结果模板优先于战斗中模板，避免结果页被误判为仍在战斗。
+            if find_center_silent(tpl_fail, threshold=0.8, timeout=0.25):
+                return STATE_ON_FAIL
+            if find_center_silent(tpl_end, threshold=0.8, timeout=0.25):
+                return STATE_ON_END
+            if find_center_silent(tpl_zidongtiaozhanzhong, threshold=0.8, timeout=0.25):
+                last_seen_zidong = time.time()
+                time.sleep(0.25)
+                continue
+
+            now = time.time()
+            if (now - last_seen_zidong) > 5:
+                if find_center_silent(tpl_tuichulibao, threshold=0.8, timeout=0.5):
+                    print("战斗状态丢失且检测到礼包界面，尝试点击 tuichulibao...")
+                    if wait_and_click(tpl_tuichulibao, "tuichulibao", 0.8, timeout=3.0):
+                        last_seen_zidong = time.time()
+                        continue
+                print("超过 5 秒未检测到 zidongtiaozhanzhong，尝试识别 huidaoguaji...")
+                # 只等 1 秒识别 huidaoguaji，因为 5 秒未检测到 zidongtiaozhanzhong 本身就是在给 huidaoguaji 留加载时间
+                if wait_and_click(tpl_huidaoguaji, "huidaoguaji", 0.8, timeout=1.0):
+                    print("点击 huidaoguaji 成功，重新确认战斗状态...")
+                    last_seen_zidong = time.time()
+                    continue
+
+            if (now - last_seen_zidong) > 180:
+                print(
+                    "超过 3 分钟未检测到自动挑战中、失败或结束模板，"
+                    "无法确认战斗状态，按失败处理。"
+                )
+                return self._done(False)
+            time.sleep(0.25)
+
+    def _st_on_end(self):
+        """end(k)：通过一段关卡后失败，重置阵容状态并重新进入模式。"""
+        self.lineup_fail = 0
+        self.lineup_index = -1
+        self.have_lineup = False
+        print("检测到 end(k)：重置当前阵容连续失败次数、阵容编号，并重新进入模式1。")
+        if not wait_and_click(tpl_end, "end(k)_click", 0.8):
+            print("点击 end(k) 失败，退出推图。")
+            return self._done(False)
+        if not self._wait_for_entry(timeout=10.0):
+            print("点击 end(k) 后未确认返回模式入口。")
+            return self._done(False)
+        return STATE_NEED_ENTRY
+
+    def _st_on_fail(self):
+        """fail(d)：点击 repeat 回到推图界面，然后决定阵容策略。"""
+        if not wait_and_click(tpl_repeat, "repeat(e)", 0.8):
+            print("点击 repeat(e) 失败，退出推图。")
+            return self._done(False)
+
+        post_repeat = self._wait_for_any_state(
+            [
+                (tpl_autocha, 0.8),
+                (tpl_oneclick, 0.8),
+                (tpl_right, 0.8),
+                (tpl_artificial, 0.8),
+                (tpl_lineup, 0.8),
+            ],
+            timeout=10.0,
+        )
+        if not post_repeat:
+            print("点击 repeat(e) 后未确认返回推图或阵容界面。")
+            return self._done(False)
+        if post_repeat == tpl_autocha:
+            return STATE_START_BATTLE
+
+        if not self.have_lineup:
+            # 第一次失败：进入阵容界面，从 0 开始选
+            self.lineup_start = 0
+            return STATE_LINEUP_OPEN
+
+        self.lineup_fail += 1
+        print(f"当前阵容 {self.lineup_index} 连续失败次数: {self.lineup_fail}")
+        if self.lineup_fail < self.retry_count:
+            # 还没到重试上限，继续用当前阵容
+            return STATE_START_BATTLE
+
+        # 同一阵容失败达到上限：从下一套开始找
+        self.lineup_start = self.lineup_index + 1
+        return STATE_LINEUP_OPEN
+
+    def _st_lineup_open(self):
+        # repeat 后可能已经在阵容界面；只有仍看到 lineup 按钮时才点击。
+        if find_center_silent(tpl_oneclick, threshold=0.8, timeout=0.5) or find_center_silent(tpl_right, threshold=0.8, timeout=0.5):
+            return STATE_LINEUP_SELECT
+        if not wait_and_click(tpl_lineup, "lineup(f)", 0.8):
+            print("点击 lineup(f) 进入通关阵容界面失败。")
+            return self._done(False)
+        if not self._wait_after_action(
+            [(tpl_oneclick, 0.8), (tpl_right, 0.8), (tpl_artificial, 0.8)],
+            "lineup(f)",
+            timeout=10.0,
+        ):
+            return self._done(False)
+        return STATE_LINEUP_SELECT
+
+    def _st_lineup_select(self):
+        """在阵容界面从 self.lineup_start 开始往后找可用阵容。"""
+        current = 0
+        if self.lineup_start > 0:
+            print(f"进入阵容界面，先向右点击 {self.lineup_start} 次，跳过已经用过的阵容。")
+        else:
+            print("进入阵容界面，先向右点击 0 次，跳过已经用过的阵容。")
+
+        while current < self.lineup_start:
+            if not wait_and_click(tpl_right, f"right(h) 跳过阵容 {current}", 0.8):
+                # 还没跳够 start_index 次就已经点不到 right，说明本来阵容数就没那么多
+                print("阵容数量不足以跳到指定起点，采用当前可见阵容并视为无更多阵容。")
+                wait_and_click(tpl_oneclick, "oneclick(i_at_end)", 0.8)
+                return STATE_EXIT
+            current += 1
+            time.sleep(0.5)
+
+        scans = 0
+        while scans < MAX_LINEUP_SCAN:
+            scans += 1
+            if self.skip_manual:
+                print(f"检查阵容编号 {current} 是否含有手动战斗标志 g。")
+                pos_g = find_center_silent(tpl_artificial, threshold=0.8, timeout=3.0)  # 原 push 内 find_center_silent 默认轮询 3s，显式保留
+            else:
+                pos_g = None
+
+            if not pos_g:
+                hero_levels = _load_warehouse_levels()
+                lineup_heroes, _debug_path = _recognize_lineup_with_levels()
+                if _is_lineup_acceptable(hero_levels, lineup_heroes):
+                    if not wait_and_click(tpl_oneclick, f"oneclick(i) 采用阵容 {current}", 0.8):
+                        return STATE_EXIT
+
+                    # 点击一键采用后，必须确认进入推图界面或出现未拥有提示。
+                    post_adopt = self._wait_for_any_state(
+                        [(tpl_not_owned, 0.8), (tpl_autocha, 0.8)],
+                        timeout=10.0,
+                    )
+                    if post_adopt == tpl_not_owned:
+                        print(f"阵容 {current} 检测到未拥有标志，点击取消并跳过。")
+                        if not wait_and_click(tpl_quxiao, "quxiao(m) 取消当前阵容", 0.8):
+                            print("点击取消失败，跳过当前阵容。")
+                        time.sleep(1.0)
+                        print(f"阵容 {current} 不可用，尝试切到下一套。")
+                        if not wait_and_click(tpl_right, f"right(h) 从阵容 {current} 切到下一套", 0.8):
+                            # 点不到 right 说明已经是最后一套
+                            print("已经是最后一套阵容，且检测到未拥有标志，仍然采用当前阵容后结束。")
+                            wait_and_click(tpl_oneclick, "oneclick(i_last)", 0.8)
+                            return STATE_EXIT
+                        current += 1
+                        time.sleep(0.5)
+                        continue
+
+                    if post_adopt != tpl_autocha:
+                        print("点击 oneclick 后未确认进入推图界面。")
+                        return self._done(False)
+
+                    # 没有检测到 not owned.png，正常采用该阵容
+                    print(f"采用当前阵容，编号为 {current}。")
+                    self.have_lineup = True
+                    self.lineup_index = current
+                    self.lineup_fail = 0
+                    return STATE_START_BATTLE
+
+                print(f"阵容 {current} 练度不足，尝试切到下一套。")
+
+            print(f"阵容 {current} 含 g 或练度不满足，尝试点击 right(h) 切到下一套。")
+            if not wait_and_click(tpl_right, f"right(h) 从阵容 {current} 切到下一套", 0.8):
+                # 点不到 right 说明已经是最后一套
+                print("已经是最后一套阵容，且含 g，仍然采用当前阵容后结束。")
+                wait_and_click(tpl_oneclick, "oneclick(i_last)", 0.8)
+                return STATE_EXIT
+
+            current += 1
+            time.sleep(0.5)
+
+        print(f"已连续检查 {MAX_LINEUP_SCAN} 套阵容仍未找到可用阵容，安全退出。")
+        return STATE_EXIT
+
+    def _st_exit(self):
+        """阵容用尽或流程结束：点击 exit 退出推图。"""
+        print("没有更多可选阵容，退出推图。")
+        wait_and_click(tpl_exit, "exit(j)", 0.8)
+        time.sleep(1.0)
+        wait_and_click(tpl_exit, "exit(j)", 0.8)
+        return self._done(False)
 
 
 def flow_push_mode1(mode="normal", skip_manual=True, retry_count=3):
     """
-    推图主流程。
+    推图主流程（状态机实现）。
 
     mode: "normal"（普通推图）或 "huanling"（幻灵推图）
     skip_manual: 是否跳过含手动战斗标志的阵容
     retry_count: 同一阵容连续失败多少次后换阵容（1-3）
     """
-    entry_templates = MODE_CONFIG[mode]["entry_templates"]
-    mode_label = "幻灵推图" if mode == "huanling" else "推图"
-
     init_templates_from_dir()
-
-    # 1. 点击 wanfamulu 进入玩法目录
-    if not wait_and_click(tpl_wanfamulu, "wanfamulu", 0.7, recover_threshold=20):
-        print("点击 wanfamulu 进入玩法目录失败。")
-        return False
-
-    # 2. 点击 advance(a) 进入推图玩法
-    if not wait_and_click(tpl_advance, "advance(a)", 0.8):
-        print("点击 advance(a) 进入推图失败。")
-        return False
-
-    # 3. 检测入口模板
-    print(f"等待 3 秒检查是否出现 {mode_label} 入口...")
-    if not _try_detect_and_click_entry(entry_templates, timeout=3):
-        names = " / ".join(entry_templates)
-        print(f"3 秒内未检测到 {names}，点击 exit 退出")
-        wait_and_click(tpl_exit, "exit(j)", 0.8)
-        return False
-
-    print(f"进入 {mode_label} 成功")
-
-    # 4. 检查是否出现 guajijixian
-    print("等待 3 秒检查是否出现 guajijixian...")
-    start_time = time.time()
-    guajijixian_found = False
-    
-    while time.time() - start_time < 3:
-        if find_center_silent(tpl_guajijixian, threshold=0.7):
-            print("检测到 guajijixian，点击 querengoumaimenpiao...")
-            if wait_and_click(tpl_querengoumaimenpiao, "querengoumaimenpiao", 0.7):
-                print("点击 querengoumaimenpiao 成功")
-                guajijixian_found = True
-            break
-        time.sleep(0.5)
-    
-    if guajijixian_found:
-        print("检测到 guajijixian，点击 querengoumaimenpiao 后点击 autocha")
-    else:
-        print("3 秒内未检测到 guajijixian，直接点击 autocha")
-
-    have_custom_lineup = False     # 是否已经从阵容界面选过阵容
-    current_lineup_index = -1      # 当前阵容编号（初始为 -1，表示还没选过）
-    current_lineup_fail = 0        # 当前阵容连续失败次数
-    need_reenter_mode1 = False     # 图 k 后会回到玩法界面，需要重新点 b 进入模式1
-
-    while True:
-        if need_reenter_mode1:
-            if not _try_detect_and_click_entry(entry_templates, timeout=5):
-                names = " / ".join(entry_templates)
-                print(f"5 秒内未检测到 {names}，退出推图")
-                return False
-            need_reenter_mode1 = False
-
-        # 3. 在推图界面点击 autocha(c) 自动挑战
-        if not wait_and_click(tpl_autocha, "autocha(c)", 0.8):
-            print("未找到 autocha(c)，推图流程结束。")
-            return False
-
-        # 4. 等待失败：
-        # - fail(d)：当前关卡直接失败（需要累计失败次数防止一直用同一阵容）
-        # - end(k)：通过若干关卡后失败（需要重置失败计数，且点击后会回到推图玩法界面）
-        # 同时监控自动挑战中标志 zidongtiaozhanzhong：只要定期看到它，就认为还在正常推图中，不做"无法判断"处理。
-        hit = None
-        # 只根据"距最近一次看到自动挑战中标志"的时间来判断是否超时：
-        # - 一旦识别到 zidongtiaozhanzhong.png，就重置 last_seen_zidong；
-        # - 如果连续超过 3 分钟都没再识别到它，且期间也没有失败标志，则认为无法判断当前状态。
-        last_seen_zidong = time.time()
-
-        while True:
-            hit = wait_for_any(
-                [(tpl_fail, "fail(d)"), (tpl_end, "end(k)")],
-                threshold=0.8,
-                timeout=1.0,  # 更小的步长轮询，以便更及时地检测 zidongtiaozhanzhong
-                interval=0.5,
-            )
-            if hit:
-                break
-
-            # 每轮失败检查之间，顺便看一下是否还能看到自动挑战中标志
-            pos_zidong = find_center_silent(tpl_zidongtiaozhanzhong, threshold=0.8)
-            if pos_zidong:
-                last_seen_zidong = time.time()
-
-            now = time.time()
-            # 检查是否超过 5 秒未检测到 zidongtiaozhanzhong，可能是误触导致弹窗
-            if (now - last_seen_zidong) > 5:
-                print("超过 5 秒未检测到 zidongtiaozhanzhong，可能出现误触弹窗，尝试识别 huidaoguaji...")
-                # 只等待 1 秒识别 huidaoguaji，因为 5 秒未检测到 zidongtiaozhanzhong 本身就是在给 huidaoguaji 留加载时间
-                if wait_and_click(tpl_huidaoguaji, "huidaoguaji", 0.8, timeout=1.0):
-                    print("点击 huidaoguaji 成功，重新开始 3 分钟计时...")
-                    last_seen_zidong = time.time()  # 重新开始 3 分钟计时
-
-            # 如果 3 分钟（180 秒）内一直没看到 zidongtiaozhanzhong，
-            # 且也没检测到失败标志，才认为"无法判断当前状态"，结束本次流程。
-            if (now - last_seen_zidong) > 180:
-                print(
-                    "超过 3 分钟未检测到自动挑战中标志 zidongtiaozhanzhong.png，"
-                    "且未检测到失败标志 fail(d)/end(k)，无法判断当前状态，结束本次推图流程。"
-                )
-                return True
-
-        hit_tpl, hit_name, _ = hit
-        if hit_tpl == tpl_end:
-            # 图 k：通过一段关卡后失败，不应计入"同一关连续失败"
-            current_lineup_fail = 0
-            current_lineup_index = -1  # 重置阵容编号
-            have_custom_lineup = False  # 标记为未选择阵容
-            print("检测到 end(k)：重置当前阵容连续失败次数、阵容编号，并重新进入模式1。")
-            if not wait_and_click(tpl_end, "end(k)_click", 0.8):
-                print("点击 end(k) 失败，退出推图。")
-                return False
-            need_reenter_mode1 = True
-            continue
-
-        # 5. 检测到失败图 d 后，点击 repeat(e) 回到推图界面
-        if not wait_and_click(tpl_repeat, "repeat(e)", 0.8):
-            print("点击 repeat(e) 失败，退出推图。")
-            return False
-
-        # 6. 阵容调整逻辑
-        if not have_custom_lineup:
-            # 第一次失败：先进入阵容界面，从 0 开始选一套"无 g 的阵容"
-            if not wait_and_click(tpl_lineup, "lineup(f_first)", 0.8):
-                print("点击 lineup(f) 进入通关阵容界面失败。")
-                return False
-
-            idx = select_lineup(start_index=0, skip_manual=skip_manual)
-            if idx is None:
-                # 阵容用尽或异常，退出推图
-                wait_and_click(tpl_exit, "exit(j)", 0.8)
-                time.sleep(1.0)
-                wait_and_click(tpl_exit, "exit(j)", 0.8)
-                return False
-
-            have_custom_lineup = True
-            current_lineup_index = idx
-            current_lineup_fail = 0
-            print(f"首次选定阵容编号 {current_lineup_index}，接下来用该阵容推图。")
-            continue  # 回到 while 顶部，再次 autocha
-        else:
-            # 已经有阵容在用：累加失败次数
-            current_lineup_fail += 1
-            print(f"当前阵容 {current_lineup_index} 连续失败次数: {current_lineup_fail}")
-
-            if current_lineup_fail < retry_count:
-                # 还没到重试上限，继续用当前阵容
-                continue
-
-            # 同一阵容失败达到上限：再进入阵容界面，从下一套开始找
-            if not wait_and_click(tpl_lineup, "lineup(f_again)", 0.8):
-                print("再次点击 lineup(f) 进入通关阵容界面失败。")
-                return False
-
-            next_start = current_lineup_index + 1
-            idx = select_lineup(start_index=next_start, skip_manual=skip_manual)
-            if idx is None:
-                # 已经没有新的阵容可选：采用后退出推图到最外层
-                print("没有更多可选阵容，退出推图。")
-                wait_and_click(tpl_exit, "exit(j)", 0.8)
-                time.sleep(1.0)
-                wait_and_click(tpl_exit, "exit(j)", 0.8)
-                return False
-
-            current_lineup_index = idx
-            current_lineup_fail = 0
-            print(f"切换到新阵容编号 {current_lineup_index}，失败计数清零。")
-            continue  # 回到 while 顶部，用新阵容继续 autocha
+    flow = PushFlow(mode=mode, skip_manual=skip_manual, retry_count=retry_count)
+    return flow.run()
 
 
 def main(skip_manual=True, retry_count=3):
     """主函数，供其他脚本调用"""
     if DEBUG_MODE:
         debug_lineup_recognition()
+        return True
     else:
-        flow_push_mode1(mode="normal", skip_manual=skip_manual, retry_count=retry_count)
+        return flow_push_mode1(mode="normal", skip_manual=skip_manual, retry_count=retry_count)
 
 if __name__ == "__main__":
     main()
