@@ -439,7 +439,7 @@ MAX_TRANSITIONS = 500
 
 
 class PushFlow:
-    """推图流程状态机。run() 返回 True=正常结束（战斗超时无法判断），False=流程结束。"""
+    """推图流程状态机。run() 返回 True=正常跑完（阵容用尽退出），False=中途失败或触发安全阀。"""
 
     def __init__(self, mode="normal", skip_manual=True, retry_count=3):
         self.mode = mode
@@ -822,7 +822,10 @@ class PushFlow:
         wait_and_click(tpl_exit, "exit(j)", 0.8)
         time.sleep(1.0)
         wait_and_click(tpl_exit, "exit(j)", 0.8)
-        return self._done(False)
+        # 唯一的正常完成出口：阵容用尽 = 本轮推图正常跑完。
+        # 上游 v1.4.6 在此也返回 False（run() 恒为 False），会让「推图」永远显示失败、
+        # 「循环推图」一轮即停，故本仓修正为 True；其余失败 / 安全阀路径仍为 False。
+        return self._done(True)
 
 
 def flow_push_mode1(mode="normal", skip_manual=True, retry_count=3):

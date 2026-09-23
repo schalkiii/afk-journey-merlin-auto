@@ -91,6 +91,23 @@
 - README「快速开始」补充推图 / 幻灵推图 / 循环推图 三者关系（源自 `run_scripts_thread` 运行分发代码）。
 - README「巨型主文件拆分」行数声明同步为「约 1443 行（经后续增强，当前约 1483 行）」，与 `Goldenhandmaidens.py` 现状一致。
 
+### 合并上游 v1.4.6（merge e4adc3d）
+- **push.py 重构为显式状态机**（上游）：11 个状态 + `MAX_LINEUP_SCAN=30` / `MAX_TRANSITIONS=500` 安全阀，
+  礼包遮挡自动恢复（tuichulibao）、战斗监控 5s 无 zidongtiaozhanzhong 触发 huidaoguaji 兜底、180s 无法判定按失败结束；
+  `flow_push_mode1` / `main` 返回 True/False。`SPECIAL_HERO_SET` 新增 `kululu`、`shizi`（拥有即可，不看练度）。
+- **模板缓存健壮性**（上游）：`_templates_marker` 升级 sha256 内容摘要；APPDATA 缓存改为 staging 旁路复制 → 校验 →
+  原子替换，残缺缓存不再被误用；新增 `load_template()`（读取失败自动修复缓存并重定位），`find_center` /
+  `find_center_silent` 与 warehouse / flow_tower / flow_migong 的模板读取统一走 `load_template`。
+- **循环推图防空转**（上游）：每轮记录耗时，连续 3 轮 <30s 异常结束自动停止；幻灵推图 / 推图返回 False 或抛异常
+  也立即停止；「推图」任务直接采用 `push.main` 返回值作为成败。
+- **本仓修正上游回归**：上游 `PushFlow.run()` 恒返回 False（`_done(True)` 从未被调用），会把「阵容用尽正常跑完」
+  误判为失败、令循环推图一轮即停——本仓将 `_st_exit`（唯一正常完成出口）改为返回 True，其余失败 / 安全阀仍为 False。
+- **合并策略**：push.py 以上游状态机为基底回植本仓三处去重（`find_center_silent`→common 且调用点显式
+  `timeout=3.0` 保留原轮询语义；`_recognize_hero`→`warehouse._match_best_hero`；`_is_lineup_acceptable`→common 注入常量），
+  删除上游新流程已无调用的 `wait_for_appearance` / `wait_for_any` / `_try_detect_and_click_entry` 死代码；
+  保留本仓增强版 `flow_enter.py` 与 `CLAUDE.md`（上游删除，本仓仍作 AI 规则文件）；version → v1.4.6；exe 已重建。
+- 验证：py_compile 全过、pytest 2 passed、ruff F/B/SIM/UP/C4 全绿。
+
 ## 重新打包 exe 与清理冗余
 - 用 PyInstaller 6.22.0 + `goldenhandmaidens.spec` 重新打包，根目录 `goldenhandmaidens.exe` 已更新
   （含本轮全部源码改动：日志队列节流、`find_center_silent` 统一、任务字典分发、停止检查加固等）。
