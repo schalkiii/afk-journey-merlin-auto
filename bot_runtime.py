@@ -11,6 +11,7 @@ import os
 import shlex
 import subprocess
 import sys
+import threading
 from ctypes import wintypes
 
 from common import get_work_path
@@ -29,6 +30,8 @@ class _StdoutTee:
         if s and s.strip():
             with contextlib.suppress(Exception):
                 self._sink(s.rstrip("\n"))
+        # 同时持久化到本地日志文件（统一经 append_log_file 加锁写入）
+        append_log_file(s)
 
     def flush(self):
         with contextlib.suppress(Exception):
@@ -43,6 +46,68 @@ def _early_stdout_sink(msg):
 
 
 CONFIG_FILE = get_work_path("game_bot_config.json")
+
+# 本地持久化日志文件：GUI 运行日志与控制台输出都会写入此文件，便于查看与反馈问题
+LOG_FILE = get_work_path("game_bot.log")
+
+# 文件写入失败回调（由 GUI 在启动时注册，弹窗提示用户把程序移到可写目录）
+_FILE_WRITE_ERROR_CALLBACK = None
+_log_file_lock = threading.Lock()
+
+
+def set_file_write_error_callback(callback):
+    """注册文件写入失败回调（GUI 启动时调用）。"""
+    global _FILE_WRITE_ERROR_CALLBACK
+    _FILE_WRITE_ERROR_CALLBACK = callback
+
+
+def _notify_file_write_error(path):
+    if _FILE_WRITE_ERROR_CALLBACK is not None:
+        _FILE_WRITE_ERROR_CALLBACK(path)
+
+
+def append_log_file(text):
+    """将文本追加到本地持久化日志文件；写入失败仅通知回调，不抛异常。"""
+    if not text:
+        return
+    try:
+        with _log_file_lock, open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(text)
+    except Exception:
+        _notify_file_write_error(LOG_FILE)
+
+
+class _PersistentStdout:
+    """同时保留控制台输出和写入本地日志文件（用于 GUI 实例创建前的早期阶段）。"""
+
+    def __init__(self, stream, path):
+        self.stream = stream
+        self.path = path
+
+    def write(self, text):
+        if not text:
+            return 0
+        try:
+            self.stream.write(text)
+            self.stream.flush()
+        except Exception:
+            # 打包后的 GUI 程序可能没有可用控制台，忽略控制台输出失败。
+            pass
+        append_log_file(text)
+        return len(text)
+
+    def flush(self):
+        with contextlib.suppress(Exception):
+            self.stream.flush()
+
+
+def _enable_persistent_console_log():
+    if not isinstance(sys.stdout, _PersistentStdout):
+        sys.stdout = _PersistentStdout(sys.stdout, LOG_FILE)
+
+
+_enable_persistent_console_log()
+
 
 def load_config():
     """加载配置文件"""

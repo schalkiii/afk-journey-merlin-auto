@@ -198,6 +198,7 @@ launch_game.py            命令行启动游戏并可联动启动本项目脚本
 click_from_file.exe       AHK 注入器（读取坐标文件执行点击）
 templates/                界面模板图片
 game_bot_config.json      用户配置（运行时生成）
+game_bot.log              本地持久化日志（运行日志写入文件，可在程序「运行日志」窗口查看 / 刷新 / 清空）
 config.json               启动器/脚本默认配置（新增）
 ```
 

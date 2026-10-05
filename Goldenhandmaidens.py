@@ -42,11 +42,15 @@ from bot_runtime import (
     _early_stdout_buffer,
     _early_stdout_sink,
     _ensure_config_files,
+    append_log_file,
     focus_game_window,
     is_game_running,
     launch_game_by_shortcut,
     load_config,
+    LOG_FILE,
     save_config,
+    set_file_write_error_callback,
+    _notify_file_write_error,
 )
 
 import updater
@@ -67,6 +71,7 @@ class GameBotGUI:
     def __init__(self, root):
         _ensure_config_files()
         self.root = root
+        set_file_write_error_callback(self._schedule_file_write_error)
         self.root.title("梅林初号机")
         self.root.geometry("1200x880")
         self.root.minsize(1024, 640)
@@ -212,6 +217,13 @@ class GameBotGUI:
 
         self.version_label = ttk.Label(top_frame, text=__version__, foreground="gray")
         self.version_label.pack(side=tk.RIGHT, padx=5)
+
+        self.clear_log_btn = ttk.Button(
+            control_frame,
+            text="清空日志",
+            command=self.clear_log_file
+        )
+        self.clear_log_btn.pack(side=tk.LEFT, padx=5)
 
         self.help_btn = ttk.Button(
             control_frame,
@@ -413,11 +425,39 @@ class GameBotGUI:
         scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
         log_text.configure(yscrollcommand=scrollbar.set)
         
-        # 复制当前日志内容（仅追加主面板现有文本，不重建整个控件）
-        existing = self.log_text.get("1.0", tk.END)
-        if existing:
-            log_text.insert(tk.END, existing)
+        def refresh_log():
+            try:
+                with open(LOG_FILE, encoding="utf-8") as f:
+                    content = f.read()
+            except FileNotFoundError:
+                content = ""
+            except Exception as e:
+                content = f"读取日志失败: {e}\n"
+            log_text.configure(state=tk.NORMAL)
+            log_text.delete("1.0", tk.END)
+            log_text.insert(tk.END, content)
             log_text.see(tk.END)
+            log_text.configure(state=tk.DISABLED)
+
+        log_text.configure(state=tk.DISABLED)
+        button_frame = ttk.Frame(log_frame)
+        button_frame.grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=(8, 0))
+        ttk.Button(button_frame, text="刷新", command=refresh_log).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(button_frame, text="清空文件", command=self.clear_log_file).pack(side=tk.LEFT)
+        refresh_log()
+
+    def clear_log_file(self):
+        if not messagebox.askyesno("清空日志", "确定要清空本地日志文件吗？"):
+            return
+        try:
+            with open(LOG_FILE, "w", encoding="utf-8"):
+                pass
+            self.log_text.delete("1.0", tk.END)
+            timestamp = time.strftime("%H:%M:%S")
+            self.log_text.insert(tk.END, f"[{timestamp}] 本地日志文件已清空（此提示不会写入文件）\n")
+            self.log_text.see(tk.END)
+        except Exception as e:
+            messagebox.showerror("清空失败", str(e))
 
     def show_help_window(self):
         help_window = tk.Toplevel(self.root)
@@ -702,7 +742,23 @@ class GameBotGUI:
                     level = hero_levels.get(hero_name, "高")
                     f.write(f"{hero_name},{level}\n")
         except Exception as e:
-            self.log(f"写入仓库文件失败: {e!s}")
+            _notify_file_write_error(WAREHOUSE_TXT_PATH)
+            self.log(f"写入仓库文件失败: {str(e)}")
+
+    def _schedule_file_write_error(self, path):
+        if getattr(self, "_file_write_error_notified", False):
+            return
+        self._file_write_error_notified = True
+        self._file_write_error_pending = True
+        self.root.after(0, lambda: self._show_file_write_error(path))
+
+    def _show_file_write_error(self, path):
+        self._file_write_error_pending = False
+        messagebox.showerror(
+            "文件写入失败",
+            f"无法写入文件：\n{path}\n\n"
+            "当前文件夹可能没有写入权限，请将程序移动到其他可写文件夹后重试。",
+        )
     
     def create_shouquguajijiangli_params(self, script, row=0):
         ttk.Label(self.param_frame, text="付费购买次数 (0-2):").grid(row=row, column=0, sticky=tk.W, pady=2)
@@ -1164,7 +1220,6 @@ class GameBotGUI:
         retry_count = ps.get("retry_count", 3)
         loop_count = 0
         fast_rounds = 0
-        cycle_ok = True
         while not self.stop_event.is_set():
             loop_count += 1
             round_start = time.time()
@@ -1172,14 +1227,11 @@ class GameBotGUI:
             try:
                 huanling_result = flow_push.main(skip_manual=skip_manual, retry_count=retry_count)
                 if huanling_result is False:
-                    self.log("幻灵推图流程失败，停止循环推图。")
-                    cycle_ok = False
-                    break
+                    # 单个模式结束/失败不是循环失败，按设计切换到普通推图继续下一轮
+                    self.log("幻灵推图流程结束，切换到普通推图。")
             except Exception as e:
                 self.log(f"幻灵推图出错: {e!s}")
-                self.log("检测到推图模块异常，停止循环推图，避免高速空转。")
-                cycle_ok = False
-                break
+                self.log("幻灵推图异常，继续切换到普通推图。")
 
             if self.stop_event.is_set():
                 break
@@ -1188,14 +1240,11 @@ class GameBotGUI:
             try:
                 push_result = push.main(skip_manual=skip_manual, retry_count=retry_count)
                 if push_result is False:
-                    self.log("推图流程失败，停止循环推图。")
-                    cycle_ok = False
-                    break
+                    # 单个模式结束/失败不是循环失败，下一轮重新进入幻灵推图
+                    self.log("普通推图流程结束，下一轮切换到幻灵推图。")
             except Exception as e:
                 self.log(f"推图出错: {e!s}")
-                self.log("检测到推图模块异常，停止循环推图，避免高速空转。")
-                cycle_ok = False
-                break
+                self.log("普通推图异常，下一轮继续切换到幻灵推图。")
 
             if self.stop_event.is_set():
                 break
@@ -1215,7 +1264,7 @@ class GameBotGUI:
 
             self.log(f"循环推图 第 {loop_count} 轮完成，继续下一轮...")
             time.sleep(2)
-        return cycle_ok
+        return True
 
     def _run_migong(self, script):
         import flow_migong
@@ -1408,8 +1457,14 @@ class GameBotGUI:
             self.root.after(120, self._drain_log_queue)
 
     def log(self, message):
-        """兼容旧调用：直接入队（主线程也可调用），由 _drain_log_queue 统一刷新。"""
+        """兼容旧调用：直接入队（主线程也可调用），由 _drain_log_queue 统一刷新到面板；
+        同时持久化到本地日志文件 game_bot.log，便于查看与反馈问题。"""
         self._enqueue_log(message)
+        try:
+            timestamp = time.strftime('%H:%M:%S')
+            append_log_file(f'[{timestamp}] {message}\n')
+        except Exception:
+            _notify_file_write_error(LOG_FILE)
     
     # ===== 配置持久化（load_config / save_config） =====
     def save_config(self):
