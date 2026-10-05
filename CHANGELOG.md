@@ -2,6 +2,19 @@
 
 ## 未发布（Working）
 
+### 合并上游 v1.4.7（yangyh02/afk-journey-merlin-auto @ 6c7bbb8）
+- `push.py`：礼包遮挡检测改为「连续 3 轮未命中候选模板」才触发（避免单轮误判）；`_st_on_end` 成功推进后重置 `lineup_start=0`（下一轮从第一套阵容开始）；新增 `_click_next_lineup`（连续 3 次短等待识别 right，全部失败才判定阵容用完）。
+- `Goldenhandmaidens.py`：新增**本地持久化日志文件** `game_bot.log`（早期 `_PersistentStdout` + 运行期 `_StdoutTee` 双写文件 + `log()` 写文件；日志窗口新增「刷新 / 清空文件」按钮；文件写入失败时弹窗提示移到可写目录）；**循环推图**失败/异常由 `break` 改为 `continue`（与上游一致，单模式结束/失败不视为循环失败），并保留本仓「30 秒快速轮次」防空转安全阀（连续 3 轮 <30s 才停止）。
+- `hero_metadata.py` / `warehouse.py`：新增英雄 `aidejia` / `sainie` / `xing` 元数据与种族/职业/中文名。
+- `templates/`：新增 `aidejia.png` / `aidejia2.png` / `sainie.png` / `xing.png` 四张模板。
+- `version.py`：升至 `v1.4.7`。
+- 冲突解决：上游 v1.4.7 把本仓已拆到 `bot_runtime.py` 的顶层函数（`get_work_path` / `CONFIG_FILE` / `load_config` 等）连同新增日志设施整段加回 `Goldenhandmaidens.py`；本仓保留 `bot_runtime` 拆分，并将新增的日志设施（`LOG_FILE` / `_PersistentStdout` / `append_log_file` / 文件写入失败回调）落地到 `bot_runtime.py`，避免重复替换 `sys.stdout` 造成 stdout 接管冲突。
+
+### 文档同步（neat-freak 收尾）
+- README「日志机制」描述修正：`_panel_log` 已不存在，改为 `_StdoutTee`（`bot_runtime`）+ 队列 `_enqueue_log` / `_drain_log_queue` 调度到主线程写面板，并经 `append_log_file` 持久化到 `game_bot.log`；`log()` 同样写面板并落盘。
+- README「循环推图」行为修正：v1.4.7 合并后单个模式失败 / 异常**不停止**（自动切换到另一模式继续下一轮），仅连续 3 轮在 30 秒内异常结束或 F9 才停止——与代码一致。
+- README「巨型主文件拆分」行数声明同步为「约 1568 行」（合并 v1.4.7 后 `Goldenhandmaidens.py` 由约 1483 行增至约 1568 行）。
+
 ### 代码审查优化（全面 review）
 - `common.find_center_silent` 改用 `get_cached_screenshot()`：与 `find_center` 一致复用短 TTL 截图缓存，
   使 `recover_to_main_interface` / `dismiss_popup` / `ensure_main_interface` 及 7+ 个 flow 脚本的紧循环

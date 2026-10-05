@@ -66,8 +66,9 @@
 ### 4. 子脚本日志汇聚到运行日志面板
 
 - 新增 `common.log()` / `set_log_sink()`：子脚本统一调用 `log(...)`，未设置汇聚时回退到标准输出（便于单独调试）。
-- GUI 通过 `_StdoutTee` + `_panel_log` 把子脚本的 `print(...)` 调试日志实时转发到应用内「运行日志」面板，
-  线程安全（经 `root.after` 调度到主线程写入），便于排错。
+- GUI 通过 `_StdoutTee`（`bot_runtime`）把子脚本的 `print(...)` 调试日志实时转发到应用内「运行日志」面板
+  （经队列 `_enqueue_log` / `_drain_log_queue` 调度到主线程写入，线程安全），同时经 `append_log_file` 持久化到 `game_bot.log`；
+  `log()` 方法同样写面板并落盘，便于排错与事后查看。
 
 ### 5. 启动性能优化：复用常驻进程 + 隐藏控制台窗口
 
@@ -133,7 +134,7 @@
 - 另对全仓做了 ruff 机械整改（未用 import / 死代码 / 简化），并修复 `flow_migong` 中 lambda 延迟绑定循环变量的隐患（B023）。
 - **点击辅助统一到 `common`**：`click_and_wait`（点击 A→轮询 B 的冷却双检跳转辅助）与通用 `click_template` 已抽到 `common`；`flow_migong.click_mg` 保留为薄包装（仅做 migong 模板命名 / `cfg` 阈值解析后调 `common.click_template`）——消除各流程脚本重复包装 `wait_and_click`，且 `click_and_wait` 与具体模板命名解耦、可复用。
 - **阵容可采纳判定去重**：`push` 与 `flow_tower` 中两份完全相同的 `_is_lineup_acceptable` 收敛为 `common.is_lineup_acceptable`（参数化 `level_score` / `special_hero_set`），两模块保留 1 行包装注入各自常量（`push` 的 `SPECIAL_HERO_SET` 含 `meimo`、`flow_tower` 为空）——**逻辑单源、行为完全不变**。
-- **巨型主文件拆分**：`Goldenhandmaidens.py` 的顶层独立工具（stdout 接管、配置读写、`ScriptConfig`、桌面快捷方式 / 游戏窗口聚焦等）抽到 `bot_runtime.py`，主文件由约 1637 行降至约 1443 行（经后续增强，当前约 1483 行）；保留类内 `import updater` 与 `hero_metadata` / `warehouse` 导入，所有原引用经 `from bot_runtime import (...)` 保持不变——**无行为变化**。`bot_runtime` 由 spec 的 `glob` 自动收集，无需手改打包配置。
+- **巨型主文件拆分**：`Goldenhandmaidens.py` 的顶层独立工具（stdout 接管、配置读写、`ScriptConfig`、桌面快捷方式 / 游戏窗口聚焦等）抽到 `bot_runtime.py`，主文件由约 1637 行降至约 1443 行（经后续增强与合并上游，当前约 1568 行）；保留类内 `import updater` 与 `hero_metadata` / `warehouse` 导入，所有原引用经 `from bot_runtime import (...)` 保持不变——**无行为变化**。`bot_runtime` 由 spec 的 `glob` 自动收集，无需手改打包配置。
 - **坐标 IPC 维持文件通道（不做内存级改造）**：AHK 端 `click_from_file.exe` 为编译产物、无 `.ahk` 源码，文件 IPC（`send_coord` → `shared\target_coord.txt` → AHK 读取点击）保持不变；仅将尾部固定 `time.sleep(0.5)` 改为「写后等待 AHK 消费（文件被删除）再返回」——命中即返回更快、且保证点击已发生更稳健，AHK 未运行退化为 0.5s 超时，**行为不变**。
 
 ---
@@ -155,7 +156,7 @@
 1. 以**管理员身份**运行 `goldenhandmaidens.exe`（点击注入需要管理员权限）。
 2. （可选）勾选控制栏「自动配置通关阵容」，让迷梦之域等挑战前自动采用系统推荐阵容。
 3. 在「功能选择」面板勾选需要执行的任务；可点「一键全选」批量启用。
-   - 推图类任务关系：**推图**=单次主线推图；**幻灵推图**=单次幻灵推图；**循环推图**=每轮依次执行「幻灵推图 + 推图」并持续循环，流程失败 / 异常或连续 3 轮在 30 秒内异常结束会自动停止（也可随时 F9）。勾选「循环推图」时一般无需再单独勾「幻灵推图」「推图」。
+   - 推图类任务关系：**推图**=单次主线推图；**幻灵推图**=单次幻灵推图；**循环推图**=每轮依次执行「幻灵推图 + 推图」并持续循环，单个模式失败 / 异常不停止（自动切换到另一模式继续下一轮），仅当连续 3 轮在 30 秒内异常结束或按 F9 才停止。勾选「循环推图」时一般无需再单独勾「幻灵推图」「推图」。
 4. 点击「开始运行 (F8)」启动脚本；运行中点击「停止运行 (F9)」可立即中断所有子脚本。
 5. 如需定时运行：在「定时开始」处设置小时/分钟 → 点击「设定定时」；到点将自动检测游戏状态并运行。
 6. 如需一键启动游戏 + 脚本：点击「立即开始」，或命令行 `python launch_game.py --bot`。
