@@ -1,4 +1,3 @@
-# F:\afkj\game-bot\shouquguajijiangli.py
 import os
 import time
 

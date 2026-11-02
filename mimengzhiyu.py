@@ -1,21 +1,16 @@
-import random
 import time
 
 from common import (
     click_blank_to_exit,
     find_center_silent,
     get_template_path,
+    random_sleep,
     send_coord,
     try_auto_configure_lineup,
     wait_and_click,
 )
 from flow_enter import flow_return_main
 from jiance import check_and_handle_libao
-
-
-# 随机等待函数，2-3秒
-def random_sleep():
-    time.sleep(random.uniform(2.0, 3.0))
 
 # === 模板路径，对应你的文件名 ===
 tpl_wanfamulu         = get_template_path("wanfamulu.png")

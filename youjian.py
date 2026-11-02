@@ -1,4 +1,3 @@
-# F:\afkj\game-bot\youjian.py
 import os
 import time
 

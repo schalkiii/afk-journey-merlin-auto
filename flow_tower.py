@@ -5,7 +5,6 @@
 """
 
 import os
-import random
 import time
 
 import cv2
@@ -16,20 +15,19 @@ from common import (
     get_template_path,
     get_work_path,
     load_template,
-    is_lineup_acceptable as _is_lineup_acceptable_impl,
+    random_sleep,
     screenshot_bgr,
     send_coord,
     wait_and_click,
+)
+from common import (
+    is_lineup_acceptable as _is_lineup_acceptable_impl,
 )
 from warehouse import (
     WAREHOUSE_TXT_PATH,
     init_templates_from_dir,
 )
 
-
-# 随机等待函数，2-3秒
-def random_sleep():
-    time.sleep(random.uniform(2.0, 3.0))
 
 # 检测手动战斗标志，返回得分和坐标
 def check_artificial_score(threshold=0.7):

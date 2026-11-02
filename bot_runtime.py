@@ -66,13 +66,34 @@ def _notify_file_write_error(path):
         _FILE_WRITE_ERROR_CALLBACK(path)
 
 
+MAX_LOG_BYTES = 5 * 1024 * 1024   # 单个日志文件上限；超限后滚动为 .1，避免长期运行无限膨胀
+
+
+def _rotate_log_if_needed():
+    """日志超过上限时把 LogFile 改名成 .1（覆盖旧备份），再让调用方新建。
+
+    只保留一份备份：这类日志主要用来看"最近发生了什么"，留太多份既占空间又难翻。
+    """
+    try:
+        if os.path.getsize(LOG_FILE) < MAX_LOG_BYTES:
+            return
+        backup = LOG_FILE + ".1"
+        if os.path.exists(backup):
+            os.remove(backup)
+        os.rename(LOG_FILE, backup)
+    except OSError:
+        pass   # 拿不到大小 / 改名失败（文件被占用等）就不轮转，保证日志照常写入
+
+
 def append_log_file(text):
     """将文本追加到本地持久化日志文件；写入失败仅通知回调，不抛异常。"""
     if not text:
         return
     try:
-        with _log_file_lock, open(LOG_FILE, "a", encoding="utf-8") as f:
-            f.write(text)
+        with _log_file_lock:
+            _rotate_log_if_needed()
+            with open(LOG_FILE, "a", encoding="utf-8") as f:
+                f.write(text)
     except Exception:
         _notify_file_write_error(LOG_FILE)
 

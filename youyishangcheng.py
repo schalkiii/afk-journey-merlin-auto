@@ -1,4 +1,3 @@
-# F:\afkj\game-bot\youyishangcheng.py
 import os
 import time
 

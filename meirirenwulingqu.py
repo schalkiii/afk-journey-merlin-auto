@@ -1,4 +1,3 @@
-# F:\afkj\game-bot\meirirenwu.py
 import os
 import time
 

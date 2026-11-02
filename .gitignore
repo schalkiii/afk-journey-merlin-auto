@@ -15,6 +15,7 @@ game_bot_config.json
 warehouse_heroes.txt
 shared/
 game_bot.log
+game_bot.log.*
 
 # IDE / tools
 .claude/

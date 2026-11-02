@@ -17,12 +17,6 @@ from common import (
 # 进入英雄厅堂仓库用的按钮 ck
 tpl_ck = get_template_path("ck.png")
 
-# 仓库界面顶部标题（例如"赛季共鸣等级："附近的一块稳定区域）
-tpl_warehouse_title = get_template_path("warehouse_title.png")
-
-# 第一行第一列卡片的锚点（比如整张卡或左上角花边）
-tpl_first_card_anchor = get_template_path("warehouse_first_card.png")
-
 # 初始界面和拖动后界面都会出现、但在拖动动画中会跟着移动的那一行说明文字
 # 例如"同时受到共鸣之脉+184的全部属性影响"附近的一小块，这里命名为 relevel
 tpl_relevel = get_template_path("relevel.png")
@@ -325,31 +319,6 @@ def _match_template_with_box(img, template_path, threshold=0.8):
     cx = max_loc[0] + tw // 2
     cy = max_loc[1] + th // 2
     return cx, cy, tw, th
-
-
-def _locate_first_card(img):
-    """
-    定位当前屏幕上第一行第一列卡片的大致左上角坐标。
-    优先用 first_card_anchor 模板；找不到时，可退化为根据标题估算。
-    """
-    pos = _match_template(img, tpl_first_card_anchor, threshold=0.8)
-    if pos:
-        cx, cy = pos
-        x0 = int(cx - CARD_WIDTH / 2)
-        y0 = int(cy - CARD_HEIGHT / 2)
-        return x0, y0
-
-    title_pos = _match_template(img, tpl_warehouse_title, threshold=0.8)
-    if not title_pos:
-        print("无法定位仓库标题或第一张卡片锚点。")
-        return None
-
-    tx, ty = title_pos
-    # 这里的偏移要你根据实际界面调：
-    # 标题下方到第一行卡片的垂直距离、大概水平偏移等
-    x0 = tx - 300
-    y0 = ty + 150
-    return x0, y0
 
 
 def _locate_scroll_anchor_y(img):

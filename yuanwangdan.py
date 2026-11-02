@@ -69,7 +69,7 @@ SETTLE_DELAY = 2.0        # 界面切换后的稳定等待
 DELIVER_DELAY = 3.0       # 交付后等待结算动画
 CRAFT_ENTRY_TIMEOUT = 40  # 自动寻路到建筑并打开制作界面的等待上限
 CRAFT_START_TIMEOUT = 10  # 点「开始烹饪」后等待按钮消失（确认这批真的开始）的上限
-CRAFT_DONE_TIMEOUT = 180  # 一次批量制作的完成等待上限（实测 x10 一批可超过 90 秒）
+CRAFT_DONE_TIMEOUT = 600  # 一次批量制作的完成等待上限；x10 档一批 10 份实测已超过 180 秒
 QTY_CLICK_TIMES = 2       # 数量档 x1 → x5 → x10 循环，进建筑固定是 x1，故点两下即 x10
 QTY_BUTTON_OFFSET = (110, -10)   # 数量按钮相对「开始烹饪」中心的偏移（1600×900 实测：烹饪 2896,859 / 数量 3006,849）
 

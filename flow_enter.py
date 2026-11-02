@@ -1,4 +1,3 @@
-# F:\afkj\game-bot\flow_enter.py
 """进入游戏 / 返回主界面流程模块。
 
 关键接口：

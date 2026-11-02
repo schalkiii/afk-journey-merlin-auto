@@ -1,4 +1,3 @@
-# F:\afkj\game-bot\common.py
 """通用能力模块：模板匹配、坐标 IPC、游戏窗口管理。
 
 关键接口：
@@ -16,6 +15,7 @@ import contextlib
 import ctypes
 import hashlib
 import os
+import random
 import shutil
 import sys
 import time
@@ -27,7 +27,6 @@ import pyautogui
 
 APP_DATA_ROOT = os.path.join(os.environ.get("APPDATA", ""), "gamebot")
 APP_TEMPLATES_DIR = os.path.join(APP_DATA_ROOT, "templates")
-_ACTIVE_TEMPLATES_DIR = None
 _ACTIVE_TEMPLATES_DIR = None
 
 def get_resource_path(relative_path):
@@ -285,6 +284,11 @@ def game_client_region(refresh=False):
 def _resolve_search_region(region):
     """调用方显式给了 region 就原样用；否则用游戏客户区（取不到则 None = 全屏）。"""
     return region if region else game_client_region()
+
+
+def random_sleep():
+    """随机等待 2–3 秒：让点击节奏不完全固定，减少被判定为脚本操作的可能。"""
+    time.sleep(random.uniform(2.0, 3.0))
 
 
 def find_center(template_path, threshold=0.8):

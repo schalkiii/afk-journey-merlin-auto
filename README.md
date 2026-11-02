@@ -15,6 +15,8 @@
 | --- | --- |
 | 任务总开关 | 单一「开始运行 (F8) / 停止运行 (F9)」按钮，避免多个停止按钮的混乱 |
 | 功能列表拖拽排序 | 按住功能按钮上下拖动即可调整**执行顺序**（列表顺序就是执行顺序，不再有第二份硬编码顺序表）；顺序写入 `game_bot_config.json`，重启后保持。位移小于 8 像素仍视为普通点击，不会误改顺序 |
+| 公会玩法日常 | **结社战线**（挑战到失败为止，再扫荡掉剩余次数）与**狩猎悬赏**（用完自己的搜寻次数 + 参加队友悬赏）；两者共用「玩法目录 → 公会玩法」入口 |
+| 家园愿望单 | 一键选择 → 交付循环交付订单；缺料时自动寻路到生产建筑补货再继续；进度奖励自动领取 |
 | 单独运行一个功能 | 配置面板「只运行当前功能」按钮：只跑选中的那一个功能并忽略其它勾选，用于逐项验证或补跑漏掉的一天 |
 | 立即开始 | 一键「立即开始」：启动游戏（若未运行）+ 立即运行脚本 |
 | 定时开始 | 设定每天固定时间启动；触发时**自动检测游戏是否已运行**，已运行则直接运行脚本，避免重复拉起游戏 |
@@ -136,7 +138,7 @@
 - 另对全仓做了 ruff 机械整改（未用 import / 死代码 / 简化），并修复 `flow_migong` 中 lambda 延迟绑定循环变量的隐患（B023）。
 - **点击辅助统一到 `common`**：`click_and_wait`（点击 A→轮询 B 的冷却双检跳转辅助）与通用 `click_template` 已抽到 `common`；`flow_migong.click_mg` 保留为薄包装（仅做 migong 模板命名 / `cfg` 阈值解析后调 `common.click_template`）——消除各流程脚本重复包装 `wait_and_click`，且 `click_and_wait` 与具体模板命名解耦、可复用。
 - **阵容可采纳判定去重**：`push` 与 `flow_tower` 中两份完全相同的 `_is_lineup_acceptable` 收敛为 `common.is_lineup_acceptable`（参数化 `level_score` / `special_hero_set`），两模块保留 1 行包装注入各自常量（`push` 的 `SPECIAL_HERO_SET` 含 `meimo`、`flow_tower` 为空）——**逻辑单源、行为完全不变**。
-- **巨型主文件拆分**：`Goldenhandmaidens.py` 的顶层独立工具（stdout 接管、配置读写、`ScriptConfig`、桌面快捷方式 / 游戏窗口聚焦等）抽到 `bot_runtime.py`，主文件由约 1637 行降至约 1443 行（经后续增强与合并上游，当前约 1568 行）；保留类内 `import updater` 与 `hero_metadata` / `warehouse` 导入，所有原引用经 `from bot_runtime import (...)` 保持不变——**无行为变化**。`bot_runtime` 由 spec 的 `glob` 自动收集，无需手改打包配置。
+- **巨型主文件拆分**：`Goldenhandmaidens.py` 的顶层独立工具（stdout 接管、配置读写、`ScriptConfig`、桌面快捷方式 / 游戏窗口聚焦等）抽到 `bot_runtime.py`，主文件由约 1637 行降至约 1443 行（此后随功能增强又有增长，是仓库里最大的单文件）；保留类内 `import updater` 与 `hero_metadata` / `warehouse` 导入，所有原引用经 `from bot_runtime import (...)` 保持不变——**无行为变化**。`bot_runtime` 由 spec 的 `glob` 自动收集，无需手改打包配置。
 - **坐标 IPC 维持文件通道（不做内存级改造）**：AHK 端 `click_from_file.exe` 为编译产物、无 `.ahk` 源码，文件 IPC（`send_coord` → `shared\target_coord.txt` → AHK 读取点击）保持不变；仅将尾部固定 `time.sleep(0.5)` 改为「写后等待 AHK 消费（文件被删除）再返回」——命中即返回更快、且保证点击已发生更稳健，AHK 未运行退化为 0.5s 超时，**行为不变**。
 
 ### 10. 家园愿望单自动交付（`yuanwangdan.py`）
