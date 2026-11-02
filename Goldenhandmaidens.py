@@ -141,6 +141,13 @@ class GameBotGUI:
                 "formation_name": "",
                 "shenceng_formation_name": ""
             }),
+            # 结社战线 / 狩猎悬赏 均为「玩法目录 → 公会玩法」页签下的公会日常，
+            # 共用 flow_gonghui 的入口流程，结束后各自兜底回主界面。
+            ScriptConfig("结社战线", enabled=False, daily_reset=True),
+            ScriptConfig("狩猎悬赏", enabled=False, daily_reset=True),
+            # 家园愿望单在「家园」内执行，结束后游戏停留在家园视图，而项目其余流程
+            # 以主界面「玩法目录」为起点判定，故必须排在执行顺序末尾，避免阻断后续任务。
+            ScriptConfig("家园愿望单", enabled=False, daily_reset=True),
         ]
         
         # 从配置中加载脚本状态
@@ -150,6 +157,13 @@ class GameBotGUI:
             script.params = script_config.get("params", script.params)
             script.daily_reset = script_config.get("daily_reset", script.daily_reset)
             script.last_run_time = script_config.get("last_run_time", None)
+
+        # 恢复用户拖出来的执行顺序；配置里没有的功能（新版本新增）按默认顺序补到末尾
+        saved_order = self.config.get("script_order") or []
+        known = [s for s in self.scripts if s.name in saved_order]
+        rest = [s for s in self.scripts if s.name not in saved_order]
+        known.sort(key=lambda s: saved_order.index(s.name))
+        self.scripts = known + rest
         
         self.setup_ui()
 
@@ -341,9 +355,64 @@ class GameBotGUI:
                 command=lambda idx=i: self.select_script(idx)
             )
             btn.pack(pady=5, fill=tk.X)
+            # 按住上下拖动即可调整执行顺序；command 在松开时也会触发，故用 _drag_moved 抑制误选
+            btn.bind("<ButtonPress-1>", lambda event, b=btn: self._drag_begin(event, b))
+            btn.bind("<B1-Motion>", lambda event, b=btn: self._drag_motion(event, b))
+            btn.bind("<ButtonRelease-1>", lambda event, b=btn: self._drag_end(event, b))
             self.script_buttons.append(btn)
             
         self.update_dashboard_buttons()
+
+    # ===== 功能列表拖拽排序 =====
+    # 列表顺序即执行顺序：run_scripts_thread 直接按 self.scripts 迭代，不再维护独立的
+    # script_order 常量（原实现里按钮顺序与执行顺序是两份数据，拖动改了也不会生效）。
+    def _drag_begin(self, event, button):
+        self._drag_button = button
+        self._drag_moved = False
+        self._drag_start_y = event.y_root
+
+    def _drop_index_at(self, root_y):
+        """落点下标 = 第一个「垂直中点低于鼠标」的按钮下标，越过它即排到末尾。"""
+        for index, btn in enumerate(self.script_buttons):
+            if root_y < btn.winfo_rooty() + btn.winfo_height() // 2:
+                return index
+        return len(self.script_buttons) - 1
+
+    def _drag_motion(self, event, button):
+        if not self._drag_moved and abs(event.y_root - self._drag_start_y) < 8:
+            return   # 位移不足 8px 视为点击，不进入拖拽，避免误触改顺序
+        self._drag_moved = True
+        from_index = self.script_buttons.index(button)
+        to_index = self._drop_index_at(event.y_root)
+        if from_index != to_index:
+            self._move_script(from_index, to_index)
+
+    def _move_script(self, from_index, to_index):
+        """把第 from 个功能移到 to 位置，数据顺序与按钮 pack 顺序同步重排。"""
+        selected_name = self.scripts[self.current_script_index].name
+        script = self.scripts.pop(from_index)
+        self.scripts.insert(to_index, script)
+        button = self.script_buttons.pop(from_index)
+        self.script_buttons.insert(to_index, button)
+
+        for btn in self.script_buttons:
+            btn.pack_forget()
+        for btn in self.script_buttons:
+            btn.pack(pady=5, fill=tk.X)
+
+        # 按钮下标随重排变化，按名字找回当前选中项，避免面板显示到别的功能上
+        self.current_script_index = next(
+            i for i, s in enumerate(self.scripts) if s.name == selected_name
+        )
+        self.update_dashboard_buttons()
+
+    def _drag_end(self, event, button):
+        # _drag_moved 不在这里清掉：ttk Button 的 command 与本回调都在松开时触发，
+        # 顺序不保证，留到下一次按下时再复位，select_script 才能可靠地跳过误选。
+        if getattr(self, "_drag_moved", False):
+            self.save_config()
+            self.log("执行顺序已调整为：" + " → ".join(s.name for s in self.scripts))
+            self.root.after(0, self.update_script_panel)
         
     def create_script_panel(self, parent):
         self.script_panel = ttk.LabelFrame(parent, text="配置", padding="10")
@@ -377,7 +446,16 @@ class GameBotGUI:
         
         self.param_frame = ttk.Frame(self.script_panel)
         self.param_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
-        
+
+        # 单独运行：只跑当前选中的这一个功能，便于逐项验证 / 补跑漏掉的一天
+        run_frame = ttk.Frame(self.script_panel)
+        run_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(5, 0))
+        self.run_single_btn = ttk.Button(
+            run_frame, text="只运行当前功能", command=self.run_single_script
+        )
+        self.run_single_btn.pack(side=tk.LEFT)
+        ttk.Label(run_frame, text="（忽略其它勾选）", foreground="gray").pack(side=tk.LEFT, padx=5)
+
         self.update_script_panel()
         
     def create_log_panel(self, parent):
@@ -848,6 +926,9 @@ class GameBotGUI:
         self.mg_shenceng_var.trace_add("write", on_param_change)
         
     def select_script(self, index):
+        # 拖拽松手时 ttk Button 也会触发 command，此时应视为「调整顺序」而非「选中该功能」
+        if getattr(self, "_drag_moved", False):
+            return
         self.current_script_index = index
         self.update_dashboard_buttons()
         self.update_script_panel()
@@ -923,24 +1004,37 @@ class GameBotGUI:
             self.master_switch_btn.configure(text="开始运行 (F8)")
 
     def start_all(self):
-        self.is_running = True
-        self.stop_event.clear()
-        self.update_master_button()
-        
-        # 检查是否有脚本启用
+        """按功能列表当前顺序运行全部已勾选的功能。"""
         enabled_scripts = [s for s in self.scripts if s.enabled]
         if not enabled_scripts:
             messagebox.showwarning("警告", "没有启用任何脚本！")
-            self.stop_all()
             return
-            
+        self._begin_run(enabled_scripts)
         self.log("开始运行脚本")
-        
+
+    def run_single_script(self):
+        """只运行当前选中的这一个功能，忽略其它勾选：便于逐项验证或补跑漏掉的一天。"""
+        if self.is_running:
+            messagebox.showwarning("提示", "已有任务在运行中，请先停止 (F9)。")
+            return
+        script = self.scripts[self.current_script_index]
+        self._begin_run([script], respect_enabled=False)
+        self.log(f"单独运行: {script.name}")
+
+    def _begin_run(self, scripts_to_run, respect_enabled=True):
+        """启动运行线程的公共入口：置运行态、复位状态标记、拉起工作线程。"""
+        self.is_running = True
+        self.stop_event.clear()
+        self.update_master_button()
+
         for script in self.scripts:
             script.status = "等待中"
         self.update_script_panel()
-        
-        thread = threading.Thread(target=self.run_scripts_thread, args=(enabled_scripts,))
+
+        thread = threading.Thread(
+            target=self.run_scripts_thread,
+            args=(scripts_to_run, respect_enabled),
+        )
         thread.daemon = True
         thread.start()
         
@@ -1189,6 +1283,18 @@ class GameBotGUI:
         meirirenwulingqu.main()
         return True
 
+    def _run_yuanwangdan(self, script):
+        import yuanwangdan
+        return yuanwangdan.main()
+
+    def _run_jieshezhanxian(self, script):
+        import jieshezhanxian
+        return jieshezhanxian.main()
+
+    def _run_lieshouxunshang(self, script):
+        import lieshouxunshang
+        return lieshouxunshang.main()
+
     def _run_pata(self, script):
         import pata
         pata.main()
@@ -1293,6 +1399,9 @@ class GameBotGUI:
             "挂机奖励": self._run_guajijiangli,
             "商城": self._run_shangcheng,
             "日常任务": self._run_meiri,
+            "结社战线": self._run_jieshezhanxian,
+            "狩猎悬赏": self._run_lieshouxunshang,
+            "家园愿望单": self._run_yuanwangdan,
             "爬塔": self._run_pata,
             "幻灵推图": self._run_huanling,
             "推图": self._run_tu_tu,
@@ -1309,7 +1418,7 @@ class GameBotGUI:
             self.log(f"{script.name} 模块导入失败: {e!s}")
             return False
 
-    def run_scripts_thread(self, scripts_to_run):
+    def run_scripts_thread(self, scripts_to_run, respect_enabled=True):
         # 先把子脚本的 print 调试日志转发到运行日志面板（经队列，主线程节流刷新）
         sys.stdout = _StdoutTee(self._enqueue_log)
 
@@ -1342,20 +1451,16 @@ class GameBotGUI:
                 self.log("警告: click_from_file.exe 未启动，部分功能可能无法正常工作")
             time.sleep(2)
         
-        # 顺序调用其他脚本
-        script_order = [
-            "登录", "仓库管理", "邮件", "好友奖励", "普竞", "迷梦之域", "女神塔", 
-            "挂机奖励", "商城", "日常任务", "爬塔", "幻灵推图", "推图", "循环推图", "异界迷宫"
-        ]
-        
-        for script_name in script_order:
+        # 按调用方给定的脚本列表依次执行。列表由 start_all / run_single_script 从
+        # self.scripts 生成，因此顺序就是功能列表里拖出来的顺序——不再维护独立的
+        # script_order 常量（那样按钮顺序和执行顺序是两份数据，拖动改了也不生效）。
+        for script in list(scripts_to_run):
             if self.stop_event.is_set():
                 break
-                
-            script = next((s for s in self.scripts if s.name == script_name), None)
-            if not script or not script.enabled:
+
+            if respect_enabled and not script.enabled:
                 continue
-                
+
             script.status = "运行中"
             self.root.after(0, self.update_script_panel)
             self.log(f"开始执行: {script.name}")
@@ -1479,6 +1584,8 @@ class GameBotGUI:
                 "last_run_time": script.last_run_time
             }
         self.config["scripts"] = scripts_config
+        # 功能列表顺序即执行顺序，随配置持久化，重启后保持用户拖出来的顺序
+        self.config["script_order"] = [script.name for script in self.scripts]
         self.config["auto_start_on_launch"] = self.auto_start_on_launch
         self.config["launch_game_on_open"] = self.launch_game_on_open
         self.config["game_launch_delay"] = self.game_launch_delay

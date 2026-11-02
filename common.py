@@ -468,6 +468,39 @@ def send_coord(x, y):
         time.sleep(0.02)
 
 
+def click_position(pos, wait=1.5, twice=True):
+    """点击模板匹配得到的全屏坐标并等待界面响应；pos 为 None 时什么都不做（返回 False）。
+
+    游戏未处于前台时，第一次鼠标事件会被系统用于激活窗口而被吞掉，故默认连点两次
+    （间隔 0.25 秒）：窗口已激活时两次点击等价，未激活时第二次才真正生效。
+    跳转类按钮（进面板 / 开战 / 下一层）请传 twice=False——连点会「进入后又退出」。
+    """
+    if pos is None:
+        return False
+    send_coord(pos[0], pos[1])
+    invalidate_screenshot_cache()
+    if twice:
+        time.sleep(0.25)
+        send_coord(pos[0], pos[1])
+        invalidate_screenshot_cache()
+    time.sleep(wait)
+    return True
+
+
+def dismiss_popup_away_from(offset=(-400, -200), wait=1.5):
+    """关闭「点击空白处关闭」类结算弹窗，但避开热区中心本身。
+
+    「点击空白处关闭」文字固定在屏幕底部居中，而不少面板的主操作按钮（结社战线「扫荡」/
+    狩猎悬赏「搜寻精怪」）正好压在它下方几个像素内：直接点模板中心，会在关掉弹窗的同时
+    再触发一次那个按钮。故改点该文字左上方的空白处——同样在弹窗之外，能关闭且不会误触。
+    与 common.dismiss_popup 的区别即在于此：后者点热区中心，适用于下方无按钮的界面。
+    """
+    pos = find_center_silent(get_template_path("dianjikongbaichuguanbi.png"), 0.8)
+    if pos is None:
+        return False
+    return click_position((pos[0] + offset[0], pos[1] + offset[1]), wait)
+
+
 # ===== 子脚本日志汇聚 =====
 # 上层 GUI（Goldenhandmaidens）会调用 set_log_sink 把日志转发到应用内「运行日志」面板。
 # 子脚本直接调用 log(...) 即可；未设置汇聚时回退为标准输出（便于单独调试子脚本）。

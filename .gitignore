@@ -3,6 +3,8 @@ build/
 dist/
 *.spec.bak
 *.pyz
+# 打包产物（click_from_file.exe 是运行依赖、需入库，故只忽略本项目的输出 exe）
+goldenhandmaidens.exe
 
 # Python cache
 __pycache__/
@@ -12,11 +14,18 @@ __pycache__/
 game_bot_config.json
 warehouse_heroes.txt
 shared/
+game_bot.log
 
 # IDE / tools
 .claude/
+.codebuddy/
+.workbuddy/
 .vscode/
 opencv/
+
+# 开发期调试残留：临时截图 / 日志 / 探针脚本
+_tmp_*
+_devshots/
 
 # Dev tools and test scripts
 锚定工具.py
