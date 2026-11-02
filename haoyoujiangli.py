@@ -41,7 +41,7 @@ def main():
     caidan_path = os.path.join(templates_dir, "caidan.png")
     if not wait_and_click(caidan_path, "菜单"):
         print("【好友奖励】未找到菜单(caidan)，任务终止")
-        return
+        return False
     print("【好友奖励】已进入菜单，等待 2 秒...")
     time.sleep(2)
 
@@ -49,7 +49,7 @@ def main():
     shejiao_path = os.path.join(templates_dir, "shejiao.png")
     if not wait_and_click(shejiao_path, "社交"):
         print("【好友奖励】未找到社交(shejiao)，任务终止")
-        return
+        return False
     print("【好友奖励】已进入社交界面，等待 2 秒...")
     time.sleep(2)
 
@@ -66,13 +66,13 @@ def main():
         print("【好友奖励】检测到 yijianzengli，点击一键赠礼")
         if not wait_and_click(yijianzengli_path, "一键赠礼"):
             print("【好友奖励】未找到一键赠礼(yijianzengli)，任务终止")
-            return
+            return False
         time.sleep(2)
         print("【好友奖励】一键赠礼完成，清理结算弹窗...")
         _close_popups()
     else:
         print("【好友奖励】未检测到 yijianzengli 或 notyijianzengli，任务终止")
-        return
+        return False
 
     # 退出好友列表
     print("【好友奖励】点击 exitck 退出好友列表")
@@ -96,3 +96,4 @@ def main():
         print("【好友奖励】好友奖励任务执行完成！已回到主界面")
     else:
         print("【好友奖励】好友奖励任务执行完成，但未能确认回到主界面，请检查游戏画面")
+    return True

@@ -15,14 +15,14 @@ def main():
     shenmiwu_path = os.path.join(templates_dir, "shenmiwu.png")
     if not wait_and_click(shenmiwu_path, "shenmiwu"):
         print("未找到shenmiwu，任务终止")
-        return
+        return False
     time.sleep(2)
     
     # 2. 识别并点击shangdian
     shangdian_path = os.path.join(templates_dir, "shangdian.png")
     if not wait_and_click(shangdian_path, "shangdian"):
         print("未找到shangdian，任务终止")
-        return
+        return False
     time.sleep(2)
     
     # 3. 调用youyishangcheng
@@ -37,6 +37,7 @@ def main():
         print("点击exitck退出成功")
     
     print("商城任务执行完成！")
+    return True
 
 if __name__ == "__main__":
     main()

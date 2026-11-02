@@ -2,6 +2,16 @@
 
 ## 未发布（Working）
 
+### 架构改进（依据 `doc/AUDIT-REPORT-2026-11-02.md` 的 R1–R5）
+- **模板匹配限定到游戏客户区**（R1，实测提速 2.1–3.8x）：`find_center` / `find_center_silent` 在未显式传 `region` 时改用 `common.game_client_region()` 取到的游戏客户区（`GetClientRect` + `ClientToScreen`），返回值仍是全屏绝对坐标、语义不变。桌面 3840×1080 而客户区只有 1600×900，原先每次匹配要多扫约 3 倍像素：单次匹配 216–357ms → 73–106ms，端到端 `find_center_silent` 317ms → 149ms 且**命中坐标完全一致**。未命中时会刷新一次窗口矩形再试，兼容运行中拖动窗口；取不到窗口（非 Windows / 游戏未开）自动退化为整屏，行为与改动前一致。
+- **点击器存活探测**（R2）：`click_from_file.exe` 长时间运行后会自行退出，此后所有点击静默落空、表现为「界面连续多轮无变化」——本轮就被它误导过一次诊断。新增 `clicker_alive()`（用当前光标位置作哨兵，避免把鼠标甩到角落）与 `ClickerNotRunning` 异常：`send_coord` 连续 3 次坐标无人消费即报错中止任务，GUI 在每个任务开始前也探测一次、失败则中止后续任务并写明原因。失败方向的取舍：宁可让任务报错（勾选保留、次日重跑），也不让"空转 8 轮后正常结束"把当日任务吞掉。
+- **统一任务成败语义**（R3）：`_run_youjian` / `_run_haoyou` / `_run_pujing` / `_run_nvshenta` / `_run_guajijiangli` / `_run_shangcheng` / `_run_meiri` / `_run_pata` 原先全部硬编码 `return True`，其中 5 个流程的 `main()` 根本没有返回值。后果是**失败也会被记为「执行完成」**，而 `daily_reset` 脚本在"成功"后会自动取消勾选——当日任务被静默跳过。现 5 个流程的 `main()` 在任一步骤失败时 `return False`、走完 `return True`，8 个 runner 全部透传。`_run_login` 保持恒真并加注释说明原因（找不到开始界面说明游戏已在登录态，属正常跳过）。
+- **统一弹窗关闭路径**（R4）：`dismiss_popup()` 改为复用 `dismiss_popup_away_from()`（点「点击空白处关闭」左上方空白），兜底点从**屏幕底部居中**改成**左下角**——实测底部居中与结社战线「扫荡」、狩猎悬赏「搜寻精怪」、愿望单「交付」重合（偏差仅 2–15px），任务间清理会误触发按钮。
+- **配置与模板路径语义统一**（R5）：新增 `common.get_config_path()`（工作目录优先、打包内置回退），`formations.json` / `grid_offsets.json` / `migong_config.json` 改走它——原先走 `get_resource_path`（打包后指向只读的 `_MEIPASS`），用户改 exe 同目录的那份**不生效**。`start.py` 改用 `get_template_path()`，不再自行拼 `templates/` 路径绕过 APPDATA 副本机制。
+- **新增测试**：`tests/test_clicker_guard.py`（6 个用例）覆盖点击器漏消费告警、`ClickerNotRunning` 触发阈值、正常消费不误报、客户区限定的坐标换算与区域外不误命中。全部 8 个用例通过。
+- **新增 `doc/TEMPLATE-AUTHORING.md`**：把本轮多次事故的根因沉淀成规范——1600×900 采集、避开角标与流光动画、纯色块不可作模板、采完须同时验证"目标界面分 / 最易混淆界面分 / 实点落点"、以及「红点不一定是奖励」（实测可能是剧情对话）。
+
+
 ### GUI：功能列表可拖拽排序 + 支持单独运行一个功能
 - **拖拽改执行顺序**：功能列表按钮支持按住上下拖动重排（位移 < 8px 仍视为普通点击，不进入拖拽，避免误改顺序）。关键是消除了「两份顺序数据」——原先执行顺序由 `run_scripts_thread` 里一份硬编码 `script_order` 常量决定，按钮列表只是它的镜像，拖动改了也不生效；现在 `run_scripts_thread` 直接按 `self.scripts` 迭代，列表顺序即执行顺序。重排后按名字找回 `current_script_index`，避免右侧配置面板跳到别的功能上。
 - **顺序持久化**：`save_config` 写入 `script_order`（功能名列表），启动时恢复；配置里没有的功能（新版本新增）按默认顺序补到末尾，不会因升级丢顺序也不会漏项。

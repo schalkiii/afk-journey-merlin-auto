@@ -14,21 +14,21 @@ def main():
     caidan_path = os.path.join(templates_dir, "caidan.png")
     if not wait_and_click(caidan_path, "caidan"):
         print("未找到caidan，任务终止")
-        return
+        return False
     time.sleep(2)
     
     # 2. 识别并点击renwu
     renwu_path = os.path.join(templates_dir, "renwu.png")
     if not wait_and_click(renwu_path, "renwu"):
         print("未找到renwu，任务终止")
-        return
+        return False
     time.sleep(2)
     
     # 3. 点击richangrenwu
     richangrenwu_path = os.path.join(templates_dir, "richangrenwu.png")
     if not wait_and_click(richangrenwu_path, "richangrenwu", threshold=0.7):
         print("未找到richangrenwu，任务终止")
-        return
+        return False
     time.sleep(2)
     
     # 4. 3秒内识别yijianlingqu，如果识别不到就跳过步骤4、5、6
@@ -67,7 +67,7 @@ def main():
     gonghuirenwu_path = os.path.join(templates_dir, "gonghuirenwu.png")
     if not wait_and_click(gonghuirenwu_path, "gonghuirenwu"):
         print("未找到gonghuirenwu，任务终止")
-        return
+        return False
     time.sleep(2)
     
     # 8. 3秒内识别yijianlingqu，如果识别不到就跳过
@@ -97,16 +97,17 @@ def main():
     exitck_path = os.path.join(templates_dir, "exitck.png")
     if not wait_and_click(exitck_path, "exitck"):
         print("未找到exitck，任务终止")
-        return
+        return False
     time.sleep(2)
     
     # 11. 点击exit
     exit_path = os.path.join(templates_dir, "exit.png")
     if not wait_and_click(exit_path, "exit"):
         print("未找到exit，任务终止")
-        return
+        return False
     
     print("每日任务执行完成！")
+    return True
 
 if __name__ == "__main__":
     main()

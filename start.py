@@ -7,13 +7,9 @@
    （认为启动完成）才结束，避免无限空轮询。
 """
 
-import os
 import time
 
-from common import find_center, get_resource_path, wait_and_click
-
-# 模板图片目录（兼容打包后的 exe）
-templates_dir = get_resource_path("templates")
+from common import find_center, get_template_path, wait_and_click
 
 # 各阶段等待/空闲阈值（秒）
 START_WAIT_TIMEOUT = 60      # 开始界面最长等待时间
@@ -63,10 +59,12 @@ def _dismiss_popups(yuekajiangli_path, libao_path, tuichulibao_path, idle_timeou
 def main():
     """启动任务入口：登录并清理开局弹窗。"""
     print("开始执行启动任务...")
-    start_path = os.path.join(templates_dir, "start.png")
-    yuekajiangli_path = os.path.join(templates_dir, "yuekajiangli.png")
-    libao_path = os.path.join(templates_dir, "libao.png")
-    tuichulibao_path = os.path.join(templates_dir, "tuichulibao.png")
+    # 统一走 get_template_path：它会用 APPDATA 下的模板副本，避免打包后 _MEIPASS
+    # 被清理/隔离时本任务单独找不到模板（其余任务早已如此）
+    start_path = get_template_path("start.png")
+    yuekajiangli_path = get_template_path("yuekajiangli.png")
+    libao_path = get_template_path("libao.png")
+    tuichulibao_path = get_template_path("tuichulibao.png")
 
     if not _wait_for_start(start_path, yuekajiangli_path, libao_path):
         print("60 秒内未检测到开始界面，跳过启动流程")

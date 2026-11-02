@@ -863,10 +863,10 @@ class GameBotGUI:
         ttk.Label(self.param_frame, text="注: 免费三次默认购买掉").grid(row=row+1, column=0, columnspan=2, sticky=tk.W, pady=5)
 
     def create_yijiemigong_params(self, script, row=0):
-        # 加载 formations.json 获取阵容列表（从 EXE 资源读取）
+        # 加载 formations.json 获取阵容列表（exe 同目录的可编辑副本优先）
         formations = {}
         try:
-            with open(get_resource_path("formations.json"), encoding="utf-8") as f:
+            with open(common.get_config_path("formations.json"), encoding="utf-8") as f:
                 formations = json.load(f)
         except Exception:
             pass
@@ -1230,6 +1230,7 @@ class GameBotGUI:
     # 内部 import 失败抛 ImportError 由 _run_script_dispatch 统一捕获并记日志。
     def _run_login(self, script):
         import start
+        # 登录流程没有失败语义：找不到开始界面说明游戏已在登录态，属正常跳过，故恒为成功
         start.main()
         return True
 
@@ -1241,18 +1242,15 @@ class GameBotGUI:
 
     def _run_youjian(self, script):
         import youjian
-        youjian.main()
-        return True
+        return youjian.main()
 
     def _run_haoyou(self, script):
         import haoyoujiangli
-        haoyoujiangli.main()
-        return True
+        return haoyoujiangli.main()
 
     def _run_pujing(self, script):
         import pujing
-        pujing.flow_pujing()
-        return True
+        return pujing.flow_pujing()
 
     def _run_mimeng(self, script):
         from mimengzhiyu import flow_mimengzhiyu
@@ -1264,24 +1262,20 @@ class GameBotGUI:
 
     def _run_nvshenta(self, script):
         import nvshenta
-        nvshenta.flow_nvshenta(auto_configure_lineup=self.auto_configure_lineup)
-        return True
+        return nvshenta.flow_nvshenta(auto_configure_lineup=self.auto_configure_lineup)
 
     def _run_guajijiangli(self, script):
         import shouquguajijiangli
         paid_times = script.params.get("paid_times", 0)
-        shouquguajijiangli.main(paid_times=paid_times)
-        return True
+        return shouquguajijiangli.main(paid_times=paid_times)
 
     def _run_shangcheng(self, script):
         import shangcheng
-        shangcheng.main()
-        return True
+        return shangcheng.main()
 
     def _run_meiri(self, script):
         import meirirenwulingqu
-        meirirenwulingqu.main()
-        return True
+        return meirirenwulingqu.main()
 
     def _run_yuanwangdan(self, script):
         import yuanwangdan
@@ -1297,8 +1291,7 @@ class GameBotGUI:
 
     def _run_pata(self, script):
         import pata
-        pata.main()
-        return True
+        return pata.main()
 
     def _run_huanling(self, script):
         import flow_push
@@ -1464,6 +1457,12 @@ class GameBotGUI:
             script.status = "运行中"
             self.root.after(0, self.update_script_panel)
             self.log(f"开始执行: {script.name}")
+
+            # 点击器退出后所有任务都只会空转，逐轮跑下去毫无意义：开局先确认它还活着
+            if not common.clicker_alive():
+                script.status = "失败"
+                self.log("click_from_file.exe 未在消费坐标（可能已退出或被拦截），已中止后续任务")
+                break
 
             # 任务切换兜底：
             # 1) 先关闭上一任务残留的礼包广告 / 结算 / 战斗失败弹窗；

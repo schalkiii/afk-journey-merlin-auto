@@ -78,14 +78,14 @@ def main(paid_times=0):
     wanfamulu_path = os.path.join(templates_dir, "wanfamulu.png")
     if not wait_and_click(wanfamulu_path, "wanfamulu", threshold=0.7, recover_threshold=20):
         print("未找到wanfamulu，任务终止")
-        return
+        return False
     time.sleep(2)
     
     # 2. 识别并点击guajiguanqia
     guajiguanqia_path = os.path.join(templates_dir, "guajiguanqia.png")
     if not wait_and_click(guajiguanqia_path, "guajiguanqia"):
         print("未找到guajiguanqia，任务终止")
-        return
+        return False
     time.sleep(2)
     
     # 3. 检查是否出现guajijiangli或shouhuojiangli
@@ -216,6 +216,7 @@ def main(paid_times=0):
         print("点击exit退出成功")
     
     print("收取挂机奖励任务执行完成！")
+    return True
 
 if __name__ == "__main__":
     main()

@@ -108,7 +108,7 @@ def flow_pata():
 
 def main():
     """主函数，供其他脚本调用"""
-    flow_pata()
+    return flow_pata()
 
 if __name__ == "__main__":
     main()

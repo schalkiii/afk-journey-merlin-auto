@@ -14,14 +14,14 @@ def main():
     caidan_path = os.path.join(templates_dir, "caidan.png")
     if not wait_and_click(caidan_path, "caidan"):
         print("未找到caidan，任务终止")
-        return
+        return False
     time.sleep(2)
     
     # 2. 识别并点击youjian
     youjian_path = os.path.join(templates_dir, "youjian.png")
     if not wait_and_click(youjian_path, "youjian"):
         print("未找到youjian，任务终止")
-        return
+        return False
     time.sleep(2)
     
     # 3. 检查是 yueduquanbu 还是 notyueduquanbu
@@ -41,32 +41,33 @@ def main():
         # 3. 识别并点击yueduquanbu
         if not wait_and_click(yueduquanbu_path, "yueduquanbu"):
             print("未找到yueduquanbu，任务终止")
-            return
+            return False
         time.sleep(2)
         
         # 4. 识别并点击dianjikongbaichuguanbi
         dianjikongbaichuguanbi_path = os.path.join(templates_dir, "dianjikongbaichuguanbi.png")
         if not wait_and_click(dianjikongbaichuguanbi_path, "dianjikongbaichuguanbi"):
             print("未找到dianjikongbaichuguanbi，任务终止")
-            return
+            return False
         time.sleep(2)
     else:
         print("未检测到 yueduquanbu 或 notyueduquanbu，任务终止")
-        return
+        return False
     
     # 5. 点击exit
     exit_path = os.path.join(templates_dir, "exit.png")
     if not wait_and_click(exit_path, "exit"):
         print("未找到exit，任务终止")
-        return
+        return False
     time.sleep(2)
     
     # 6. 再次点击exit
     if not wait_and_click(exit_path, "exit"):
         print("未找到exit，任务终止")
-        return
+        return False
     
     print("邮件任务执行完成！")
+    return True
 
 if __name__ == "__main__":
     main()

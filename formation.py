@@ -9,7 +9,7 @@ import json
 import os
 import time
 
-from common import find_center, get_resource_path, get_template_path, send_coord
+from common import find_center, get_config_path, get_template_path, send_coord
 from drag_utils import send_drag
 
 
@@ -22,7 +22,7 @@ def deploy_formation(formation_name: str,
                      deselect_offset_y: int = -50,
                      drag_repeat: int = 2):
     # ① 加载阵容配置
-    cfg_path = get_resource_path(formation_config_path)
+    cfg_path = get_config_path(formation_config_path)
     if not os.path.exists(cfg_path):
         print(f"阵容配置文件不存在: {cfg_path}")
         return False
@@ -47,7 +47,7 @@ def deploy_formation(formation_name: str,
     anchor_x, anchor_y = anchor
 
     # ③ 加载格子映射
-    offsets_path = get_resource_path(grid_offsets_path)
+    offsets_path = get_config_path(grid_offsets_path)
     if not os.path.exists(offsets_path):
         print(f"格子偏移文件不存在: {offsets_path}")
         return False

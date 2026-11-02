@@ -13,11 +13,13 @@
 """
 
 import contextlib
+import ctypes
 import hashlib
 import os
 import shutil
 import sys
 import time
+from ctypes import wintypes
 
 import cv2
 import numpy as np
@@ -165,6 +167,20 @@ def get_work_path(relative_path):
         base_path = os.path.dirname(__file__)
     return os.path.join(base_path, relative_path)
 
+
+def get_config_path(relative_path):
+    """获取用户可编辑配置的路径：优先工作目录（exe 同目录），不存在才回退打包内置副本。
+
+    `get_resource_path` 在打包后指向 sys._MEIPASS（临时解压目录、只读且可能被杀软清理），
+    只适合打包内置的只读资源。阵容 / 迷宫 / 格子映射这类文件用户会直接改 exe 同目录的那份，
+    必须走本函数，否则改了不生效。
+    """
+    work_path = get_work_path(relative_path)
+    if os.path.exists(work_path):
+        return work_path
+    return get_resource_path(relative_path)
+
+
 # 坐标 IPC 文件：send_coord 写入、click_from_file.exe(AHK) 读取后执行点击
 coord_path = get_work_path("shared\\target_coord.txt")
 # 单步匹配超时（秒）与轮询间隔（秒），供 wait_and_click 使用
@@ -232,18 +248,62 @@ def invalidate_screenshot_cache():
     _screenshot_cache["ts"] = 0.0
 
 
+# ===== 模板匹配搜索区域限定（性能）=====
+# 桌面分辨率可能远大于游戏窗口（实测双屏 3840x1080 = 4.15MP，而游戏客户区 1600x900 = 1.44MP），
+# 全屏 matchTemplate 单次实测 216-357ms；限定到客户区后降到 73-106ms（约 3 倍）。
+# 匹配结果仍换算成全屏绝对坐标，因此 send_coord / AHK 一侧的语义完全不变。
+GAME_WINDOW_TITLE = "剑与远征：启程"
+_client_region = {"rect": None, "resolved": False}
+
+
+def game_client_region(refresh=False):
+    """返回游戏窗口客户区的全屏矩形 (x, y, w, h)；取不到窗口时返回 None 表示应回退全屏。
+
+    结果按窗口位置缓存；调用方在「按缓存区域匹配不到」时应带 refresh=True 再取一次，
+    以兼容用户在运行中拖动游戏窗口——此时会自动退回全屏搜索，不会漏判。
+    """
+    if _client_region["resolved"] and not refresh:
+        return _client_region["rect"]
+    rect = None
+    try:
+        user32 = ctypes.windll.user32
+        hwnd = user32.FindWindowW(None, GAME_WINDOW_TITLE)
+        if hwnd:
+            client = wintypes.RECT()
+            user32.GetClientRect(hwnd, ctypes.byref(client))
+            corner = wintypes.POINT(0, 0)
+            user32.ClientToScreen(hwnd, ctypes.byref(corner))
+            if client.right > 0 and client.bottom > 0:
+                rect = (corner.x, corner.y, client.right, client.bottom)
+    except (AttributeError, OSError, ctypes.ArgumentError):
+        rect = None   # 非 Windows（无 windll）/ 系统调用失败：保持原有全屏匹配行为
+    _client_region["rect"] = rect
+    _client_region["resolved"] = True
+    return rect
+
+
+def _resolve_search_region(region):
+    """调用方显式给了 region 就原样用；否则用游戏客户区（取不到则 None = 全屏）。"""
+    return region if region else game_client_region()
+
+
 def find_center(template_path, threshold=0.8):
     """在截图中匹配模板，命中则返回其中心坐标 (x, y)，否则返回 None。
 
     使用 TM_CCOEFF_NORMED：对亮度/对比度变化不敏感，适合游戏 UI 这类
     整体色彩随场景浮动但局部纹理稳定的目标；默认阈值 0.8 在误触与漏触间取折中。
+    搜索默认限定在游戏客户区（见 game_client_region），返回值仍是全屏绝对坐标。
     """
     template = load_template(template_path)
     template_h, template_w = template.shape[:2]
 
     screenshot = get_cached_screenshot()
-    # res 为与截图同尺寸的相关性矩阵，值越大表示越像模板
-    match_result = cv2.matchTemplate(screenshot, template, cv2.TM_CCOEFF_NORMED)
+    region = _resolve_search_region(None)
+    search_area = _clip_to_region(screenshot, region)
+    if search_area is None:
+        return None
+    # res 为与搜索区域同尺寸的相关性矩阵，值越大表示越像模板
+    match_result = cv2.matchTemplate(search_area, template, cv2.TM_CCOEFF_NORMED)
     _, max_val, _, max_loc = cv2.minMaxLoc(match_result)
 
     if PRINT_MATCH_SCORE:
@@ -252,11 +312,26 @@ def find_center(template_path, threshold=0.8):
     if max_val < threshold:
         return None
 
-    # max_loc 为模板左上角坐标，加上半宽半高得到中心
-    top_left = max_loc
-    center_x = top_left[0] + template_w // 2
-    center_y = top_left[1] + template_h // 2
+    # max_loc 为模板左上角坐标，加上半宽半高得到中心；限定区域时补偿回全屏坐标
+    center_x = max_loc[0] + template_w // 2
+    center_y = max_loc[1] + template_h // 2
+    if region:
+        center_x += region[0]
+        center_y += region[1]
     return center_x, center_y
+
+
+def _clip_to_region(screenshot, region):
+    """按 region 裁剪画面；region 为空表示整屏。裁剪后放不下模板时返回 None。"""
+    if not region:
+        return screenshot
+    x = max(0, region[0])
+    y = max(0, region[1])
+    roi_w = min(region[2], screenshot.shape[1] - x)
+    roi_h = min(region[3], screenshot.shape[0] - y)
+    if roi_w <= 0 or roi_h <= 0:
+        return None
+    return screenshot[y:y + roi_h, x:x + roi_w]
 
 
 def find_center_silent(template_path, threshold=0.8, region=None, timeout=0, interval=0.5):
@@ -265,7 +340,8 @@ def find_center_silent(template_path, threshold=0.8, region=None, timeout=0, int
     与 find_center 的唯一区别是不输出相似度分数——适合在紧循环里高频调用，
     例如战斗监控、结算弹窗轮询，避免日志被分数刷屏。所有子脚本统一复用本实现，
     既消除各脚本重复定义，也保证 F9 停止检查（check_stop 内）一致生效。
-    region: 限定搜索范围 (x, y, w, h) 以加快匹配；None 表示整屏。返回整屏绝对坐标。
+    region: 限定搜索范围 (x, y, w, h) 以加快匹配；None 表示用游戏客户区（取不到窗口时
+            才退回整屏）。返回值始终是整屏绝对坐标。
     timeout: 持续轮询等待模板出现的秒数；0（默认）表示仅检测一次立即返回。
     interval: 轮询间隔（秒）。
 
@@ -275,34 +351,35 @@ def find_center_silent(template_path, threshold=0.8, region=None, timeout=0, int
     template = load_template(template_path)
     template_h, template_w = template.shape[:2]
 
+    search_region = _resolve_search_region(region)
+    region_refreshed = False
     start_time = time.time()
     while True:
         check_stop()
         screenshot = get_cached_screenshot()
-        if region:
-            # 裁剪到图像有效范围：避免负坐标/越界导致 OpenCV 报错或误匹配
-            x = max(0, region[0])
-            y = max(0, region[1])
-            roi_w = min(region[2], screenshot.shape[1] - x)
-            roi_h = min(region[3], screenshot.shape[0] - y)
-            if roi_w <= 0 or roi_h <= 0:
-                return None
-            search_area = screenshot[y:y + roi_h, x:x + roi_w]
-            if search_area.shape[0] < template_h or search_area.shape[1] < template_w:
-                return None
-            match_result = cv2.matchTemplate(search_area, template, cv2.TM_CCOEFF_NORMED)
-        else:
-            match_result = cv2.matchTemplate(screenshot, template, cv2.TM_CCOEFF_NORMED)
+        search_area = _clip_to_region(screenshot, search_region)
+        if search_area is None:
+            return None
+        if search_area.shape[0] < template_h or search_area.shape[1] < template_w:
+            return None
+        match_result = cv2.matchTemplate(search_area, template, cv2.TM_CCOEFF_NORMED)
 
         _, max_val, _, max_loc = cv2.minMaxLoc(match_result)
         if max_val >= threshold:
             # max_loc 为模板左上角坐标，加上半宽半高得到中心；region 裁剪需补偿偏移
             center_x = max_loc[0] + template_w // 2
             center_y = max_loc[1] + template_h // 2
-            if region:
-                center_x += region[0]
-                center_y += region[1]
+            if search_region:
+                center_x += search_region[0]
+                center_y += search_region[1]
             return center_x, center_y
+
+        # 限定区域后漏判的首要原因是用户在运行中拖动了窗口：刷新一次窗口矩形再试，
+        # 取不到窗口时会自动退化为整屏匹配，行为与限定前一致。
+        if region is None and not region_refreshed:
+            region_refreshed = True
+            search_region = game_client_region(refresh=True)
+            continue
 
         if timeout <= 0:
             return None
@@ -316,26 +393,23 @@ def click_blank_to_exit():
 
     当「点击空白处关闭」(dianjikongbaichuguanbi) 模板检测不到时使用：
     游戏弹窗背后通常是可点击的半透明遮罩，点击远离弹窗中心的空白处即可关闭。
-    这里点击屏幕底部居中（通常位于弹窗下方、远离按钮）的空白区域。
+    这里点击屏幕**左下角**空白区：底部居中位置与多个面板的主操作按钮重合
+    （结社战线「扫荡」、狩猎悬赏「搜寻精怪」、愿望单「交付」都在底部居中一带），
+    兜底点击若落在那里，会在关弹窗的同时误触发按钮。
     """
     h, w = screenshot_bgr().shape[:2]
-    # 底部居中：一般处于居中弹窗下方，是安全的可点击空白
-    send_coord(w // 2, int(h * 0.85))
+    send_coord(int(w * 0.12), int(h * 0.8))
     time.sleep(0.5)
 
 
 def dismiss_popup():
     """关闭游戏内弹窗（礼包广告 / 结算 / 战斗失败提示等）的兜底。
 
-    优先点击「点击空白处关闭」(dianjikongbaichuguanbi) 模板；若检测不到，
-    则点击屏幕空白处兜底。供任务切换（清理上一任务残留弹窗）与战斗任务
-    失败清理复用，避免弹窗卡死后续流程。
+    优先按「点击空白处关闭」提示定位、并点它左上方的空白处（避开热区避免误触按钮）；
+    若检测不到该提示，则点击屏幕左下空白处兜底。供任务切换（清理上一任务残留弹窗）
+    与战斗任务失败清理复用，避免弹窗卡死后续流程。
     """
-    tpl_blank_close = get_template_path("dianjikongbaichuguanbi.png")
-    pos = find_center_silent(tpl_blank_close, 0.8)
-    if pos:
-        send_coord(*pos)
-        time.sleep(0.5)
+    if dismiss_popup_away_from():
         return True
     # 模板检测不到时点击屏幕空白处兜底（兼容礼包广告等非标准弹窗）
     click_blank_to_exit()
@@ -441,13 +515,46 @@ def try_auto_configure_lineup(threshold=0.8, retries=3):
 
     return False
 
+class ClickerNotRunning(RuntimeError):
+    """click_from_file.exe 已退出，坐标不再被消费——点击全部落空。"""
+
+
+# 连续多少次坐标未被消费才判定点击器已退出：偶发的一次超时（窗口卡顿、系统繁忙）不算故障
+CLICKER_MISS_LIMIT = 3
+_clicker_miss = {"streak": 0}
+
+
+def clicker_alive():
+    """探测 click_from_file.exe 是否还在消费坐标文件。
+
+    用「当前光标位置」作哨兵值而非固定坐标：点击器读到后会移动鼠标到该点，
+    若用 (-1,-1) 之类的值会把光标甩到屏幕角落。
+    """
+    if os.path.exists(coord_path):
+        return False   # 上一条坐标都没人取走，必然没在运行
+    point = wintypes.POINT()
+    if not ctypes.windll.user32.GetCursorPos(ctypes.byref(point)):
+        return True    # 拿不到光标位置（非 Windows）：无法判断，按存活处理，不阻断流程
+    with open(coord_path, "w", encoding="utf-8") as f:
+        f.write(f"{point.x} {point.y}")
+    deadline = time.time() + 1.0
+    while time.time() < deadline:
+        if not os.path.exists(coord_path):
+            return True
+        time.sleep(0.05)
+    return False
+
+
 def send_coord(x, y):
     """将待点击坐标写入 IPC 文件，等待 AHK 消费完成后返回。
 
     先自旋等待上一条坐标被消费（文件消失），避免 AHK 尚未读取就被覆盖；
     写入后等待 AHK 读走本次坐标（文件被删除）再返回，替代原先无条件 0.5s 睡等——
-    既更快（命中即返回），又更稳健（确保点击已发生）；AHK 未运行则退化为 0.5s 超时，
-    行为与旧版一致（不崩溃）。期间 check_stop 允许 F9 中断。
+    既更快（命中即返回），又更稳健（确保点击已发生）。期间 check_stop 允许 F9 中断。
+
+    click_from_file.exe 会在长时间运行后自行退出，此后所有点击都会静默落空、界面表现为
+    「连续多轮无变化」。因此连续 CLICKER_MISS_LIMIT 次坐标无人消费即抛 ClickerNotRunning，
+    让调用方立即失败并报出真实原因，而不是空转到各流程自己的超时上限。
     """
     check_stop()
     wait_count = 0
@@ -459,13 +566,22 @@ def send_coord(x, y):
     with open(coord_path, "w", encoding="utf-8") as f:
         f.write(f"{x} {y}")
 
-    # 等 AHK 读走本次坐标（文件被删除）再返回；最多 0.5s，超时则按旧逻辑直接返回
+    # 等 AHK 读走本次坐标（文件被删除）再返回；最多 0.5s
     deadline = time.time() + 0.5
     while os.path.exists(coord_path):
         check_stop()
         if time.time() >= deadline:
             break
         time.sleep(0.02)
+
+    if os.path.exists(coord_path):
+        _clicker_miss["streak"] += 1
+        if _clicker_miss["streak"] >= CLICKER_MISS_LIMIT:
+            _clicker_miss["streak"] = 0
+            log("点击注入未生效：click_from_file.exe 可能已退出，请重启程序或检查杀软拦截")
+            raise ClickerNotRunning("click_from_file.exe 未在消费坐标")
+    else:
+        _clicker_miss["streak"] = 0
 
 
 def click_position(pos, wait=1.5, twice=True):

@@ -9,7 +9,7 @@ from common import (
     click_and_wait,
     click_template,
     find_center,
-    get_resource_path,
+    get_config_path,
     get_template_path,
     load_template,
     screenshot_bgr,
@@ -30,7 +30,7 @@ _run_params = {}
 
 def load_config():
     global _config
-    with open(get_resource_path("migong_config.json"), encoding="utf-8") as f:
+    with open(get_config_path("migong_config.json"), encoding="utf-8") as f:
         _config = json.load(f)
     return _config
 
