@@ -697,6 +697,13 @@ class PushFlow:
             print("点击 end(k) 失败，退出推图。")
             return self._done(False)
         if not self._wait_for_entry(timeout=10.0):
+            # 结果页仍在说明点击没生效（窗口激活吞点击/页面动画未结束）；
+            # 用左下角返回箭头兜底退出结果页，再确认模式入口。
+            if find_center_silent(tpl_end, 0.8, timeout=1.0):
+                print("end(k) 后未确认入口且结果页仍在，尝试返回箭头兜底。")
+                wait_and_click(tpl_exit, "exit(j)_end", 0.8, timeout=3.0)
+                if self._wait_for_entry(timeout=10.0):
+                    return STATE_NEED_ENTRY
             print("点击 end(k) 后未确认返回模式入口。")
             return self._done(False)
         return STATE_NEED_ENTRY
