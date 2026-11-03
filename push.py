@@ -436,6 +436,9 @@ MAX_LINEUP_SCAN = 30
 RIGHT_RETRY_COUNT = 3
 RIGHT_RETRY_TIMEOUT = 1.0
 
+# repeat(e) 的首次点击同样可能被窗口激活/结算动画吞掉，与模式入口一致重试一次
+REPEAT_CLICK_RETRY = 2
+
 # 整个推图流程最多允许的状态切换次数（安全阀）
 MAX_TRANSITIONS = 500
 
@@ -575,6 +578,34 @@ class PushFlow:
             )
             if next_path:
                 return next_path
+        return None
+
+    def _click_repeat_and_confirm(self):
+        """点击 repeat(e) 并确认回到推图/阵容界面。
+
+        确认后仍看不到目标界面时，只有失败页还在才重试点击；界面已经变化时再点
+        repeat 会点到不存在或错误的位置。
+        """
+        candidates = [
+            (tpl_autocha, 0.8),
+            (tpl_oneclick, 0.8),
+            (tpl_right, 0.8),
+            (tpl_artificial, 0.8),
+            (tpl_lineup, 0.8),
+        ]
+        for attempt in range(1, REPEAT_CLICK_RETRY + 1):
+            action_name = f"repeat(e)({attempt})"
+            if not wait_and_click(tpl_repeat, action_name, 0.8):
+                print(f"点击 {action_name} 失败，退出推图。")
+                return None
+            post_repeat = self._wait_for_any_state(candidates, timeout=10.0)
+            if post_repeat:
+                return post_repeat
+            if not find_center_silent(tpl_fail, 0.8, timeout=1.0):
+                print(f"点击 {action_name} 后未确认界面，且已经不在失败页，不再盲点。")
+                return None
+            print(f"点击 {action_name} 后失败页仍在，重试点击 repeat(e)。")
+        print(f"连续 {REPEAT_CLICK_RETRY} 次点击 repeat(e) 后仍未确认界面。")
         return None
 
     def _st_enter(self):
@@ -719,24 +750,13 @@ class PushFlow:
             self.stop_reason = "fail_limit"
             # 先尽量点 repeat 回到推图界面，再由 exit 状态统一退出
             wait_and_click(tpl_repeat, "repeat(e)_limit", 0.8, timeout=3.0)
+            if find_center_silent(tpl_fail, 0.8, timeout=1.0):
+                # 仍在失败页说明这次点击被吞，再补一次，避免带着结算页进入退出流程
+                wait_and_click(tpl_repeat, "repeat(e)_limit_retry", 0.8, timeout=2.0)
             return STATE_EXIT
 
-        if not wait_and_click(tpl_repeat, "repeat(e)", 0.8):
-            print("点击 repeat(e) 失败，退出推图。")
-            return self._done(False)
-
-        post_repeat = self._wait_for_any_state(
-            [
-                (tpl_autocha, 0.8),
-                (tpl_oneclick, 0.8),
-                (tpl_right, 0.8),
-                (tpl_artificial, 0.8),
-                (tpl_lineup, 0.8),
-            ],
-            timeout=10.0,
-        )
+        post_repeat = self._click_repeat_and_confirm()
         if not post_repeat:
-            print("点击 repeat(e) 后未确认返回推图或阵容界面。")
             return self._done(False)
         if post_repeat == tpl_autocha:
             return STATE_START_BATTLE
