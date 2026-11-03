@@ -30,3 +30,32 @@ def test_success_resets_failure_counter(monkeypatch):
 
     assert flow._st_on_end() == push.STATE_NEED_ENTRY
     assert flow.consecutive_failures == 0
+
+
+def test_flow_push_stop_reason_resets_even_if_start_fails(monkeypatch):
+    """初始化/运行提前抛异常时不能残留上一轮的 fail_limit，否则循环推图会误停。"""
+    import flow_push
+
+    flow_push.LAST_STOP_REASON = "fail_limit"
+
+    def _raise(*args, **kwargs):
+        raise RuntimeError("start failed")
+
+    monkeypatch.setattr(flow_push, "_push_flow", _raise)
+    try:
+        flow_push.flow_push_mode1()
+    except RuntimeError:
+        pass
+    assert flow_push.LAST_STOP_REASON == ""
+
+    push.LAST_STOP_REASON = "fail_limit"
+
+    def _raise_init():
+        raise RuntimeError("init failed")
+
+    monkeypatch.setattr(push, "init_templates_from_dir", _raise_init)
+    try:
+        push.flow_push_mode1()
+    except RuntimeError:
+        pass
+    assert push.LAST_STOP_REASON == ""

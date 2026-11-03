@@ -879,6 +879,8 @@ def flow_push_mode1(mode="normal", skip_manual=True, retry_count=3,
     max_consecutive_failures: 连续失败达到该次数后结束本轮推图（1-99）
     """
     global LAST_STOP_REASON
+    # 先清空：若初始化/运行提前抛异常，调用方不会读到上一次运行的停止原因
+    LAST_STOP_REASON = ""
     init_templates_from_dir()
     flow = PushFlow(
         mode=mode,
@@ -893,7 +895,9 @@ def flow_push_mode1(mode="normal", skip_manual=True, retry_count=3,
 
 def main(skip_manual=True, retry_count=3, max_consecutive_failures=10):
     """主函数，供其他脚本调用"""
+    global LAST_STOP_REASON
     if DEBUG_MODE:
+        LAST_STOP_REASON = ""
         debug_lineup_recognition()
         return True
     else:

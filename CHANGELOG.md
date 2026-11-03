@@ -17,6 +17,7 @@
 
 ### 推图连续失败上限
 - `push.PushFlow` 新增 `max_consecutive_failures`（默认 10，范围 1–99）：失败次数**跨阵容累计**，`end(k)` 成功推进后清零；达到上限时记录 `LAST_STOP_REASON = "fail_limit"` 并退出。配置位于 `push_settings.max_consecutive_failures`，GUI 推图参数面板新增「连续失败上限」输入框，幻灵推图 / 推图 / 循环推图共享；循环推图命中上限时整体停止，不再无限换阵容重试。
+- **循环推图语义澄清**：每轮固定先幻灵、后普通，两种都跑完才进入下一轮；单个模式失败/异常会继续跑本轮另一种、下一轮仍从幻灵开始。停止条件为 F9、任一模式命中连续失败上限、连续 3 轮整轮 <30 秒；README 已按此改写。`LAST_STOP_REASON` 在调试模式与初始化提前异常时会先清空，避免误用上一轮的 `fail_limit`。
 - 新增 `tests/test_push_fail_limit.py`：覆盖达到上限转退出、成功推进清零。
 
 ### 运行日志与任务状态增强

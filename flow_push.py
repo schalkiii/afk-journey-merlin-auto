@@ -16,6 +16,8 @@ LAST_STOP_REASON = ""
 
 def flow_push_mode1(skip_manual=True, retry_count=3, max_consecutive_failures=10):
     global LAST_STOP_REASON
+    # 若 push 侧提前抛异常，保持空值，避免调用方读到上一次的 fail_limit
+    LAST_STOP_REASON = ""
     result = _push_flow(
         mode="huanling",
         skip_manual=skip_manual,
