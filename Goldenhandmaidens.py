@@ -139,6 +139,9 @@ class GameBotGUI:
             ScriptConfig("挂机奖励", enabled=False, params={"paid_times": 0}, daily_reset=True),
             ScriptConfig("商城", enabled=False, daily_reset=True),
             ScriptConfig("日常任务", enabled=False, daily_reset=True),
+            # 红点领取覆盖任务面板各页签与赛季手册里程碑，与「日常任务」互补：
+            # 日常任务只点每日/公会的一键领取，这里把成长挑战/赛季任务/家园目标也扫一遍。
+            ScriptConfig("红点领取", enabled=False, daily_reset=True),
             ScriptConfig("爬塔", enabled=False),
             ScriptConfig("幻灵推图", enabled=False),
             ScriptConfig("推图", enabled=False),
@@ -1343,6 +1346,10 @@ class GameBotGUI:
         import meirirenwulingqu
         return meirirenwulingqu.main()
 
+    def _run_hongbaolingqu(self, script):
+        import hongbaolingqu
+        return hongbaolingqu.main()
+
     def _run_yuanwangdan(self, script):
         import yuanwangdan
         return yuanwangdan.main()
@@ -1492,6 +1499,7 @@ class GameBotGUI:
             "挂机奖励": self._run_guajijiangli,
             "商城": self._run_shangcheng,
             "日常任务": self._run_meiri,
+            "红点领取": self._run_hongbaolingqu,
             "结社战线": self._run_jieshezhanxian,
             "狩猎悬赏": self._run_lieshouxunshang,
             "家园愿望单": self._run_yuanwangdan,

@@ -584,6 +584,8 @@ def ensure_game_clickable():
         # 即使点击点属于游戏窗口，只要窗口不在前台，系统也可能把第一次点击用于激活而吞掉：
         # 先显式切前台，保证这次点击一定落到游戏上（实测幻灵入口偶发首次点击丢失）。
         _activate_game_window(hwnd)
+        # 激活是异步的：不等一下就把坐标写过去，这一次点击仍可能被正在发生的窗口切换吃掉
+        time.sleep(0.25)
         now = time.time()
         if now - _auto_activate["last_log"] > 5.0:
             _auto_activate["last_log"] = now
