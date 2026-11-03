@@ -270,7 +270,7 @@ shouquguajijiangli.py    挂机奖励（免费 / 付费次数领取）
 shangcheng.py            商城（含友意商城 youyishangcheng）
 youyishangcheng.py       友谊商城（被 shangcheng.py 调用）
 meirirenwulingqu.py      日常任务（领取）
-hongbaolingqu.py         红点奖励领取（任务面板各页签 + 赛季手册里程碑）
+hongbaolingqu.py         红点奖励领取（任务面板各页签 + 赛季手册 + 月桂之旅 + 当前进度挂机收益/里程碑）
 yuanwangdan.py           家园愿望单（一键选择交付，库存不足时自动制作补货）
 jieshezhanxian.py        结社战线（挑战到失败为止，再一次扫满剩余扫荡次数）
 lieshouxunshang.py       狩猎悬赏（用掉自己的搜寻精怪次数 + 参加队友悬赏）
@@ -284,6 +284,10 @@ version.py                本地版本号
 launch_game.py            命令行启动游戏并可联动启动本项目脚本（新增）
 click_from_file.exe       AHK 注入器（读取坐标文件执行点击）
 templates/                界面模板图片
+doc/                      规范与方法学：
+  doc/TEMPLATE-AUTHORING.md   模板采集与标定规范（新增/替换模板前必读）
+  doc/LIVE-DEBUGGING.md       实机开发与调试方法学（怎么发起实跑、怎么校验点击生效、收尾链）
+  doc/AUDIT-REPORT-*.md       阶段性审计报告（历史快照，非现役结论）
 game_bot_config.json      用户配置（运行时生成）
 game_bot.log              本地持久化日志（运行日志写入文件，可在程序「运行日志」窗口查看 / 刷新 / 清空）
 config.json               启动器/脚本默认配置（新增）
