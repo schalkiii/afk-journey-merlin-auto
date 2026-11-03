@@ -26,6 +26,7 @@ import sys
 import threading
 import time
 import tkinter as tk
+import traceback
 from datetime import datetime, timedelta
 from tkinter import messagebox, ttk
 
@@ -111,6 +112,13 @@ class GameBotGUI:
         # 「自动配置通关阵容」选项：挑战前尝试自动采用 tongguanzhenrong / yijiancaiyong
         self.auto_configure_lineup = self.config.get("auto_configure_lineup", False)
         self.auto_configure_lineup_var = tk.BooleanVar(value=self.auto_configure_lineup)
+
+        # 远程桌面兼容：后台截图（游戏被遮挡也能识别）+ 点击前自动激活游戏窗口。
+        # 单屏远程桌面里机器人窗口常盖住游戏，普通截图/坐标点击都会落到机器人自己身上。
+        self.remote_desktop_compat = self.config.get("remote_desktop_compat", True)
+        self.remote_desktop_compat_var = tk.BooleanVar(value=self.remote_desktop_compat)
+        common.set_background_capture(self.remote_desktop_compat)
+        common.set_auto_activate(self.remote_desktop_compat)
 
         # 定时开始（每天循环）：存储为 "HH:MM" 或 None
         self.schedule_time = self.config.get("schedule_time", None)
@@ -232,6 +240,12 @@ class GameBotGUI:
         self.version_label = ttk.Label(top_frame, text=__version__, foreground="gray")
         self.version_label.pack(side=tk.RIGHT, padx=5)
 
+        self.current_task_var = tk.StringVar(value="当前任务: 无")
+        self.current_task_label = ttk.Label(
+            top_frame, textvariable=self.current_task_var, foreground="blue"
+        )
+        self.current_task_label.pack(side=tk.RIGHT, padx=10)
+
         self.clear_log_btn = ttk.Button(
             control_frame,
             text="清空日志",
@@ -285,6 +299,14 @@ class GameBotGUI:
             command=self.on_auto_configure_changed
         )
         self.auto_configure_lineup_check.pack(side=tk.LEFT, padx=5)
+
+        self.remote_desktop_check = ttk.Checkbutton(
+            opt_frame,
+            text="远程桌面兼容（后台截图+自动激活）",
+            variable=self.remote_desktop_compat_var,
+            command=self.on_remote_desktop_changed
+        )
+        self.remote_desktop_check.pack(side=tk.LEFT, padx=5)
 
         ttk.Label(opt_frame, text="游戏等待(s)").pack(side=tk.LEFT, padx=(10, 0))
         self.game_wait_spin = ttk.Spinbox(
@@ -656,6 +678,20 @@ class GameBotGUI:
         ).grid(row=row, column=1, sticky=tk.W, pady=2)
         row += 1
 
+        # 连续失败上限：跨阵容累计，达到后结束本轮推图（避免阵容全灭后无限重试）
+        ttk.Label(self.param_frame, text="连续失败上限 (1-99):").grid(row=row, column=0, sticky=tk.W, pady=2)
+        self.max_failures_var = tk.IntVar(
+            value=push_settings.get("max_consecutive_failures", 10)
+        )
+        ttk.Spinbox(
+            self.param_frame,
+            from_=1,
+            to=99,
+            textvariable=self.max_failures_var,
+            width=5
+        ).grid(row=row, column=1, sticky=tk.W, pady=2)
+        row += 1
+
         # Spinbox 的绑定
         for child in self.param_frame.winfo_children():
             if isinstance(child, ttk.Spinbox):
@@ -665,10 +701,22 @@ class GameBotGUI:
         ttk.Label(self.param_frame, text="注: 幻灵推图、推图、循环推图共享此设置").grid(
             row=row, column=0, columnspan=2, sticky=tk.W, pady=5)
 
+    @staticmethod
+    def _clamp_int_var(var, default, minimum, maximum):
+        """读取 Spinbox 变量并收敛到合法范围；空值/非法输入回退默认值。"""
+        try:
+            value = int(var.get())
+        except (tk.TclError, ValueError, TypeError):
+            value = default
+        value = max(minimum, min(maximum, value))
+        var.set(value)
+        return value
+
     def on_push_param_change(self):
         self.config["push_settings"] = {
             "skip_manual": self.skip_manual_var.get(),
-            "retry_count": self.retry_count_var.get(),
+            "retry_count": self._clamp_int_var(self.retry_count_var, 3, 1, 3),
+            "max_consecutive_failures": self._clamp_int_var(self.max_failures_var, 10, 1, 99),
         }
         self.save_config()
         
@@ -970,6 +1018,15 @@ class GameBotGUI:
         self.config["auto_configure_lineup"] = self.auto_configure_lineup
         self.save_config()
 
+    def on_remote_desktop_changed(self):
+        """切换远程桌面兼容：同时控制后台截图与点击前自动激活。"""
+        self.remote_desktop_compat = self.remote_desktop_compat_var.get()
+        common.set_background_capture(self.remote_desktop_compat)
+        common.set_auto_activate(self.remote_desktop_compat)
+        self.save_config()
+        state = "开启" if self.remote_desktop_compat else "关闭"
+        self.log(f"远程桌面兼容模式已{state}")
+
     def on_game_wait_changed(self):
         try:
             val = int(self.game_wait_var.get())
@@ -1002,6 +1059,14 @@ class GameBotGUI:
             self.master_switch_btn.configure(text="停止运行 (F9)")
         else:
             self.master_switch_btn.configure(text="开始运行 (F8)")
+
+    def _set_current_task(self, name):
+        """主线程更新「当前任务」标签与窗口标题，便于远程查看运行到哪一项。"""
+        self.current_task_var.set(f"当前任务: {name}")
+        if name == "无":
+            self.root.title("梅林初号机")
+        else:
+            self.root.title(f"梅林初号机 - 运行中: {name}")
 
     def start_all(self):
         """按功能列表当前顺序运行全部已勾选的功能。"""
@@ -1042,6 +1107,7 @@ class GameBotGUI:
         self.stop_event.set()
         self.is_running = False
         self.update_master_button()
+        self._set_current_task("无")
         
         for script in self.scripts:
             if script.status == "运行中":
@@ -1299,6 +1365,7 @@ class GameBotGUI:
         flow_push.main(
             skip_manual=ps.get("skip_manual", True),
             retry_count=ps.get("retry_count", 3),
+            max_consecutive_failures=ps.get("max_consecutive_failures", 10),
         )
         return True
 
@@ -1309,6 +1376,7 @@ class GameBotGUI:
         return bool(push.main(
             skip_manual=ps.get("skip_manual", True),
             retry_count=ps.get("retry_count", 3),
+            max_consecutive_failures=ps.get("max_consecutive_failures", 10),
         ))
 
     def _run_xunhuan(self, script):
@@ -1317,6 +1385,7 @@ class GameBotGUI:
         ps = self.config.get("push_settings", {})
         skip_manual = ps.get("skip_manual", True)
         retry_count = ps.get("retry_count", 3)
+        max_failures = ps.get("max_consecutive_failures", 10)
         loop_count = 0
         fast_rounds = 0
         while not self.stop_event.is_set():
@@ -1324,7 +1393,14 @@ class GameBotGUI:
             round_start = time.time()
             self.log(f"循环推图 第 {loop_count} 轮 - 幻灵推图开始")
             try:
-                huanling_result = flow_push.main(skip_manual=skip_manual, retry_count=retry_count)
+                huanling_result = flow_push.main(
+                    skip_manual=skip_manual,
+                    retry_count=retry_count,
+                    max_consecutive_failures=max_failures,
+                )
+                if flow_push.LAST_STOP_REASON == "fail_limit":
+                    self.log(f"幻灵推图连续失败达到 {max_failures} 次，停止循环推图。")
+                    break
                 if huanling_result is False:
                     # 单个模式结束/失败不是循环失败，按设计切换到普通推图继续下一轮
                     self.log("幻灵推图流程结束，切换到普通推图。")
@@ -1337,7 +1413,14 @@ class GameBotGUI:
 
             self.log(f"循环推图 第 {loop_count} 轮 - 推图开始")
             try:
-                push_result = push.main(skip_manual=skip_manual, retry_count=retry_count)
+                push_result = push.main(
+                    skip_manual=skip_manual,
+                    retry_count=retry_count,
+                    max_consecutive_failures=max_failures,
+                )
+                if push.LAST_STOP_REASON == "fail_limit":
+                    self.log(f"推图连续失败达到 {max_failures} 次，停止循环推图。")
+                    break
                 if push_result is False:
                     # 单个模式结束/失败不是循环失败，下一轮重新进入幻灵推图
                     self.log("普通推图流程结束，下一轮切换到幻灵推图。")
@@ -1415,6 +1498,16 @@ class GameBotGUI:
         # 先把子脚本的 print 调试日志转发到运行日志面板（经队列，主线程节流刷新）
         sys.stdout = _StdoutTee(self._enqueue_log)
 
+        capture_mode = "后台截图(WGC)" if self.remote_desktop_compat else "前台屏幕截图"
+        activate_mode = "开" if self.remote_desktop_compat else "关"
+        self.log(f"截图模式: {capture_mode}；点击前自动激活游戏: {activate_mode}")
+        region = common.game_client_region()
+        if region and (region[2], region[3]) != (1600, 900):
+            self.log(
+                f"警告: 游戏客户区当前为 {region[2]}×{region[3]}，模板按 1600×900 采集，"
+                "识别可能失败；请把游戏窗口恢复为 1600×900"
+            )
+
         # click_from_file.exe 是常驻监听程序（与各脚本通过 shared 目录 IPC 通信）。
         # 若已在运行则直接复用，避免每次点「开始」都重启 + 弹出新终端框造成约 1 秒卡顿；
         # 仅当未运行时才启动，并用 CREATE_NO_WINDOW 隐藏控制台窗口（性能与体验优化）。
@@ -1447,7 +1540,8 @@ class GameBotGUI:
         # 按调用方给定的脚本列表依次执行。列表由 start_all / run_single_script 从
         # self.scripts 生成，因此顺序就是功能列表里拖出来的顺序——不再维护独立的
         # script_order 常量（那样按钮顺序和执行顺序是两份数据，拖动改了也不生效）。
-        for script in list(scripts_to_run):
+        total = len(scripts_to_run)
+        for index, script in enumerate(list(scripts_to_run), 1):
             if self.stop_event.is_set():
                 break
 
@@ -1456,7 +1550,9 @@ class GameBotGUI:
 
             script.status = "运行中"
             self.root.after(0, self.update_script_panel)
-            self.log(f"开始执行: {script.name}")
+            self.root.after(0, self._set_current_task, f"{script.name} ({index}/{total})")
+            self.log(f"===== [{index}/{total}] 开始执行: {script.name} =====")
+            task_started = time.time()
 
             # 点击器退出后所有任务都只会空转，逐轮跑下去毫无意义：开局先确认它还活着
             if not common.clicker_alive():
@@ -1483,9 +1579,10 @@ class GameBotGUI:
                     # 导入失败统一捕获并返回 False（状态由下方 if/else 置为「失败」）
                     result = self._run_script_dispatch(script.name, script)
 
+                duration = time.time() - task_started
                 if result:
                     script.status = "完成"
-                    self.log(f"{script.name} 执行完成")
+                    self.log(f"[{index}/{total}] {script.name} 执行完成（耗时 {duration:.1f} 秒）")
                     
                     # 更新最后执行时间
                     script.last_run_time = datetime.now().isoformat()
@@ -1496,7 +1593,7 @@ class GameBotGUI:
                         self.log(f"{script.name} 已自动关闭（每日重置脚本）")
                 else:
                     script.status = "失败"
-                    self.log(f"{script.name} 执行失败")
+                    self.log(f"[{index}/{total}] {script.name} 执行失败（耗时 {duration:.1f} 秒）")
                     
             except common.StopRequested:
                 script.status = "已停止"
@@ -1505,7 +1602,9 @@ class GameBotGUI:
                 break
             except Exception as e:
                 script.status = "错误"
-                self.log(f"{script.name} 执行出错: {e!s}")
+                self.log(f"[{index}/{total}] {script.name} 执行出错（耗时 {time.time() - task_started:.1f} 秒）: {e!s}")
+                # 完整堆栈写入日志文件便于定位；面板只显示首行避免刷屏
+                append_log_file(traceback.format_exc())
                 
             self.root.after(0, self.update_script_panel)
             
@@ -1517,6 +1616,7 @@ class GameBotGUI:
         # 运行结束后保存（使 auto-disable / last_run_time 等状态持久化）
         # 保持 tee 接管（窗口模式下 sys.__stdout__ 为 None，直接重置会令后续 print 崩溃）
         sys.stdout = _StdoutTee(self._enqueue_log)
+        self.root.after(0, self._set_current_task, "无")
         self.save_config()
         self.root.after(0, self.stop_all)
         
@@ -1590,6 +1690,7 @@ class GameBotGUI:
         self.config["game_launch_delay"] = self.game_launch_delay
         self.config["schedule_time"] = self.schedule_time
         self.config["auto_configure_lineup"] = self.auto_configure_lineup
+        self.config["remote_desktop_compat"] = self.remote_desktop_compat
         
         # 保存到文件
         if save_config(self.config):

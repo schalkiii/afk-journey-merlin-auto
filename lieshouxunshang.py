@@ -74,6 +74,14 @@ def _enter_panel():
             return False
         click_position(hall_pos, SETTLE_DELAY, twice=False)
         if _find(tpl_title, timeout=PANEL_TIMEOUT) is not None:
+            # 标题比卡片/按钮先渲染：等内容按钮就绪再返回，否则后面 timeout=0 的检测
+            # 会在面板还没加载完时直接判空（实测导致「搜寻 0 次、加入 0 次」）。
+            deadline = time.time() + 6.0
+            while time.time() < deadline:
+                if _find(tpl_search) is not None or _find(tpl_join, JOIN_THRESHOLD) is not None:
+                    return True
+                time.sleep(0.5)
+            log("【狩猎悬赏】面板内容加载较慢，按已进入处理")
             return True
     log("【狩猎悬赏】点招牌后未进入悬赏面板")
     return False
@@ -84,7 +92,10 @@ def _close_settlements():
     for _ in range(MAX_POPUP_CLOSES):
         check_stop()
         if _find(tpl_title) is not None:
-            return True
+            # 点击后弹窗有短暂延迟：标题仍可见时再确认一次，避免提前返回把弹窗留在界面上
+            time.sleep(0.4)
+            if _find(tpl_title) is not None:
+                return True
         if not dismiss_popup_away_from():
             time.sleep(1.0)
     return _find(tpl_title) is not None
@@ -95,7 +106,8 @@ def _use_own_searches():
     searched = 0
     while searched < MAX_SEARCHES:
         check_stop()
-        search_pos = _find(tpl_search)
+        # 首次进入面板时按钮可能还在渲染；给 2 秒轮询，按钮确实变灰才判定次数用尽
+        search_pos = _find(tpl_search, timeout=2)
         if search_pos is None:
             break   # 按钮变灰：自己的次数已用尽
         click_position(search_pos, SETTLE_DELAY, twice=False)
@@ -124,7 +136,8 @@ def _join_others():
     joined = 0
     while joined < MAX_JOINS:
         check_stop()
-        join_pos = find_center_silent(tpl_join, JOIN_THRESHOLD, region=region)
+        # 加入后列表会重排，下一张卡片的按钮可能稍后才出现；给 2 秒轮询避免少计
+        join_pos = find_center_silent(tpl_join, JOIN_THRESHOLD, region=region, timeout=2.0)
         if join_pos is None:
             break
         click_position(join_pos, SETTLE_DELAY)

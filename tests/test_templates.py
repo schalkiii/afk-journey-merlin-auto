@@ -22,6 +22,11 @@ CLIENT_WIDTH, CLIENT_HEIGHT = 1600, 900
 # 只扫项目自身的任务/流程模块；开发期临时脚本不算数
 SKIP_PREFIXES = ("_", "test_")
 
+# 可选模板：代码在引用前会用 os.path.exists 判断，缺失时走降级分支而不是报错。
+# 例：yijiannianya.png（女神塔「一键碾压」按钮）、kaishilianjin.png（炼金工坊「开始炼金」）
+# 由用户按实际界面补图；未补时对应分支只覆盖已有建筑，不会报错。
+OPTIONAL_TEMPLATES = {"yijiannianya.png", "kaishilianjin.png"}
+
 
 def _scanned_modules():
     return [
@@ -48,7 +53,8 @@ def test_referenced_templates_exist():
     missing = {
         name: sorted(users)
         for name, users in refs.items()
-        if not os.path.exists(os.path.join(TEMPLATES_DIR, name))
+        if name not in OPTIONAL_TEMPLATES
+        and not os.path.exists(os.path.join(TEMPLATES_DIR, name))
     }
     assert not missing, f"以下模板被代码引用但文件不存在：{missing}"
 

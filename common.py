@@ -18,8 +18,26 @@ import os
 import random
 import shutil
 import sys
+import threading
 import time
 from ctypes import wintypes
+
+
+def _enable_dpi_awareness():
+    """按物理像素处理窗口坐标与截图，避免远程桌面/高 DPI 缩放下坐标偏移。
+
+    必须在 pyautogui 首次调用前设置：未声明 DPI 感知时，Windows 会把
+    GetClientRect / ClientToScreen 的返回值按缩放比例虚拟化，而屏幕截图仍是
+    物理像素，两套坐标混用就会点错位置（远程桌面分辨率/缩放变化时最明显）。
+    """
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PER_MONITOR_DPI_AWARE
+    except (AttributeError, OSError):
+        with contextlib.suppress(AttributeError, OSError):
+            ctypes.windll.user32.SetProcessDPIAware()
+
+
+_enable_dpi_awareness()
 
 import cv2
 import numpy as np
@@ -224,13 +242,27 @@ SCREENSHOT_CACHE_TTL = 0.05  # 秒；同一帧在极短时间内复用，降低�
 
 
 def screenshot_bgr():
-    """截取屏幕并返回 BGR 格式 numpy 数组（OpenCV 标准色彩顺序）；短 TTL 内复用缓存帧。"""
+    """截取游戏画面并返回 BGR 格式 numpy 数组（OpenCV 标准色彩顺序）；短 TTL 内复用缓存帧。
+
+    优先使用后台截图（Windows.Graphics.Capture）：游戏被其他窗口遮挡时，
+    普通屏幕截图只能拿到遮挡窗口的内容，而 WGC 由 DWM 合成目标窗口画面，
+    模板匹配仍然有效。后台截图不可用时自动回退到普通全屏截图。
+    返回值仍是「全屏坐标系」下的画面（游戏画面贴在客户区对应位置），
+    因此 find_center / 点击坐标语义与之前完全一致。
+    """
     check_stop()
     now = time.time()
     if _screenshot_cache["img"] is not None and (now - _screenshot_cache["ts"]) < SCREENSHOT_CACHE_TTL:
         return _screenshot_cache["img"]
-    screenshot = pyautogui.screenshot()
-    img = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+    img = _background_screenshot()
+    if img is None:
+        # 后台截图不可用（依赖缺失/初始化失败）：退回屏幕截图。
+        # 此时若游戏被遮挡，屏幕截图拿到的是遮挡窗口，必须先确保游戏在客户区可见。
+        region = game_client_region()
+        if region:
+            ensure_game_clickable(region[0] + region[2] // 2, region[1] + region[3] // 2)
+        screenshot = pyautogui.screenshot()
+        img = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
     _screenshot_cache["img"] = img
     _screenshot_cache["ts"] = now
     return img
@@ -252,33 +284,325 @@ def invalidate_screenshot_cache():
 # 全屏 matchTemplate 单次实测 216-357ms；限定到客户区后降到 73-106ms（约 3 倍）。
 # 匹配结果仍换算成全屏绝对坐标，因此 send_coord / AHK 一侧的语义完全不变。
 GAME_WINDOW_TITLE = "剑与远征：启程"
-_client_region = {"rect": None, "resolved": False}
+# 窗口标题关键字：远程桌面/启动器版本可能带后缀，精确标题找不到时按关键字兜底
+GAME_WINDOW_KEYWORDS = ("剑与远征：启程", "剑与远征", "启程", "AFK Journey")
+_client_region = {"rect": None, "hwnd": None}
+_window_handle = {"hwnd": None, "ts": 0.0}
+
+
+def find_game_window():
+    """查找游戏主窗口句柄；优先精确标题，找不到再按关键字枚举可见窗口。"""
+    now = time.time()
+    cached = _window_handle["hwnd"]
+    if cached and now - _window_handle["ts"] < 1.0:
+        try:
+            if ctypes.windll.user32.IsWindow(cached):
+                return cached
+        except (AttributeError, OSError):
+            pass
+    hwnd = None
+    try:
+        user32 = ctypes.windll.user32
+        hwnd = user32.FindWindowW(None, GAME_WINDOW_TITLE)
+        if not hwnd:
+            found = []
+
+            @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+            def enum_cb(candidate, _lparam):
+                if not user32.IsWindowVisible(candidate):
+                    return True
+                length = user32.GetWindowTextLengthW(candidate)
+                if length <= 0:
+                    return True
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(candidate, buf, length + 1)
+                title = buf.value
+                if title and any(key in title for key in GAME_WINDOW_KEYWORDS):
+                    found.append(candidate)
+                    return False
+                return True
+
+            user32.EnumWindows(enum_cb, 0)
+            hwnd = found[0] if found else None
+    except (AttributeError, OSError):
+        hwnd = None
+    _window_handle["hwnd"] = hwnd
+    _window_handle["ts"] = now
+    return hwnd
+
+
+def _client_rect_of(hwnd):
+    """返回客户区绝对矩形 (x, y, w, h)；最小化窗口先还原（不抢焦点，只为恢复渲染）。"""
+    try:
+        user32 = ctypes.windll.user32
+        if user32.IsIconic(hwnd):
+            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            time.sleep(0.15)
+        client = wintypes.RECT()
+        if not user32.GetClientRect(hwnd, ctypes.byref(client)):
+            return None
+        if client.right <= 0 or client.bottom <= 0:
+            return None
+        corner = wintypes.POINT(0, 0)
+        if not user32.ClientToScreen(hwnd, ctypes.byref(corner)):
+            return None
+        return (corner.x, corner.y, client.right, client.bottom)
+    except (AttributeError, OSError, ctypes.ArgumentError):
+        return None
 
 
 def game_client_region(refresh=False):
     """返回游戏窗口客户区的全屏矩形 (x, y, w, h)；取不到窗口时返回 None 表示应回退全屏。
 
-    结果按窗口位置缓存；调用方在「按缓存区域匹配不到」时应带 refresh=True 再取一次，
-    以兼容用户在运行中拖动游戏窗口——此时会自动退回全屏搜索，不会漏判。
+    每次调用都重新校验窗口位置：远程桌面切换分辨率、用户拖动窗口都会改变客户区，
+    沿用旧区域会让模板搜索范围和点击坐标一起偏掉。`refresh` 参数仅为兼容旧调用保留。
     """
-    if _client_region["resolved"] and not refresh:
-        return _client_region["rect"]
-    rect = None
+    hwnd = find_game_window()
+    if hwnd is None:
+        _client_region["rect"] = None
+        _client_region["hwnd"] = None
+        return None
+    rect = _client_rect_of(hwnd)
+    _client_region["rect"] = rect
+    _client_region["hwnd"] = hwnd
+    return rect
+
+
+# ===== 后台截图（Windows.Graphics.Capture）=====
+# 游戏被其他窗口遮挡时，普通屏幕截图只能看到遮挡窗口；WGC 由 DWM 直接合成目标窗口
+# 画面，即使不在前台/被遮挡也能拿到真实内容。windows-capture 为可选依赖，
+# 缺失或初始化失败时自动回退普通截图，不影响原有功能。
+_background_capture = {"enabled": True}
+_bg_session = {
+    "hwnd": None, "session": None, "control": None,
+    "frame": None, "frame_ts": 0.0, "error": None, "last_start": 0.0, "warned": False,
+}
+_bg_composite = {"key": None, "image": None}
+_bg_lock = threading.Lock()
+
+
+def set_background_capture(enabled):
+    """开启/关闭后台截图。关闭时释放 WGC 会话，调用方无需关心细节。"""
+    _background_capture["enabled"] = bool(enabled)
+    if not enabled:
+        _stop_background_capture()
+
+
+def _stop_background_capture():
+    with _bg_lock:
+        control = _bg_session["control"]
+        _bg_session.update({
+            "hwnd": None, "session": None, "control": None,
+            "frame": None, "frame_ts": 0.0,
+        })
+        _bg_composite["key"] = None
+        _bg_composite["image"] = None
+    if control is not None:
+        with contextlib.suppress(Exception):
+            control.stop()
+
+
+def _start_background_capture(hwnd):
+    now = time.time()
+    if now - _bg_session["last_start"] < 2.0:
+        return False
+    _bg_session["last_start"] = now
+    try:
+        from windows_capture import WindowsCapture
+    except ImportError:
+        if not _bg_session["warned"]:
+            log("未安装 windows-capture，后台截图不可用，将使用普通屏幕截图")
+            _bg_session["warned"] = True
+        _bg_session["error"] = "missing"
+        return False
+    try:
+        session = WindowsCapture(cursor_capture=False, draw_border=False, window_hwnd=hwnd)
+
+        @session.event
+        def on_frame_arrived(frame, _control):
+            frame.convert_to_bgr()
+            image = np.array(frame.frame_buffer[:, :, :3], copy=True)
+            with _bg_lock:
+                _bg_session["frame"] = image
+                _bg_session["frame_ts"] = time.time()
+
+        @session.event
+        def on_closed():
+            with _bg_lock:
+                _bg_session["frame"] = None
+                _bg_session["frame_ts"] = 0.0
+
+        control = session.start_free_threaded()
+        with _bg_lock:
+            _bg_session.update({
+                "hwnd": hwnd, "session": session, "control": control, "error": None,
+            })
+        return True
+    except Exception as exc:
+        _bg_session["error"] = str(exc)
+        if not _bg_session["warned"]:
+            log(f"后台截图初始化失败，将使用普通屏幕截图: {exc}")
+            _bg_session["warned"] = True
+        return False
+
+
+def _extended_frame_bounds(hwnd):
+    """DWM 可见边框矩形；WGC 画面尺寸与它一致，可据此换算出客户区偏移。"""
+    try:
+        rect = wintypes.RECT()
+        hr = ctypes.windll.dwmapi.DwmGetWindowAttribute(
+            hwnd, 9, ctypes.byref(rect), ctypes.sizeof(rect)  # DWMWA_EXTENDED_FRAME_BOUNDS
+        )
+        if hr == 0 and rect.right > rect.left and rect.bottom > rect.top:
+            return (rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top)
+    except (AttributeError, OSError, ctypes.ArgumentError):
+        pass
+    return None
+
+
+def _background_client_frame():
+    """取最新后台帧并裁剪出客户区，返回 (image, rect)；不可用时返回 None。"""
+    if not _background_capture["enabled"]:
+        return None
+    hwnd = find_game_window()
+    if hwnd is None:
+        return None
+    with _bg_lock:
+        current_hwnd = _bg_session["hwnd"]
+        has_session = _bg_session["session"] is not None
+    if current_hwnd != hwnd or not has_session:
+        _stop_background_capture()
+        if not _start_background_capture(hwnd):
+            return None
+        # 首次启动 WGC 需要等待 DWM 送来第一帧
+        deadline = time.time() + 1.2
+        while time.time() < deadline:
+            with _bg_lock:
+                if _bg_session["frame"] is not None:
+                    break
+            time.sleep(0.03)
+    rect = game_client_region()
+    if rect is None:
+        return None
+    with _bg_lock:
+        frame = _bg_session["frame"]
+        frame_ts = _bg_session["frame_ts"]
+    if frame is None or time.time() - frame_ts > 10.0:
+        return None  # 长时间无新帧（窗口关闭/最小化）：交给普通截图兜底
+    frame_h, frame_w = frame.shape[:2]
+    _, _, client_w, client_h = rect
+    ext = _extended_frame_bounds(hwnd)
+    if ext:
+        offset_x = rect[0] - ext[0]
+        offset_y = rect[1] - ext[1]
+    else:
+        offset_x = max(0, (frame_w - client_w) // 2)
+        offset_y = max(0, frame_h - client_h)
+    if offset_x < 0 or offset_y < 0:
+        return None
+    if frame_h < offset_y + client_h or frame_w < offset_x + client_w:
+        return None
+    return frame[offset_y:offset_y + client_h, offset_x:offset_x + client_w], rect
+
+
+def _background_screenshot():
+    """把后台截图贴到虚拟全屏画布上，保持与普通截图一致的坐标系。"""
+    result = _background_client_frame()
+    if result is None:
+        return None
+    client_img, rect = result
+    with _bg_lock:
+        frame = _bg_session["frame"]
+        frame_ts = _bg_session["frame_ts"]
+    cache_key = (id(frame), frame_ts, rect)
+    if _bg_composite["key"] == cache_key and _bg_composite["image"] is not None:
+        return _bg_composite["image"]
     try:
         user32 = ctypes.windll.user32
-        hwnd = user32.FindWindowW(None, GAME_WINDOW_TITLE)
-        if hwnd:
-            client = wintypes.RECT()
-            user32.GetClientRect(hwnd, ctypes.byref(client))
-            corner = wintypes.POINT(0, 0)
-            user32.ClientToScreen(hwnd, ctypes.byref(corner))
-            if client.right > 0 and client.bottom > 0:
-                rect = (corner.x, corner.y, client.right, client.bottom)
+        vx = user32.GetSystemMetrics(76)   # SM_XVIRTUALSCREEN
+        vy = user32.GetSystemMetrics(77)   # SM_YVIRTUALSCREEN
+        vw = user32.GetSystemMetrics(78)   # SM_CXVIRTUALSCREEN
+        vh = user32.GetSystemMetrics(79)   # SM_CYVIRTUALSCREEN
+        if vw <= 0 or vh <= 0:
+            return None
+        canvas = np.zeros((vh, vw, 3), dtype=np.uint8)
+        x, y, w, h = rect
+        canvas[y - vy:y - vy + h, x - vx:x - vx + w] = client_img
+    except (ValueError, OSError, ctypes.ArgumentError):
+        return None
+    _bg_composite["key"] = cache_key
+    _bg_composite["image"] = canvas
+    return canvas
+
+
+# ===== 点击前确保游戏窗口位于点击点最上层 =====
+# 远程桌面常是单屏：机器人窗口会盖住游戏，直接注入屏幕坐标就点到机器人自己。
+# 这里用 WindowFromPoint 判断点击点归属，被遮挡时先把游戏切到前台再点击。
+_auto_activate = {"enabled": True, "last_log": 0.0}
+
+
+def set_auto_activate(enabled):
+    """开启/关闭「点击前自动激活游戏窗口」。"""
+    _auto_activate["enabled"] = bool(enabled)
+
+
+def _root_window_at(x, y):
+    try:
+        user32 = ctypes.windll.user32
+        hwnd = user32.WindowFromPoint(wintypes.POINT(int(x), int(y)))
+        if not hwnd:
+            return None
+        return user32.GetAncestor(hwnd, 2)  # GA_ROOT
     except (AttributeError, OSError, ctypes.ArgumentError):
-        rect = None   # 非 Windows（无 windll）/ 系统调用失败：保持原有全屏匹配行为
-    _client_region["rect"] = rect
-    _client_region["resolved"] = True
-    return rect
+        return None
+
+
+def _activate_game_window(hwnd):
+    user32 = ctypes.windll.user32
+    foreground = user32.GetForegroundWindow()
+    current_thread = ctypes.windll.kernel32.GetCurrentThreadId()
+    foreground_thread = user32.GetWindowThreadProcessId(foreground, None) if foreground else 0
+    attached = False
+    try:
+        if foreground_thread and foreground_thread != current_thread:
+            attached = bool(user32.AttachThreadInput(foreground_thread, current_thread, True))
+        user32.BringWindowToTop(hwnd)
+        user32.SetForegroundWindow(hwnd)
+        if user32.GetForegroundWindow() != hwnd:
+            # 前台锁：模拟一次 Alt 键，解除系统对 SetForegroundWindow 的限制
+            user32.keybd_event(0x12, 0, 0, 0)
+            user32.keybd_event(0x12, 0, 2, 0)
+            user32.SetForegroundWindow(hwnd)
+        time.sleep(0.15)
+    finally:
+        if attached:
+            with contextlib.suppress(Exception):
+                user32.AttachThreadInput(foreground_thread, current_thread, False)
+
+
+def ensure_game_clickable(x, y):
+    """确保 (x, y) 处最上层是游戏窗口，否则把游戏切到前台，避免点到遮挡窗口。"""
+    if not _auto_activate["enabled"]:
+        return
+    hwnd = find_game_window()
+    if hwnd is None:
+        return
+    try:
+        user32 = ctypes.windll.user32
+        if user32.IsIconic(hwnd):
+            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            time.sleep(0.2)
+        if _root_window_at(x, y) == hwnd:
+            return
+        if user32.GetForegroundWindow() == hwnd:
+            return
+        _activate_game_window(hwnd)
+        now = time.time()
+        if now - _auto_activate["last_log"] > 5.0:
+            _auto_activate["last_log"] = now
+            log("游戏窗口被其他窗口遮挡，已自动切到前台后点击")
+    except (AttributeError, OSError, ctypes.ArgumentError):
+        pass
 
 
 def _resolve_search_region(region):
@@ -401,8 +725,13 @@ def click_blank_to_exit():
     （结社战线「扫荡」、狩猎悬赏「搜寻精怪」、愿望单「交付」都在底部居中一带），
     兜底点击若落在那里，会在关弹窗的同时误触发按钮。
     """
-    h, w = screenshot_bgr().shape[:2]
-    send_coord(int(w * 0.12), int(h * 0.8))
+    region = game_client_region()
+    if region:
+        x, y, w, h = region
+        send_coord(int(x + w * 0.12), int(y + h * 0.8))
+    else:
+        h, w = screenshot_bgr().shape[:2]
+        send_coord(int(w * 0.12), int(h * 0.8))
     time.sleep(0.5)
 
 
@@ -561,6 +890,7 @@ def send_coord(x, y):
     让调用方立即失败并报出真实原因，而不是空转到各流程自己的超时上限。
     """
     check_stop()
+    ensure_game_clickable(x, y)
     wait_count = 0
     while os.path.exists(coord_path) and wait_count < 20:
         check_stop()  # 若 AHK 迟迟未消费上一条坐标，允许 F9 在此期间中断

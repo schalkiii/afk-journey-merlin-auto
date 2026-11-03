@@ -23,6 +23,7 @@ tpl_goumaimimeng      = get_template_path("goumaimimeng.png")
 tpl_querengoumaimenpiao = get_template_path("querengoumaimenpiao.png")
 tpl_cishubugou        = get_template_path("cishubugou.png")
 tpl_exit              = get_template_path("exit.png")
+tpl_exitck            = get_template_path("exitck.png")
 tpl_dianjikongbaichuguanbi = get_template_path("dianjikongbaichuguanbi.png")
 
 # 一场战斗最长等待多久（秒）
@@ -56,27 +57,43 @@ def wait_for_any(templates, threshold=0.8, timeout=MAX_BATTLE_TIME, interval=0.5
 
         time.sleep(interval)
 
-# 战斗结束后清理「点击空白处关闭」结算弹窗
-def close_result_popups(timeout=10.0):
-    """循环点击「点击空白处关闭」，直到弹窗消失（连续 2 秒不再出现则停止）。
-    迷梦之域结算后常弹出奖励/分享界面，不关闭会卡在该界面导致后续流程失败。"""
-    print("【迷梦之域】开始清理结算弹窗（点击空白处关闭）...")
-    start = time.time()
-    last_seen = time.time()
-    while time.time() - start < timeout:
-        pos = find_center_silent(tpl_dianjikongbaichuguanbi, 0.8)
-        if pos:
-            print("【迷梦之域】检测到「点击空白处关闭」，点击关闭")
-            send_coord(pos[0], pos[1])
-            last_seen = time.time()
-            random_sleep()
-        else:
-            if time.time() - last_seen > 2.0:
-                # 兜底：检测不到「点击空白处关闭」时，点击屏幕空白处尝试关闭残留弹窗
-                click_blank_to_exit()
+def ensure_back_to_challenge(timeout=12.0):
+    """清理结算/战绩页，直到回到可再次挑战的迷梦主界面。
+
+    结算后不一定弹「点击空白处关闭」：有时是带返回/退出按钮的战绩页。
+    只处理前一种会把它留在界面上，导致下一个任务（女神塔）从错误页面开始。
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if find_center_silent(tpl_tiaozhan, 0.8):
+            return True
+        clicked = False
+        for template_path, name in (
+            (tpl_dianjikongbaichuguanbi, "点击空白处关闭"),
+            (tpl_exitck, "exitck"),
+            (tpl_exit, "exit"),
+        ):
+            pos = find_center_silent(template_path, 0.8)
+            if pos:
+                print(f"【迷梦之域】清理残留界面：点击 {name}")
+                send_coord(pos[0], pos[1])
+                clicked = True
+                time.sleep(1.0)
                 break
-            time.sleep(0.5)
-    print("【迷梦之域】结算弹窗清理完成")
+        if not clicked:
+            click_blank_to_exit()
+        time.sleep(0.5)
+    print("【迷梦之域】未能确认回到挑战界面")
+    return False
+
+
+def close_result_popups(timeout=10.0):
+    """战斗结束后的清理入口：确保回到可挑战界面，避免残留结算/战绩页。"""
+    print("【迷梦之域】开始清理结算弹窗...")
+    ok = ensure_back_to_challenge(timeout=timeout)
+    if ok:
+        print("【迷梦之域】结算弹窗清理完成")
+    return ok
 
 
 # 处理战斗界面逻辑
@@ -118,9 +135,8 @@ def handle_battle():
         return False
     random_sleep()
 
-    # 清理结算弹窗（点击空白处关闭），避免卡在结算界面
-    close_result_popups()
-    return True
+    # 清理结算弹窗并确认回到挑战界面；失败时上报，避免带着战绩页进入下一个任务
+    return close_result_popups()
 
 def flow_mimengzhiyu(challenge_count=None, auto_configure_lineup=False):
     """

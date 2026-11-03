@@ -1,3 +1,4 @@
+import os
 import time
 
 from common import (
@@ -24,9 +25,37 @@ tpl_nvshentasaodangmax = get_template_path("nvshentasaodangmax.png")
 tpl_dianjikongbaichuguanbi = get_template_path("dianjikongbaichuguanbi.png")
 tpl_nvshentahuiji = get_template_path("nvshentahuiji.png")
 tpl_jingzhihuiji = get_template_path("jingzhihuiji.png")
+# 部分层数会在「开始挑战」位置显示「一键碾压」，点击后直接结算本层
+tpl_yijiannianya = get_template_path("yijiannianya.png")
 
 # 一场战斗最长等待时间（秒）
 MAX_BATTLE_TIME = 180
+
+_nianya_template_warned = False
+
+
+def wait_for_battle_start(timeout=15.0):
+    """等待战斗入口：优先「战斗」，同时兼容替代出现的「一键碾压」。
+
+    返回 (入口类型, 坐标)；入口类型为 "zhandou" / "yijiannianya"，超时返回 (None, None)。
+    一键碾压模板是可选的：文件不存在时只等待「战斗」，并打印一次提示便于补模板。
+    """
+    global _nianya_template_warned
+    has_nianya_template = os.path.exists(tpl_yijiannianya)
+    if not has_nianya_template and not _nianya_template_warned:
+        print("未找到 yijiannianya.png 模板，暂不识别「一键碾压」按钮")
+        _nianya_template_warned = True
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        pos = find_center_silent(tpl_zhandou, 0.8)
+        if pos:
+            return "zhandou", pos
+        if has_nianya_template:
+            pos = find_center_silent(tpl_yijiannianya, 0.8)
+            if pos:
+                return "yijiannianya", pos
+        time.sleep(0.5)
+    return None, None
 
 # 等待某张图出现
 def wait_for_appearance(template_path, name, threshold=0.8, timeout=MAX_BATTLE_TIME, interval=0.5):
@@ -212,10 +241,14 @@ def flow_nvshenta(auto_configure_lineup=False):
         else:
             print("【女神塔】未检测到通关阵容入口，跳过自动配置。")
 
-    # 点击 zhandou 战斗
-    if not wait_and_click(tpl_zhandou, "zhandou", 0.8):
-        print("点击 zhandou 失败")
+    # 点击战斗入口（普通「战斗」按钮，或替代出现的「一键碾压」）
+    entry_name, entry_pos = wait_for_battle_start()
+    if entry_pos is None:
+        print("未找到战斗入口（zhandou/一键碾压），女神塔流程结束")
         return False
+    if entry_name == "yijiannianya":
+        print("检测到一键碾压按钮，点击后直接结算本层")
+    send_coord(entry_pos[0], entry_pos[1])
     random_sleep()
     
     # 定义战斗标记模板
@@ -266,10 +299,14 @@ def flow_nvshenta(auto_configure_lineup=False):
             else:
                 print("【女神塔】未检测到通关阵容入口，跳过自动配置。")
 
-        # 直接点击 zhandou 战斗
-        if not wait_and_click(tpl_zhandou, "zhandou", 0.8):
-            print("点击 zhandou 失败")
+        # 点击战斗入口（普通「战斗」按钮，或替代出现的「一键碾压」）
+        entry_name, entry_pos = wait_for_battle_start()
+        if entry_pos is None:
+            print("未找到战斗入口（zhandou/一键碾压），挑战结束")
             break
+        if entry_name == "yijiannianya":
+            print("检测到一键碾压按钮，点击后直接结算本层")
+        send_coord(entry_pos[0], entry_pos[1])
         random_sleep()
         
         # 定义战斗标记模板

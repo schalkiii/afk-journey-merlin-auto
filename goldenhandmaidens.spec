@@ -10,9 +10,11 @@ a = Analysis(
     datas=[('click_from_file.exe', '.'), ('templates', 'templates'), ('migong_config.json', '.'), ('formations.json', '.'), ('grid_offsets.json', '.')],
     # 自动收集项目内所有顶层脚本模块，新增 flow 脚本无需手改本清单；
     # certifi / keyboard 为第三方包，仍需显式列出。
+    # windows_capture 由 common 内部按需 import，静态分析看不到，必须显式声明；
+    # 它是可选依赖，缺失时运行期会自动回退普通截图。
     hiddenimports=[os.path.splitext(f)[0] for f in glob.glob("*.py")
                    if not f.startswith("_") and f != "goldenhandmaidens.py"] \
-                  + ["certifi", "keyboard"],
+                  + ["certifi", "keyboard", "windows_capture"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

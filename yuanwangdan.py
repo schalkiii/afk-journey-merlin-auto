@@ -7,9 +7,11 @@
    (xinyuandanwancheng)，逐单交付，直到资源不足；
 3. 资源不足时游戏弹出「当前资源不足，可从以下途径获取」(xinyuandanbuzu)，
    点击首条途径的箭头(tujingjiantou)即自动寻路到对应生产建筑（厨房 / 锻造工坊 / 炼金工坊）；
-4. 建筑内把数量档点到「x10」（x1 → x5 → x10，进建筑固定是 x1，故点两下）后点「开始烹饪」
-   (kaishipengren)制作 10 份，完成后逐层返回家园、重新进入愿望单继续交付；
-5. 交付批数达到上限、制作次数达到上限、连续多轮界面无变化或界面无法识别时结束，并回主界面。
+4. 自动寻路只把角色送到建筑旁：再点角色脚下的交互提示（F）打开生产选择页，
+   点「愿望单需求」卡片的「选择」进入制作界面；
+5. 把数量档点到「x10」（x1 → x5 → x10，进建筑固定是 x1，故点两下）后点「开始烹饪/开始锻造」
+   制作 10 份，完成后逐层返回家园、重新进入愿望单继续交付；
+6. 交付批数达到上限、制作次数达到上限、连续多轮界面无变化或界面无法识别时结束，并回主界面。
 
 入口 main() 由 GUI「家园愿望单」脚本调用（daily_reset，每天执行一次）。
 
@@ -27,19 +29,29 @@
   结算 / 领奖弹窗直接用「点击空白处关闭」提示定位关闭点，返回箭头用 fanhui 模板定位。
 - 数量档位为 x1 → x5 → x10 循环，且进建筑时固定回到 x1，故直接点两下取 x10，不再用
   「最大档」模板反查——反查失败时会继续点，可能从 x10 又循环回 x1，越确认越偏。
-- 制作中「开始烹饪」按钮会被替换为进度指示，故以该按钮「消失→重新出现」作为完成信号；
+  数量档是状态切换，必须单击；`click_position` 默认连点两次会多点一轮。
+- 「开始」按钮随建筑不同：厨房 `kaishipengren`、锻造 `kaishiduanzao`，炼金模板
+  `kaishilianjin` 为可选（未采集时跳过）。三种建筑共用同一套制作界面布局，
+  数量按钮相对按钮中心的偏移一致。
+- 制作原料不足时游戏同样弹「当前资源不足」提示，它会遮住「开始」按钮；必须先识别该弹窗
+  并关闭退出，不能把「按钮消失」误判成制作已开始（否则会白等 10 分钟）。
+- 多级原料（例如制作装备所需的元素精华）目前不递归自动制作：只处理愿望单缺料 → 对应建筑
+  这一层，遇到二级缺料会记录日志并结束，避免在错误界面反复点击。
+- 制作中「开始」按钮会被替换为进度指示，故以该按钮「消失→重新出现」作为完成信号；
   「消失」这一步是必须的判据，否则点击未生效时会因按钮一直在而被误判成制作完成。
 - 模板与偏移量按 1600×900 客户区采集：本任务首批模板曾在 1302×1080 窗口下采集，而游戏 UI
   不随窗口等比缩放，换分辨率后整套模板与像素偏移全部失效（表现为「已点击愿望单入口 →
   未进入愿望单界面」）。改分辨率时这批模板需整体重采。
 """
 
+import os
 import time
 
 from common import (
     check_stop,
     click_position,
     find_center_silent,
+    game_client_region,
     get_template_path,
     invalidate_screenshot_cache,
     log,
@@ -53,8 +65,13 @@ tpl_deliver = get_template_path("xinyuandanjiaofu.png")     # 已选择后的橙
 tpl_result = get_template_path("xinyuandanwancheng.png")    # 「完成愿望单」结算
 tpl_lack = get_template_path("xinyuandanbuzu.png")          # 「当前资源不足」弹框标题
 tpl_path_arrow = get_template_path("tujingjiantou.png")     # 途径条目右侧箭头
-tpl_cook = get_template_path("kaishipengren.png")           # 建筑内「开始烹饪」
+tpl_cook = get_template_path("kaishipengren.png")           # 厨房「开始烹饪」
+tpl_forge = get_template_path("kaishiduanzao.png")          # 锻造工坊「开始锻造」
+tpl_alchemy = get_template_path("kaishilianjin.png")        # 炼金工坊「开始炼金」（可选，未采集时跳过）
+tpl_wish_label = get_template_path("xinyuandanxuqiu.png")   # 生产选择页「愿望单需求」标签
 tpl_back = get_template_path("fanhui.png")                  # 建筑内左下角返回箭头
+tpl_exit = get_template_path("exit.png")                    # 通用返回箭头（公会大厅/玩法目录）
+tpl_exitck = get_template_path("exitck.png")                # 通用退出按钮（部分界面）
 tpl_label = get_template_path("xinyuandanbiaoti.png")       # 左上角「愿望单」标题标签（定位礼盒点击点）
 tpl_claim = get_template_path("huodejiangli.png")           # 领奖弹窗「获得奖励」标题
 tpl_close_popup = get_template_path("dianjikongbaichuguanbi.png")
@@ -71,7 +88,14 @@ CRAFT_ENTRY_TIMEOUT = 40  # 自动寻路到建筑并打开制作界面的等待�
 CRAFT_START_TIMEOUT = 10  # 点「开始烹饪」后等待按钮消失（确认这批真的开始）的上限
 CRAFT_DONE_TIMEOUT = 600  # 一次批量制作的完成等待上限；x10 档一批 10 份实测已超过 180 秒
 QTY_CLICK_TIMES = 2       # 数量档 x1 → x5 → x10 循环，进建筑固定是 x1，故点两下即 x10
-QTY_BUTTON_OFFSET = (110, -10)   # 数量按钮相对「开始烹饪」中心的偏移（1600×900 实测：烹饪 2896,859 / 数量 3006,849）
+QTY_BUTTON_OFFSET = (110, -10)   # 数量按钮相对「开始」按钮中心的偏移（1600×900 实测：烹饪 2896,859 / 数量 3006,849）
+WISH_SELECT_OFFSET_Y = 157       # 「愿望单需求」标签中心 → 同一卡片「选择」按钮中心（1600×900 实测）
+PATH_PROMPT_OFFSET_Y = 103       # 自动寻路后屏幕中心 → 建筑交互提示（F）的纵向偏移
+# 三种生产建筑共用同一套制作界面布局，但「开始」按钮文字/图标不同；
+# 炼金模板未采集时自动跳过，只匹配厨房/锻造。
+START_TEMPLATES = tuple(
+    path for path in (tpl_cook, tpl_forge, tpl_alchemy) if os.path.exists(path)
+)
 
 # 界面状态
 STATE_CLAIM = "claim"        # 领奖弹窗「获得奖励」
@@ -177,13 +201,28 @@ def _ensure_panel():
         log("【家园愿望单】已在愿望单界面")
         return True
 
+    # 愿望单入口只在家园视图出现：公会大厅/玩法目录等界面底部同样有「玩法目录」按钮，
+    # 上一步任务可能把游戏停在那里。找不到入口时先逐层返回家园再重试，最多 2 次。
     entry_pos = None
-    deadline = time.time() + 15
-    while time.time() < deadline:
-        entry_pos = _find(tpl_entry)
+    back_templates = (tpl_back, tpl_exit, tpl_exitck)
+    for _ in range(3):
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            entry_pos = _find(tpl_entry)
+            if entry_pos is not None:
+                break
+            time.sleep(0.5)
         if entry_pos is not None:
             break
-        time.sleep(0.5)
+        back_pos = None
+        for template_path in back_templates:
+            back_pos = _find(template_path)
+            if back_pos is not None:
+                break
+        if back_pos is None:
+            break
+        log("【家园愿望单】当前不在家园视图，点击返回箭头后重试")
+        _click_once(back_pos, SETTLE_DELAY)
     if entry_pos is None:
         log("【家园愿望单】未找到愿望单入口，任务终止")
         return False
@@ -210,12 +249,26 @@ def _back_to_homestead():
         back_pos = _find(tpl_back)
         if back_pos is None:
             break
-        _click(back_pos, SETTLE_DELAY)
+        # 返回箭头是逐层跳转：连点会一次退两层，可能直接退出家园
+        _click_once(back_pos, SETTLE_DELAY)
     if _find(tpl_entry, timeout=5):
         return True
     log("【家园愿望单】返回家园失败，尝试兜底回主界面")
     flow_return_main()
     return _find(tpl_entry, timeout=5) is not None
+
+
+def _find_start_button(timeout=0):
+    """等待并返回 (启动按钮模板, 坐标)，兼容厨房/锻造/炼金三种建筑。"""
+    deadline = time.time() + timeout
+    while True:
+        for template_path in START_TEMPLATES:
+            pos = _find(template_path)
+            if pos is not None:
+                return template_path, pos
+        if time.time() >= deadline:
+            return None, None
+        time.sleep(0.5)
 
 
 def _craft_from_lack():
@@ -228,30 +281,67 @@ def _craft_from_lack():
         log("【家园愿望单】未找到「制作获取」途径入口，无法自动制作")
         return False
     log("【家园愿望单】资源不足，点击途径入口自动寻路至生产建筑")
-    _click(arrow_pos, 1.0)
+    _click_once(arrow_pos, 1.0)
 
-    cook_pos = _find(tpl_cook, timeout=CRAFT_ENTRY_TIMEOUT)
+    # 自动寻路只把角色送到建筑旁，不会自动打开制作界面：还需点击角色脚下的交互提示（F），
+    # 再在生产选择页点「愿望单需求」卡片的「选择」，才会进入制作界面。
+    region = game_client_region()
+    prompt_pos = None
+    if region:
+        prompt_pos = (region[0] + region[2] // 2,
+                      region[1] + region[3] // 2 + PATH_PROMPT_OFFSET_Y)
+    start_template = None
+    cook_pos = None
+    prompt_clicks = 0
+    next_prompt_at = time.time() + 4.0   # 先给寻路留出时间，避免过早点击空地
+    deadline = time.time() + CRAFT_ENTRY_TIMEOUT
+    while time.time() < deadline:
+        check_stop()
+        start_template, cook_pos = _find_start_button()
+        if cook_pos is not None:
+            break
+        label_pos = _find(tpl_wish_label, 0.85)
+        if label_pos is not None:
+            log("【家园愿望单】进入生产选择界面，选择愿望单需求产品")
+            _click_once((label_pos[0], label_pos[1] + WISH_SELECT_OFFSET_Y), SETTLE_DELAY)
+            continue
+        if prompt_pos is not None and prompt_clicks < 3 and time.time() >= next_prompt_at:
+            # 交互提示是打开界面的跳转入口，连点会落到刚打开的界面里误触
+            _click_once(prompt_pos, 1.5)
+            prompt_clicks += 1
+            next_prompt_at = time.time() + 5.0
+        time.sleep(0.3)
     if cook_pos is None:
-        log("【家园愿望单】未进入生产界面（可能被弹窗遮挡或寻路中断）")
+        log("【家园愿望单】未进入生产界面（可能被弹窗遮挡、寻路中断或缺少该建筑模板）")
         return False
-    log("【家园愿望单】已进入生产界面，切换批量档位")
+    log(f"【家园愿望单】已进入生产界面（{os.path.basename(start_template)}），切换批量档位")
 
     qty_pos = (cook_pos[0] + QTY_BUTTON_OFFSET[0], cook_pos[1] + QTY_BUTTON_OFFSET[1])
     # 数量档是 x1 → x5 → x10 循环，且进建筑时固定回到 x1，所以「点满两下」就确定是 x10。
     # 原先靠 zhizuox10 模板确认档位，但该模板只匹配得到 x1 之外的外观时会反复重点，
     # 反而可能从 x10 再循环回 x1；改成固定次数、不依赖档位识别。
     for _ in range(QTY_CLICK_TIMES):
-        click_position(qty_pos, 1.0)
+        # 数量档是状态切换，必须单点：连点会多点一轮（x10 又循环回 x1/x5）
+        click_position(qty_pos, 1.0, twice=False)
         invalidate_screenshot_cache()
 
     log("【家园愿望单】开始批量制作")
-    _click(cook_pos, 1.0)
-    # 制作中「开始烹饪」会被进度指示替换。必须先确认它真的「消失」了——那才说明这批已开始；
-    # 少了这一步，点击没生效时会因为按钮一直在而被下面的「重新出现」立刻判成制作完成，白跑一轮。
-    if not _wait_gone(tpl_cook, CRAFT_START_TIMEOUT):
-        log("【家园愿望单】点「开始烹饪」后按钮未消失，制作未开始，停止制作流程")
+    # 开始制作是一次性动作，连点可能重复消耗资源
+    _click_once(cook_pos, 1.0)
+    # 制作原料不足时游戏会弹出「当前资源不足」提示；它同样会遮住「开始」按钮，
+    # 不能把「按钮消失」误判成制作已开始（否则会白等 CRAFT_DONE_TIMEOUT 十分钟）。
+    lack_pos = _find(tpl_lack, timeout=3)
+    if lack_pos is not None:
+        log("【家园愿望单】制作所需原料不足，无法自动补货（请先手动补充原料），关闭提示")
+        # 「当前资源不足」标题中心 → 弹窗底部 X 关闭按钮（1600×900 实测偏移）
+        _click_once((lack_pos[0], lack_pos[1] + 272), SETTLE_DELAY)
         return False
-    if _find(tpl_cook, timeout=CRAFT_DONE_TIMEOUT) is None:
+    # 制作中「开始」按钮会被进度指示替换。必须先确认它真的「消失」了——那才说明这批已开始；
+    # 少了这一步，点击没生效时会因为按钮一直在而被下面的「重新出现」立刻判成制作完成，白跑一轮。
+    if not _wait_gone(start_template, CRAFT_START_TIMEOUT):
+        log("【家园愿望单】点「开始」按钮后按钮未消失，制作未开始，停止制作流程")
+        return False
+    if _find(start_template, timeout=CRAFT_DONE_TIMEOUT) is None:
         log("【家园愿望单】制作完成等待超时，停止制作流程")
         return False
     log("【家园愿望单】批量制作完成")

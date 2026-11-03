@@ -439,26 +439,35 @@ RIGHT_RETRY_TIMEOUT = 1.0
 # 整个推图流程最多允许的状态切换次数（安全阀）
 MAX_TRANSITIONS = 500
 
+# 最近一次 flow_push_mode1 的结束原因：""=未运行 / "lineup_exhausted"=阵容用尽 /
+# "fail_limit"=连续失败达到配置上限。供「循环推图」判断是否应停止整个循环。
+LAST_STOP_REASON = ""
+
 
 class PushFlow:
     """推图流程状态机。run() 返回 True=正常跑完（阵容用尽退出），False=中途失败或触发安全阀。"""
 
-    def __init__(self, mode="normal", skip_manual=True, retry_count=3):
+    def __init__(self, mode="normal", skip_manual=True, retry_count=3,
+                 max_consecutive_failures=10):
         self.mode = mode
         self.entry_templates = MODE_CONFIG[mode]["entry_templates"]
         self.mode_label = "幻灵推图" if mode == "huanling" else "推图"
         self.skip_manual = skip_manual
         self.retry_count = retry_count
+        self.max_consecutive_failures = max(1, int(max_consecutive_failures))
 
         self.state = STATE_ENTER
         self.transitions = 0
         self.finished_ok = False
+        self.stop_reason = ""
 
         # 推图进度数据
         self.have_lineup = False
         self.lineup_index = -1
         self.lineup_fail = 0
         self.lineup_start = 0
+        # 连续失败计数跨阵容累计：换阵容后的失败同样计入，成功推图（end）时清零
+        self.consecutive_failures = 0
 
         self._handlers = {
             STATE_ENTER: self._st_enter,
@@ -677,6 +686,7 @@ class PushFlow:
         """end(k)：通过一段关卡后失败，重置阵容状态并重新进入模式。"""
         # end(k) 表示已经成功推进过，下一次应从第一套阵容重新开始。
         self.lineup_fail = 0
+        self.consecutive_failures = 0
         self.lineup_index = -1
         self.have_lineup = False
         self.lineup_start = 0
@@ -691,6 +701,17 @@ class PushFlow:
 
     def _st_on_fail(self):
         """fail(d)：点击 repeat 回到推图界面，然后决定阵容策略。"""
+        self.consecutive_failures += 1
+        print(f"连续失败次数: {self.consecutive_failures}/{self.max_consecutive_failures}")
+        if self.consecutive_failures >= self.max_consecutive_failures:
+            print(
+                f"连续失败达到上限 {self.max_consecutive_failures} 次，结束推图（不再尝试后续阵容）。"
+            )
+            self.stop_reason = "fail_limit"
+            # 先尽量点 repeat 回到推图界面，再由 exit 状态统一退出
+            wait_and_click(tpl_repeat, "repeat(e)_limit", 0.8, timeout=3.0)
+            return STATE_EXIT
+
         if not wait_and_click(tpl_repeat, "repeat(e)", 0.8):
             print("点击 repeat(e) 失败，退出推图。")
             return self._done(False)
@@ -842,29 +863,46 @@ class PushFlow:
         # 唯一的正常完成出口：阵容用尽 = 本轮推图正常跑完。
         # 上游 v1.4.6 在此也返回 False（run() 恒为 False），会让「推图」永远显示失败、
         # 「循环推图」一轮即停，故本仓修正为 True；其余失败 / 安全阀路径仍为 False。
+        if not self.stop_reason:
+            self.stop_reason = "lineup_exhausted"
         return self._done(True)
 
 
-def flow_push_mode1(mode="normal", skip_manual=True, retry_count=3):
+def flow_push_mode1(mode="normal", skip_manual=True, retry_count=3,
+                    max_consecutive_failures=10):
     """
     推图主流程（状态机实现）。
 
     mode: "normal"（普通推图）或 "huanling"（幻灵推图）
     skip_manual: 是否跳过含手动战斗标志的阵容
     retry_count: 同一阵容连续失败多少次后换阵容（1-3）
+    max_consecutive_failures: 连续失败达到该次数后结束本轮推图（1-99）
     """
+    global LAST_STOP_REASON
     init_templates_from_dir()
-    flow = PushFlow(mode=mode, skip_manual=skip_manual, retry_count=retry_count)
-    return flow.run()
+    flow = PushFlow(
+        mode=mode,
+        skip_manual=skip_manual,
+        retry_count=retry_count,
+        max_consecutive_failures=max_consecutive_failures,
+    )
+    ok = flow.run()
+    LAST_STOP_REASON = flow.stop_reason
+    return ok
 
 
-def main(skip_manual=True, retry_count=3):
+def main(skip_manual=True, retry_count=3, max_consecutive_failures=10):
     """主函数，供其他脚本调用"""
     if DEBUG_MODE:
         debug_lineup_recognition()
         return True
     else:
-        return flow_push_mode1(mode="normal", skip_manual=skip_manual, retry_count=retry_count)
+        return flow_push_mode1(
+            mode="normal",
+            skip_manual=skip_manual,
+            retry_count=retry_count,
+            max_consecutive_failures=max_consecutive_failures,
+        )
 
 if __name__ == "__main__":
     main()
