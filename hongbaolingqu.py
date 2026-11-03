@@ -1,19 +1,36 @@
-"""红点奖励领取：进入任务面板，遍历各页签点掉所有可领取奖励，最后回到主界面。
+"""红点奖励领取：把界面上「可领取」的奖励点掉，最后回到主界面。
 
-覆盖：每日任务 / 公会任务 / 成长挑战 / 赛季任务（二级玩法页 + 底部三个阶段页）/
-家园目标，以及主界面「赛季手册」的赛季里程碑一键领取。
-不覆盖：翻翻乐（红点是「有钥匙没用」，需要反复点「点击增加进度」，属玩法不是领取）、
-菜单「活动」页签（每个活动界面各异且随赛季轮换，需逐个适配）。
+覆盖：
+1. 「菜单 → 任务」面板：每日任务 / 公会任务 / 成长挑战 / 赛季任务（二级玩法页 +
+   底部三个阶段页）/ 家园目标，用「一键领取」与单个「领取」；
+2. 主界面「赛季手册 → 赛季里程碑」的一键领取；
+3. 主界面右侧「赛季月桂之旅」，逐个底部手记页签一键领取；
+4. 主界面「当前进度 → 赛季挂机关卡」：右上角挂机收益 + 里程碑节点（该页没有
+   一键领取，逐节点试点，只把弹出奖励的算作领取）。
+
+不覆盖，且都有实测依据：
+- 翻翻乐：点 3 次「点击增加进度」后累计进度仍是 0/100，推进机制未确认，
+  而剩余钥匙有 500+ 次，盲扫风险大于收益；
+- 「玩法目录 → 活动 / 公会玩法」的卡片列表：曾按固定栅格逐张盲点，实测会误闯
+  「纷战争锋」这类带自动派遣的活动页，且各页返回箭头素材不统一、恢复不可靠，已撤销；
+  这些玩法本身已有专门模块（结社战线、狩猎悬赏）；
+- 背包 / 图鉴 / 旅行指南等「新」角标：新内容提示，没有可领奖励。
 """
 
 import time
+
+import cv2
 
 from common import (
     check_stop,
     click_blank_to_exit,
     click_position,
     find_center_silent,
+    game_client_region,
+    get_cached_screenshot,
     get_template_path,
+    invalidate_screenshot_cache,
+    load_template,
     log,
     recover_to_main_interface,
     wait_and_click,
@@ -33,7 +50,10 @@ tpl_saijijieduan = get_template_path("saijijieduan.png")
 tpl_yijianlingqu = get_template_path("yijianlingqu.png")
 tpl_lingqu = get_template_path("lingqu.png")
 tpl_blank_close = get_template_path("dianjikongbaichuguanbi.png")
-tpl_saijishouchuo = get_template_path("saijishouchuo.png")
+# 赛季手册入口用不透明的图标本体：文字标签是半透明药丸，镜头换场景后
+# 背景透光会让匹配从 1.0 掉到 0.767（实测），图标带流光也还有 0.965。
+tpl_saijishouchuo = get_template_path("saijishouchuoicon.png")
+SEASON_BOOK_THRESHOLD = 0.85
 tpl_saijilichengbei = get_template_path("saijilichengbei.png")
 # 任务面板底部页签栏（未选中态灰字）。面板会记住上次停留的页签，选中态会变绿
 # （实测 fanfanle 选中后只剩 0.724 分），因此「面板已打开」用多页签或判断。
@@ -47,19 +67,55 @@ PANEL_TAB_TEMPLATES = (
 # 面板左下角返回箭头：实测任务面板/赛季手册用的是 exitck 这套外观，
 # 玩法目录的 exit.png 与菜单的 fanhui.png 在这里都只有 0.42 分，匹配不到。
 tpl_panel_back = get_template_path("exitck.png")
+# 但同类箭头在不同面板用的是不同素材：玩法目录列表 / 任务面板 / 赛季手册是 exitck，
+# 活动与公会卡片详情页是 fanhui（实测 exitck 在详情页只有 0.283）。返回时按候选依次试。
+tpl_fanhui = get_template_path("fanhui.png")
+PANEL_BACK_TEMPLATES = (tpl_panel_back, tpl_fanhui)
+
+# 主界面判据：HUD 上的玩法目录入口
+tpl_wanfamulu = get_template_path("wanfamulu.png")
+
+# 主界面右侧竖排的「赛季月桂之旅」入口图标位置，与进入后的底部手记页签栅格
+LAUREL_HUD_POS = (1550, 610)
+LAUREL_CAROUSEL_SLOTS = [(480, 845), (630, 845), (780, 845), (880, 845), (990, 845)]
+
+# 赛季挂机关卡页右上角的「x440」挂机收益按钮（实测点击即弹「获得奖励」）
+IDLE_REWARD_POS = (1120, 240)
+
+# 赛季挂机关卡里程碑轨道上的未解锁节点（灰色瓶子），用于取节点行的 y
+tpl_milestone_locked = get_template_path("guajiguajia_locked.png")
+MILESTONE_ROW_Y_FALLBACK = 349
+
+# 主界面「当前进度」入口：HUD 上的仓鼠位置（半透明标签与脉动角标都不能做模板，
+# 客户区固定 1600x900 下直接点该位置，再用里程碑轨道锚点校验是否真的进了面板）
+PROGRESS_HUD_POS = (72, 833)
+MILESTONE_TRACK_REGION = (400, 320, 880, 60)
+
+# 里程碑节点间距实测 54px，最左节点中心在 x=432
+MILESTONE_X_START = 432
+MILESTONE_X_STEP = 54
+MILESTONE_X_END = 1250
+
+MAX_MILESTONE_CLICKS = 16
 
 # 赛季任务的二级页签（玩法 / 活跃 / 限时 / 养成 / 剧情）等宽排列，
 # 以「玩法」命中位置为基准横向偏移，避免为每个页签单独存一份模板。
 SEASON_SUB_TAB_OFFSET_X = [0, 132, 264, 397, 532]
-
-# 主界面「赛季手册」图标位于其文字标签左上方
-SEASON_BOOK_ICON_OFFSET = (-7, -31)
 
 # 单个界面最多点击多少次领取（防止领取后界面不刷新导致死循环）
 MAX_CLAIM_PER_VIEW = 30
 
 # 进入任务面板的重试次数
 ENTRY_RETRY = 2
+
+
+def _click_panel_back(name):
+    """按候选素材依次尝试返回箭头，命中即点。"""
+    for template in PANEL_BACK_TEMPLATES:
+        if wait_and_click(template, f"back({name})", 0.8, timeout=1.0):
+            return True
+    log(f"未找到返回箭头，无法退出{name}。")
+    return False
 
 
 def _close_reward_popup():
@@ -189,24 +245,133 @@ def _claim_task_panel():
     return total
 
 
-def _claim_season_book(label_pos):
-    """主界面「赛季手册」→ 赛季里程碑页的一键领取。label_pos 为文字标签中心。"""
-    click_position(
-        (label_pos[0] + SEASON_BOOK_ICON_OFFSET[0], label_pos[1] + SEASON_BOOK_ICON_OFFSET[1]),
-        wait=1.5,
-        twice=False,
-    )
+def _claim_season_book(icon_pos):
+    """主界面「赛季手册」图标 → 赛季里程碑页的一键领取。"""
+    click_position(icon_pos, wait=1.5, twice=False)
     if not find_center_silent(tpl_saijilichengbei, threshold=0.8, timeout=3.0):
         log("点击赛季手册后未确认进入赛季里程碑界面，跳过。")
-        wait_and_click(tpl_panel_back, "exitck(赛季手册)", 0.8, timeout=2.0)
+        _click_panel_back("赛季手册")
         return 0
     count = _sweep_view("赛季手册-赛季里程碑")
-    wait_and_click(tpl_panel_back, "exitck(赛季手册)", 0.8, timeout=2.0)
+    _click_panel_back("赛季手册")
     return count
 
 
+def _find_all_matches(template_path, threshold, client_region):
+    """在客户区子区域内枚举模板的全部命中中心（返回整屏绝对坐标）。
+
+    find_center_silent 只给最优命中；里程碑轨道要一次看到全部节点位置。
+    """
+    win_x, win_y, _w, _h = game_client_region()
+    region_x, region_y, region_w, region_h = client_region
+    left, top = win_x + region_x, win_y + region_y
+    area = get_cached_screenshot()[top:top + region_h, left:left + region_w]
+
+    template = load_template(template_path)
+    template_h, template_w = template.shape[:2]
+    if area.shape[0] < template_h or area.shape[1] < template_w:
+        return []
+
+    scores = cv2.matchTemplate(area, template, cv2.TM_CCOEFF_NORMED)
+    hits = []
+    work = scores.copy()
+    while True:
+        _, max_value, _, max_loc = cv2.minMaxLoc(work)
+        if max_value < threshold:
+            break
+        # 屏蔽邻域，同一个角标只算一次
+        half = max(template_w, template_h)
+        work[max(0, max_loc[1] - half):max_loc[1] + half,
+             max(0, max_loc[0] - half):max_loc[0] + half] = -1.0
+        center = (left + max_loc[0] + template_w // 2, top + max_loc[1] + template_h // 2)
+        hits.append(center)
+    return hits
+
+
+def _is_at_main_interface():
+    """主界面判据：HUD 上的玩法目录入口可见。"""
+    invalidate_screenshot_cache()
+    return find_center_silent(tpl_wanfamulu, threshold=0.7, timeout=0.6) is not None
+
+
+def _tap_into_panel(pos, name, max_attempts=2):
+    """点 HUD 图标进入子面板。
+
+    首次点击可能被窗口激活吞掉，而且这类入口没有可靠的页签锚点（面板会记住上次
+    子页，实测月桂之旅的「旅行手记」页签只在赛季月桂之旅II 存在），所以用
+    「主界面 HUD 是否消失」判定是否真的进去了，没进去就补点一次。
+    """
+    win_x, win_y, _w, _h = game_client_region()
+    for attempt in range(1, max_attempts + 1):
+        check_stop()
+        if not _is_at_main_interface():
+            return True
+        click_position((win_x + pos[0], win_y + pos[1]), wait=1.8, twice=False)
+        if not _is_at_main_interface():
+            return True
+        log(f"第 {attempt} 次点击{name}入口后仍在主界面。")
+    return False
+
+
+def _sweep_laurel_journey():
+    """主界面右侧「赛季月桂之旅」入口 → 逐个子页签一键领取。
+
+    实测入口图标在客户区 (1550,610)，进去后底部有 4–5 个手记页签（秋夜手记 /
+    赛季月桂之旅II / I / 魔法行记），每个页签各自带一键领取，所以逐个切过去扫。
+    """
+    if not _tap_into_panel(LAUREL_HUD_POS, "月桂之旅"):
+        log("未能进入赛季月桂之旅界面，跳过。")
+        return 0
+
+    win_x, win_y, _w, _h = game_client_region()
+    total = _sweep_view("月桂之旅-当前页签")
+    for slot_x, slot_y in LAUREL_CAROUSEL_SLOTS:
+        check_stop()
+        click_position((win_x + slot_x, win_y + slot_y), wait=1.2, twice=False)
+        total += _sweep_view(f"月桂之旅-页签({slot_x},{slot_y})")
+    _click_panel_back("月桂之旅")
+    return total
+
+
+def _sweep_progress_milestones():
+    """主界面「当前进度」→ 赛季挂机关卡里程碑节点。
+
+    这页没有一键领取，也没有稳定的节点坐标规律（实测节点间距 54/65/83 不等，
+    轨道还会随领取平移），所以按 54px 栅格逐点试点，只把弹出奖励的算作领取。
+    实测点到未解锁节点与英雄节点都不会跳转，因此盲点是安全的。
+    """
+    if not _tap_into_panel(PROGRESS_HUD_POS, "当前进度"):
+        log("未能进入赛季挂机关卡界面，跳过。")
+        return 0
+
+    win_x, _win_y, _w, _h = game_client_region()
+    anchors = _find_all_matches(tpl_milestone_locked, 0.9, MILESTONE_TRACK_REGION)
+
+    # 先领挂机收益（页面右上角的 x440 瓶子），再扫里程碑节点
+    win_x2, win_y2, _w2, _h2 = game_client_region()
+    idle_claimed = 0
+    click_position((win_x2 + IDLE_REWARD_POS[0], win_y2 + IDLE_REWARD_POS[1]),
+                   wait=1.0, twice=False)
+    if _close_reward_popup():
+        idle_claimed += 1
+
+    row_y = sorted(anchor[1] for anchor in anchors)[len(anchors) // 2] if anchors else         game_client_region()[1] + MILESTONE_ROW_Y_FALLBACK
+    claimed = idle_claimed
+    for step in range(MAX_MILESTONE_CLICKS):
+        check_stop()
+        x = win_x + MILESTONE_X_START + step * MILESTONE_X_STEP
+        if x > win_x + MILESTONE_X_END:
+            break
+        click_position((x, row_y), wait=0.8, twice=False)
+        if _close_reward_popup():
+            claimed += 1
+    log(f"红点领取：赛季挂机关卡 领取 {claimed} 项（含挂机收益 {idle_claimed} 项）。")
+    _click_panel_back("当前进度")
+    return claimed
+
+
 def main():
-    """执行红点奖励领取。返回 True=至少进入过其中一个领取界面，False=两处入口都不在。"""
+    """执行红点奖励领取。返回 True=至少进入过其中一个领取界面，False=入口都不在。"""
     log("开始执行红点奖励领取...")
     total = 0
     entered = False
@@ -214,22 +379,39 @@ def main():
     if _open_task_panel():
         entered = True
         total += _claim_task_panel()
-        wait_and_click(tpl_panel_back, "exitck(任务面板)", 0.8, timeout=3.0)
+        _click_panel_back("任务面板")
         time.sleep(1.0)
     else:
         log("未能进入任务面板，跳过任务面板领取。")
 
     check_stop()
-    label = find_center_silent(tpl_saijishouchuo, threshold=0.8, timeout=1.5)
+    label = find_center_silent(tpl_saijishouchuo, threshold=SEASON_BOOK_THRESHOLD, timeout=1.5)
     if not label:
         # 面板领取可能停在菜单/子页里，HUD 上的赛季手册标签看不到；先回主界面再判一次
         recover_to_main_interface()
-        label = find_center_silent(tpl_saijishouchuo, threshold=0.8, timeout=1.5)
+        label = find_center_silent(tpl_saijishouchuo, threshold=SEASON_BOOK_THRESHOLD, timeout=1.5)
     if label:
         entered = True
         total += _claim_season_book(label)
     else:
         log("主界面未找到「赛季手册」入口，跳过。")
+
+    check_stop()
+    recover_to_main_interface()
+    total += _sweep_laurel_journey()
+
+    check_stop()
+    recover_to_main_interface()
+    total += _sweep_progress_milestones()
+
+    check_stop()
+    recover_to_main_interface()
+
+    # 收尾必须把游戏带回主界面：中途任一入口失败都可能停在子页面，
+    # 交给下一个任务时就会从错误界面开始（实测盲点卡片曾停在「纷战争锋」内）。
+    check_stop()
+    if not recover_to_main_interface():
+        log("领取流程结束时仍未确认回到主界面，请留意下一个任务的起始界面。")
 
     log(f"红点奖励领取结束，共领取 {total} 项。")
     return entered
