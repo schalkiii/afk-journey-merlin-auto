@@ -555,6 +555,28 @@ class PushFlow:
             print(f"{action_name} 后未确认目标状态。")
         return hit
 
+    def _enter_mode_and_confirm(self, retries=2):
+        """点击模式入口并确认进入备战界面；首次点击可能被激活窗口/加载动画吞掉，重试一次。
+
+        入口是跳转类按钮，重试时重新找位置并只单击，不能连点（会进入后又退出）。
+        """
+        for attempt in range(1, retries + 1):
+            entry_path = self._wait_for_entry(timeout=10.0 if attempt == 1 else 5.0)
+            if not entry_path:
+                names = " / ".join(self.entry_templates)
+                print(f"未检测到 {names}，无法进入模式")
+                return None
+            action_name = f"{os.path.basename(entry_path)}({attempt})"
+            wait_and_click(entry_path, action_name, 0.8)
+            next_path = self._wait_after_action(
+                [(tpl_guajijixian, 0.7), (tpl_autocha, 0.8)],
+                action_name,
+                timeout=10.0,
+            )
+            if next_path:
+                return next_path
+        return None
+
     def _st_enter(self):
         """进入推图玩法：wanfamulu -> advance -> 模式入口。"""
         # 单次推图也可能从战斗失败/结算页启动：连续未命中时兜底退出卡住处再重试
@@ -570,21 +592,10 @@ class PushFlow:
             return self._done(False)
 
         print(f"等待 {self.mode_label} 入口...")
-        entry_path = self._wait_for_entry(timeout=10.0)
-        if not entry_path:
-            names = " / ".join(self.entry_templates)
-            print(f"未检测到 {names}，点击 exit 退出")
-            wait_and_click(tpl_exit, "exit(j)", 0.8)
-            return self._done(False)
-
-        if not wait_and_click(entry_path, os.path.basename(entry_path), 0.8):
-            return self._done(False)
-        next_path = self._wait_after_action(
-            [(tpl_guajijixian, 0.7), (tpl_autocha, 0.8)],
-            f"{os.path.basename(entry_path)}",
-            timeout=10.0,
-        )
+        next_path = self._enter_mode_and_confirm()
         if not next_path:
+            print("未能进入模式备战界面，点击 exit 退出")
+            wait_and_click(tpl_exit, "exit(j)", 0.8)
             return self._done(False)
 
         print(f"进入 {self.mode_label} 成功")
@@ -607,19 +618,9 @@ class PushFlow:
 
     def _st_need_entry(self):
         """end(k) 后回到玩法界面，需要重新点击模式入口。"""
-        entry_path = self._wait_for_entry(timeout=10.0)
-        if not entry_path:
-            names = " / ".join(self.entry_templates)
-            print(f"未检测到 {names}，退出推图")
-            return self._done(False)
-        if not wait_and_click(entry_path, os.path.basename(entry_path), 0.8):
-            return self._done(False)
-        next_path = self._wait_after_action(
-            [(tpl_guajijixian, 0.7), (tpl_autocha, 0.8)],
-            f"{os.path.basename(entry_path)}",
-            timeout=10.0,
-        )
+        next_path = self._enter_mode_and_confirm()
         if not next_path:
+            print("end(k) 后未能进入模式备战界面，退出推图")
             return self._done(False)
         return STATE_LIMIT if next_path == tpl_guajijixian else STATE_START_BATTLE
 

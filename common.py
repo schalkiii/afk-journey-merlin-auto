@@ -257,10 +257,8 @@ def screenshot_bgr():
     img = _background_screenshot()
     if img is None:
         # 后台截图不可用（依赖缺失/初始化失败）：退回屏幕截图。
-        # 此时若游戏被遮挡，屏幕截图拿到的是遮挡窗口，必须先确保游戏在客户区可见。
-        region = game_client_region()
-        if region:
-            ensure_game_clickable(region[0] + region[2] // 2, region[1] + region[3] // 2)
+        # 此时若游戏不在前台/被遮挡，屏幕截图拿到的是错误画面，必须先确保游戏可见。
+        ensure_game_clickable()
         screenshot = pyautogui.screenshot()
         img = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
     _screenshot_cache["img"] = img
@@ -546,17 +544,6 @@ def set_auto_activate(enabled):
     _auto_activate["enabled"] = bool(enabled)
 
 
-def _root_window_at(x, y):
-    try:
-        user32 = ctypes.windll.user32
-        hwnd = user32.WindowFromPoint(wintypes.POINT(int(x), int(y)))
-        if not hwnd:
-            return None
-        return user32.GetAncestor(hwnd, 2)  # GA_ROOT
-    except (AttributeError, OSError, ctypes.ArgumentError):
-        return None
-
-
 def _activate_game_window(hwnd):
     user32 = ctypes.windll.user32
     foreground = user32.GetForegroundWindow()
@@ -580,8 +567,8 @@ def _activate_game_window(hwnd):
                 user32.AttachThreadInput(foreground_thread, current_thread, False)
 
 
-def ensure_game_clickable(x, y):
-    """确保 (x, y) 处最上层是游戏窗口，否则把游戏切到前台，避免点到遮挡窗口。"""
+def ensure_game_clickable():
+    """点击前确保游戏窗口在前台；否则先激活，避免第一次点击被系统吞掉。"""
     if not _auto_activate["enabled"]:
         return
     hwnd = find_game_window()
@@ -592,15 +579,15 @@ def ensure_game_clickable(x, y):
         if user32.IsIconic(hwnd):
             user32.ShowWindow(hwnd, 9)  # SW_RESTORE
             time.sleep(0.2)
-        if _root_window_at(x, y) == hwnd:
-            return
         if user32.GetForegroundWindow() == hwnd:
             return
+        # 即使点击点属于游戏窗口，只要窗口不在前台，系统也可能把第一次点击用于激活而吞掉：
+        # 先显式切前台，保证这次点击一定落到游戏上（实测幻灵入口偶发首次点击丢失）。
         _activate_game_window(hwnd)
         now = time.time()
         if now - _auto_activate["last_log"] > 5.0:
             _auto_activate["last_log"] = now
-            log("游戏窗口被其他窗口遮挡，已自动切到前台后点击")
+            log("游戏窗口不在前台，已自动切到前台后点击")
     except (AttributeError, OSError, ctypes.ArgumentError):
         pass
 
@@ -890,7 +877,7 @@ def send_coord(x, y):
     让调用方立即失败并报出真实原因，而不是空转到各流程自己的超时上限。
     """
     check_stop()
-    ensure_game_clickable(x, y)
+    ensure_game_clickable()
     wait_count = 0
     while os.path.exists(coord_path) and wait_count < 20:
         check_stop()  # 若 AHK 迟迟未消费上一条坐标，允许 F9 在此期间中断
