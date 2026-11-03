@@ -1379,6 +1379,14 @@ class GameBotGUI:
             max_consecutive_failures=ps.get("max_consecutive_failures", 10),
         ))
 
+    def _ensure_loop_ready(self):
+        """循环推图模式切换前兜底：清弹窗并回主界面，避免停在战斗失败/结算页空转。"""
+        common.dismiss_popup()
+        if common.ensure_main_interface():
+            return True
+        self.log("循环推图：无法回到主界面，停止循环。")
+        return False
+
     def _run_xunhuan(self, script):
         import flow_push
         import push
@@ -1389,6 +1397,10 @@ class GameBotGUI:
         loop_count = 0
         fast_rounds = 0
         while not self.stop_event.is_set():
+            # 幻灵推图失败可能停在「战斗失败」等模态页，不先恢复主界面会导致
+            # 本轮普通推图和后续轮次都卡在 wanfamulu 等待上空转（实测踩过）。
+            if not self._ensure_loop_ready():
+                break
             loop_count += 1
             round_start = time.time()
             self.log(f"循环推图 第 {loop_count} 轮 - 幻灵推图开始")
@@ -1409,6 +1421,11 @@ class GameBotGUI:
                 self.log("幻灵推图异常，继续切换到普通推图。")
 
             if self.stop_event.is_set():
+                break
+
+            # 幻灵推图与普通推图各自从主界面进入；模式切换前同样先恢复，
+            # 单模式结束/失败后不能假定界面已经回到主界面。
+            if not self._ensure_loop_ready():
                 break
 
             self.log(f"循环推图 第 {loop_count} 轮 - 推图开始")
