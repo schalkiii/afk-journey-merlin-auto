@@ -217,7 +217,10 @@
   - `click_from_file.exe` / AutoHotkey：负责实际鼠标点击注入（由 `common.send_coord` 写入坐标文件驱动）
   - `windows-capture`：可选依赖，负责后台截图（Windows Graphics Capture）；缺失时自动回退普通屏幕截图
   - 桌面《剑与远征：启程》快捷方式：用于「启动游戏」/ `launch_game.py`
-  - `templates/` 目录：界面元素模板图片（含 `tongguanzhenrong.png`、`yijiancaiyong.png` 等）
+  - `templates/` 目录：界面元素模板图片（含 `tongguanzhenrong.png`、`yijiancaiyong.png` 等）。
+    采集与标定规则见 [doc/TEMPLATE-AUTHORING.md](doc/TEMPLATE-AUTHORING.md)——新增模板前先读，
+    那里记着历次「模板看着对、实跑静默失效」的量化原因（角标缩放与脉动、半透明标签透光、
+    同类控件多素材、页签记住上次子页导致选中态换外观）。
 
 ---
 
