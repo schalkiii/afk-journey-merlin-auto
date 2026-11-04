@@ -1,4 +1,5 @@
 from common import (
+    BOTTOM_BAR_CLIENT_REGION,
     find_center_silent,
     get_template_path,
     get_work_path,
@@ -611,7 +612,8 @@ class PushFlow:
     def _st_enter(self):
         """进入推图玩法：wanfamulu -> advance -> 模式入口。"""
         # 单次推图也可能从战斗失败/结算页启动：连续未命中时兜底退出卡住处再重试
-        if not wait_and_click(tpl_wanfamulu, "wanfamulu", 0.7, recover_threshold=20):
+        if not wait_and_click(tpl_wanfamulu, "wanfamulu", 0.7, recover_threshold=20,
+                              client_region=BOTTOM_BAR_CLIENT_REGION):
             print("点击 wanfamulu 进入玩法目录失败。")
             return self._done(False)
         if not self._wait_after_action(

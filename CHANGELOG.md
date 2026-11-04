@@ -477,3 +477,80 @@
 - 不建议做第二阶段（`param_spec` 自动生成面板）：7 个面板含英雄网格、阵容下拉、单选与复选，tuple 无法表达。
 - 加一个**无参**功能最少只改 1 处（追加一条 `ScriptConfig`）；带参功能仍需新增 `create_*_params` 分支，
   不是完全单源。`game_bot_config.json` schema 不变。本轮按用户决定只登记评估，不改代码。
+
+### 性能优化第一批（2026-11-05）
+
+> 由 3 个只读分析 Agent 用合成 1600×900 帧 + 真实模板测出热点，再由 5 个执行 Agent 按文件边界
+> 并行落地。收尾门禁：`pytest -q` **163 passed**、`ruff check .` **64 条 = 存量基线**、
+> `pwsh -NoProfile -File build.ps1 check` 退出码 0。
+
+#### P0-1 模板内存缓存（`common.load_template`）
+- `OrderedDict + Lock` 的 LRU（上限 64），key = `(abspath, mtime_ns, size)`；命中 `move_to_end`，
+  `cv2.imread` 在锁外；失败结果不入缓存；APPDATA 副本重建后靠 mtime/size 自然失效。
+- 实测（459 文件/5.08MB 模板目录）：命中 **0.0117ms**；未命中中位 **0.616ms**（均值 4.93ms 含大图冷读）。
+  高频轮询里每个模板省 0.15–0.6ms；仓库/阵容这类上千次匹配的场景收益最大（本轮不启用仓库优化，
+  但缓存本身是通用层）。
+- 测试 6 条：命中只解码一次、mtime/size 变化失效、LRU 淘汰、失败不缓存、缺文件跳过缓存。
+
+#### P0-2 `find_center_silent` 未命中路径
+- 刷新窗口矩形后只有**矩形确实变化**才重新匹配；超时判断前置，`sleep(min(interval, remaining))`。
+- 原来每次未命中固定 2 次 `matchTemplate` + 2 次截图；现在 1 次。按全帧 61–130ms 计，
+  每次未命中省 60–130ms；`push` 的短超时轮询与 `timeout=0.25/interval=0.5` 不再睡过 deadline。
+- 测试 5 条（矩形不变/变化、sleep 截断、显式 region 不刷新、命中坐标不变），
+  负验证：恢复无条件 `continue` → 单次匹配用例变红。
+
+#### P0-3 模板校验快速指纹（frozen 启动）
+- `_templates_fast_marker` = 排序后 `相对路径:size:首4KB摘要:尾4KB摘要` 的整体 sha256；
+  `%APPDATA%\gamebot\templates.marker` 存「内置 + APPDATA」两行指纹。命中直接用 APPDATA，
+  只有不一致才回落到全量 sha256 深度校验/重拷贝。
+- 实测 459 文件：快速指纹 **32–40ms**（首读 188ms），全量深度 **337ms**（暖缓存），
+  原 frozen 启动两遍校验约 **0.8–1.1s** → 快速路径约几十 ms。
+- 残余风险已写进注释：APPDATA 中「大小不变且首尾 4KB 不变」的位级损坏不会被快速路径发现，
+  需删 `templates.marker` 触发深度校验。测试 7 条（首次复制、二次快速路径不深度校验、
+  删文件/同大小改内容触发重拷贝、marker 缺失/损坏回退、开发模式不碰 APPDATA）。
+
+#### P1-1 客户区相对搜索区域 + 底部带推广
+- `find_center` / `find_center_silent` / `wait_and_click` / `click_template` 新增 `client_region`
+  （客户区相对，内部按 `game_client_region()` 换算；与整屏绝对的 `region` 互斥）；
+  `find_center_silent` 传 `client_region` 时每轮重算原点且跳过强制刷新分支。
+- 新增 `common.BOTTOM_BAR_CLIENT_REGION = (0, 650, 1600, 250)`，只推广到**位置确定**的
+  底部导航/底部页签：`at_main_interface` 的 wanfamulu、push/pujing/nvshenta/mimengzhiyu/
+  pata/flow_gonghui/shouquguajijiangli 的 wanfamulu 点击、hongbaolingqu 的 `_panel_open`
+  与全部底部页签。返回箭头（exitck/fanhui）、战斗/结算页、弹窗、标题/中部宝箱/右侧 HUD
+  保持全客户区。
+- 实测 wanfamulu（65×19，1600×900 合成帧）：全客户区 **61.21ms** → 底部带 **18.08ms**（**3.38×**）。
+- 测试 12 条：换算/互斥/无窗口回退、坐标补偿、区域外不命中、窗口移动重算、透传、
+  旧调用不变、返回箭头底带外守卫。负验证：去掉原点换算 → 3 条红；给返回箭头加底带 → 守卫红。
+
+#### P1-2 红点领取轮询收敛（`hongbaolingqu`）
+- `_panel_open` 改「每轮同帧检查 4 个页签（`timeout=0`）+ 0.3s 外层轮询 + 2.0s 总窗口」，
+  面板未打开时由最坏约 5.4s 收敛到 ≤2.0s；已打开时首轮即返回。
+- `claim_current_view` 首轮保留 1.0s 宽限，后续轮次一键领取 `timeout=0`（单个「领取」仍保留
+  0.5s 动画宽限）。按 25 个视图、每个视图多次单项领取估算，单轮约省 35s（估算值，待实跑复核）。
+- 新增 4 条用例；负验证：改回逐个 1s 顺序检查 → 3 条红；首轮宽限改成永远 1.0 → 1 条红。
+
+#### P2-1 GUI 全局热键延后注册
+- `GameBotGUI.__init__` 里的 `_register_hotkeys()` 改为 `root.after(200, ...)`，并把
+  `_hk_start/_hk_stop` 预置为 None；代价是启动后约 0.2s 内 F8/F9 不可用。
+- 实测 GUI 构造：立即注册 423/389ms → 延迟注册 **242/248ms**（省 **140–175ms**）；
+  含 Tk 建窗总耗时 792/796ms → 671/694ms。
+- 新增 1 条用例（构造期零调用、`update()` 后恰好一次、测试不装真实全局热键）。
+
+#### P2-2 `updater` 延迟导入
+- 顶层 `import updater` 删除，改为四个更新路径（自动检查/手动检查/下载/安装重启）各自局部 import。
+- 实测从启动导入中移除约 **15.6ms**（urllib.request 14.1ms + ssl 2.7ms）。
+- 新增 2 条用例：子进程断言 `updater` 不在 `sys.modules`（并把日志重定向到 tmp）、
+  AST 守卫顶层无 import 且四个路径都有局部 import。
+
+#### 已评估后放弃
+- **WGC 回调 `cv2.cvtColor(COLOR_BGRA2BGR)`**：代码在取帧后已经调用
+  `frame.convert_to_bgr()`，`frame_buffer` 已是 3 通道 BGR；再加 cvtColor 属于重复转换，
+  没有收益。保留 `np.array(..., copy=True)`（必须脱离复用缓冲）。
+- **OpenCV 发行版/onedir/UPX/`optimize` 等打包形态变更**：收益 0.5–1.5s，但会改变交付形态、
+  需全量回归，且本机未装 UPX，按「不为凑数硬上」放弃。
+- **灰度匹配、压缩 `random_sleep`、缩短战斗轮询/超时**：会改变判定语义或防检测节奏，不碰。
+
+#### 暂不做（用户明确）
+- **迷宫（`flow_migong`）**：`find_all_mg_fast` 半分辨率粗筛等。
+- **仓库（`warehouse`）**：`DEBUG_SAVE_SLOTS` 默认关闭、42 组合固定等待改造等。
+- 以上两项因用户平时不用，整体标记「暂不处理」，不为它们花时间。

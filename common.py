@@ -20,6 +20,7 @@ import shutil
 import sys
 import threading
 import time
+from collections import OrderedDict
 from ctypes import wintypes
 
 
@@ -53,7 +54,7 @@ def get_resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 def _templates_marker(bundled_dir):
-    """对模板目录内所有文件的相对路径+内容摘要做校验。"""
+    """对模板目录内所有文件的相对路径+内容摘要做校验（深度校验，逐文件全量 sha256）。"""
     entries = []
     for root, dirs, files in os.walk(bundled_dir):
         dirs.sort()
@@ -71,6 +72,68 @@ def _templates_marker(bundled_dir):
     return hashlib.sha256("\n".join(entries).encode("utf-8", "surrogatepass")).hexdigest()
 
 
+# 快速指纹的采样窗口：首尾各取 4KB（文件不足 8KB 时两次读取天然覆盖全文）。
+# 459 个模板/5.32MB 的目录做全量 sha256 实测约 0.8–1.1s，而只 stat + 采样读约 10ms，
+# 足以把 frozen 启动时的校验开销压到可忽略。代价见 ensure_appdata_templates 的注释。
+_TEMPLATE_SAMPLE_BYTES = 4096
+
+
+def _templates_fast_marker(templates_dir):
+    """快速指纹：排序后逐文件记录 `相对路径:大小:首4KB摘要:尾4KB摘要`，再整体 sha256。
+
+    能发现文件缺失、大小变化与采样区内容变化；不读全文，因此对「大小相同且采样区
+    未变」的位级差异不敏感——这类损坏需要深度校验（_templates_marker）才能发现。
+    """
+    entries = []
+    for root, dirs, files in os.walk(templates_dir):
+        dirs.sort()
+        for fname in sorted(files):
+            fpath = os.path.join(root, fname)
+            rel = os.path.relpath(fpath, templates_dir)
+            try:
+                size = os.path.getsize(fpath)
+                digest = hashlib.sha256()
+                with open(fpath, "rb") as stream:
+                    digest.update(stream.read(_TEMPLATE_SAMPLE_BYTES))
+                    if size > _TEMPLATE_SAMPLE_BYTES:
+                        stream.seek(max(0, size - _TEMPLATE_SAMPLE_BYTES))
+                        digest.update(stream.read(_TEMPLATE_SAMPLE_BYTES))
+            except OSError:
+                continue
+            entries.append(f"{rel}:{size}:{digest.hexdigest()}")
+    return hashlib.sha256("\n".join(entries).encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def _templates_marker_path():
+    """快速指纹缓存文件路径；基于 APP_DATA_ROOT 而非写死，便于测试与迁移。"""
+    return os.path.join(APP_DATA_ROOT, "templates.marker")
+
+
+def _read_templates_fast_markers():
+    """读取缓存的两行指纹（内置目录、APPDATA 目录）；缺失或格式异常返回 None。"""
+    try:
+        with open(_templates_marker_path(), encoding="utf-8") as stream:
+            lines = [line.strip() for line in stream.read().splitlines() if line.strip()]
+    except OSError:
+        return None
+    if len(lines) != 2:
+        return None
+    return lines[0], lines[1]
+
+
+def _write_templates_fast_markers(bundled_marker, appdata_marker):
+    """原子写入快速指纹缓存；写失败不影响本次启动，下次会退化为深度校验。"""
+    marker_path = _templates_marker_path()
+    try:
+        os.makedirs(APP_DATA_ROOT, exist_ok=True)
+        tmp_path = marker_path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as stream:
+            stream.write(f"{bundled_marker}\n{appdata_marker}\n")
+        os.replace(tmp_path, marker_path)
+    except OSError as exc:
+        print(f"模板快速指纹写入失败，下次启动将做深度校验: {exc}")
+
+
 def _is_valid_templates_dir(template_dir, expected_marker=None):
     """验证模板目录是否完整；目录存在但残缺时不能视为可用。"""
     if not os.path.isdir(template_dir):
@@ -84,8 +147,15 @@ def _is_valid_templates_dir(template_dir, expected_marker=None):
 def ensure_appdata_templates():
     """
     打包后把内置模板复制到 %APPDATA%\\gamebot\\templates，避免杀软清理
-    _MEIPASS 临时目录导致模板文件丢失。启动时对比内容摘要，
+    _MEIPASS 临时目录导致模板文件丢失。启动时先比对快速指纹（约 10ms），
+    命中缓存则直接使用 APPDATA 副本；不一致才做全量 sha256 深度校验，
     打包内容变化或副本缺失/损坏时重新复制；复制失败则回退使用内置目录。
+
+    残余风险：快速路径只 stat + 采样首尾 4KB，APPDATA 中「大小不变且采样区不变」
+    的位级损坏不会被发现（全量 sha256 才能查出）。要修复这类损坏，需删除
+    templates.marker 让下次启动走深度校验，或重新复制模板目录。
+    这是 0.8s → ~10ms 的取舍：实际损坏几乎都伴随大小变化或 PNG 数据变化，
+    而 PNG 数据变化必然落在采样区。
     """
     global _ACTIVE_TEMPLATES_DIR
     if not getattr(sys, "frozen", False) or not APP_DATA_ROOT:
@@ -96,9 +166,21 @@ def ensure_appdata_templates():
         _ACTIVE_TEMPLATES_DIR = None
         return
     try:
+        bundled_fast_marker = _templates_fast_marker(bundled_dir)
+        if os.path.isdir(APP_TEMPLATES_DIR):
+            appdata_fast_marker = _templates_fast_marker(APP_TEMPLATES_DIR)
+            cached = _read_templates_fast_markers()
+            if cached == (bundled_fast_marker, appdata_fast_marker):
+                _ACTIVE_TEMPLATES_DIR = APP_TEMPLATES_DIR
+                return
+
+        # 快速指纹不一致（或缺缓存）：退回全量 sha256 深度校验，确认副本是否仍完整。
         marker = _templates_marker(bundled_dir)
         if _is_valid_templates_dir(APP_TEMPLATES_DIR, marker):
             _ACTIVE_TEMPLATES_DIR = APP_TEMPLATES_DIR
+            _write_templates_fast_markers(
+                bundled_fast_marker, _templates_fast_marker(APP_TEMPLATES_DIR)
+            )
             return
 
         # 先复制到旁路目录并验证，避免目标目录留下半套模板。
@@ -113,6 +195,9 @@ def ensure_appdata_templates():
                 shutil.rmtree(APP_TEMPLATES_DIR)
             os.replace(staging_dir, APP_TEMPLATES_DIR)
             _ACTIVE_TEMPLATES_DIR = APP_TEMPLATES_DIR
+            _write_templates_fast_markers(
+                bundled_fast_marker, _templates_fast_marker(APP_TEMPLATES_DIR)
+            )
         except Exception as exc:
             # 保留内置目录作为备用；不要让残缺的 APPDATA 目录被选中。
             try:
@@ -125,6 +210,7 @@ def ensure_appdata_templates():
     except Exception as exc:
         print(f"APPDATA 模板缓存检查失败，将回退内置模板目录: {exc}")
         _ACTIVE_TEMPLATES_DIR = bundled_dir
+
 
 def get_templates_dir():
     """模板目录：打包后优先 %APPDATA% 副本，其次内置目录；开发模式返回项目目录"""
@@ -144,10 +230,59 @@ def get_template_path(template_name, subdir=None):
     return os.path.join(get_templates_dir(), template_name)
 
 
+# ===== 模板内存缓存（性能）=====
+# 同一模板在高频轮询里会被反复读取：每次 cv2.imread + PNG 解码约 1–3ms，而模板内容
+# 在运行中几乎不变。此处按 (绝对路径, mtime_ns, size) 缓存解码结果，命中直接返回。
+# 约束：返回的是**共享 ndarray**，调用方只读——matchTemplate / resize 都不会原地改
+# 模板；若要写入模板像素，必须先 copy，否则会污染所有后续命中。
+# key 带 mtime/size 使文件被替换（如 APPDATA 副本重建）后自然失效；读取失败不入缓存。
+# GUI 线程与工作线程都可能调用，缓存结构读写加锁；cv2.imread 放在锁外避免长持锁。
+_TEMPLATE_CACHE_MAX = 64
+_template_cache = OrderedDict()
+_template_cache_lock = threading.Lock()
+
+
+def _template_cache_key(template_path):
+    """按 stat 生成缓存键；文件不存在/不可访问时返回 None（跳过缓存）。"""
+    try:
+        stat = os.stat(template_path)
+    except OSError:
+        return None
+    return (os.path.abspath(template_path), stat.st_mtime_ns, stat.st_size)
+
+
+def _template_cache_get(cache_key):
+    with _template_cache_lock:
+        template = _template_cache.get(cache_key)
+        if template is not None:
+            _template_cache.move_to_end(cache_key)
+        return template
+
+
+def _template_cache_put(cache_key, template):
+    with _template_cache_lock:
+        _template_cache[cache_key] = template
+        _template_cache.move_to_end(cache_key)
+        while len(_template_cache) > _TEMPLATE_CACHE_MAX:
+            _template_cache.popitem(last=False)
+
+
 def load_template(template_path):
-    """读取模板；运行中发现缓存文件丢失时，修复缓存并重新定位一次。"""
+    """读取模板；运行中发现缓存文件丢失时，修复缓存并重新定位一次。
+
+    命中内存缓存时直接返回共享 ndarray（调用方只读，见上方约束），
+    避免高频轮询重复解码 PNG。
+    """
+    cache_key = _template_cache_key(template_path)
+    if cache_key is not None:
+        cached = _template_cache_get(cache_key)
+        if cached is not None:
+            return cached
+
     template = cv2.imread(template_path, cv2.IMREAD_COLOR)
     if template is not None:
+        if cache_key is not None:
+            _template_cache_put(cache_key, template)
         return template
 
     # 模板路径是在模块导入时生成的，缓存切换后需要重新生成路径。
@@ -165,8 +300,15 @@ def load_template(template_path):
         ensure_appdata_templates()
         if relative_name:
             repaired_path = os.path.join(get_templates_dir(), relative_name)
+            repaired_key = _template_cache_key(repaired_path)
+            if repaired_key is not None:
+                cached = _template_cache_get(repaired_key)
+                if cached is not None:
+                    return cached
             template = cv2.imread(repaired_path, cv2.IMREAD_COLOR)
             if template is not None:
+                if repaired_key is not None:
+                    _template_cache_put(repaired_key, template)
                 return template
 
     raise ValueError(f"模板读取失败: {template_path}")
@@ -286,6 +428,10 @@ GAME_WINDOW_TITLE = "剑与远征：启程"
 GAME_WINDOW_KEYWORDS = ("剑与远征：启程", "剑与远征", "启程", "AFK Journey")
 _client_region = {"rect": None, "hwnd": None}
 _window_handle = {"hwnd": None, "ts": 0.0}
+
+# 底部导航带（客户区相对，按 1600×900）：主界面「玩法目录」入口与任务面板底部页签
+# 都落在这条带内。保守取底部 250px，宁可面积大一点也不要漏判；实机截图后可再收窄。
+BOTTOM_BAR_CLIENT_REGION = (0, 650, 1600, 250)
 
 
 def find_game_window():
@@ -594,9 +740,25 @@ def ensure_game_clickable():
         pass
 
 
-def _resolve_search_region(region):
-    """调用方显式给了 region 就原样用；否则用游戏客户区（取不到则 None = 全屏）。"""
-    return region if region else game_client_region()
+def _resolve_search_region(region=None, client_region=None):
+    """把调用方给的搜索范围换算成整屏绝对坐标矩形 (x, y, w, h)。
+
+    region 是整屏绝对坐标，原样返回；client_region 是客户区相对坐标，按当前
+    客户区原点换算。两者互斥（同时给会因语义不明而算错坐标，直接拒绝）。
+    都不给时退回游戏客户区（取不到则 None = 全屏）。
+    无窗口时 client_region 按整屏原点使用，与 region_changed_since 的回退一致。
+    """
+    if region and client_region:
+        raise ValueError("region 与 client_region 互斥")
+    if region:
+        return region
+    if client_region:
+        rect = game_client_region()
+        if rect:
+            return (rect[0] + client_region[0], rect[1] + client_region[1],
+                    client_region[2], client_region[3])
+        return client_region
+    return game_client_region()
 
 
 def random_sleep():
@@ -604,19 +766,20 @@ def random_sleep():
     time.sleep(random.uniform(2.0, 3.0))
 
 
-def find_center(template_path, threshold=0.8):
+def find_center(template_path, threshold=0.8, region=None, client_region=None):
     """在截图中匹配模板，命中则返回其中心坐标 (x, y)，否则返回 None。
 
     使用 TM_CCOEFF_NORMED：对亮度/对比度变化不敏感，适合游戏 UI 这类
     整体色彩随场景浮动但局部纹理稳定的目标；默认阈值 0.8 在误触与漏触间取折中。
     搜索默认限定在游戏客户区（见 game_client_region），返回值仍是全屏绝对坐标。
+    region: 整屏绝对坐标搜索范围；client_region: 客户区相对坐标搜索范围（两者互斥）。
     """
     template = load_template(template_path)
     template_h, template_w = template.shape[:2]
 
     screenshot = get_cached_screenshot()
-    region = _resolve_search_region(None)
-    search_area = _clip_to_region(screenshot, region)
+    search_region = _resolve_search_region(region, client_region)
+    search_area = _clip_to_region(screenshot, search_region)
     if search_area is None:
         return None
     # res 为与搜索区域同尺寸的相关性矩阵，值越大表示越像模板
@@ -632,9 +795,9 @@ def find_center(template_path, threshold=0.8):
     # max_loc 为模板左上角坐标，加上半宽半高得到中心；限定区域时补偿回全屏坐标
     center_x = max_loc[0] + template_w // 2
     center_y = max_loc[1] + template_h // 2
-    if region:
-        center_x += region[0]
-        center_y += region[1]
+    if search_region:
+        center_x += search_region[0]
+        center_y += search_region[1]
     return center_x, center_y
 
 
@@ -651,14 +814,17 @@ def _clip_to_region(screenshot, region):
     return screenshot[y:y + roi_h, x:x + roi_w]
 
 
-def find_center_silent(template_path, threshold=0.8, region=None, timeout=0, interval=0.5):
+def find_center_silent(template_path, threshold=0.8, region=None, timeout=0, interval=0.5,
+                       client_region=None):
     """find_center 的静默版本：命中返回中心坐标，否则返回 None，不打印匹配得分。
 
     与 find_center 的唯一区别是不输出相似度分数——适合在紧循环里高频调用，
     例如战斗监控、结算弹窗轮询，避免日志被分数刷屏。所有子脚本统一复用本实现，
     既消除各脚本重复定义，也保证 F9 停止检查（check_stop 内）一致生效。
-    region: 限定搜索范围 (x, y, w, h) 以加快匹配；None 表示用游戏客户区（取不到窗口时
-            才退回整屏）。返回值始终是整屏绝对坐标。
+    region: 限定搜索范围 (x, y, w, h)（整屏绝对坐标）以加快匹配；None 表示用游戏客户区
+            （取不到窗口时才退回整屏）。返回值始终是整屏绝对坐标。
+    client_region: 客户区相对坐标 (x, y, w, h)，与 region 互斥。窗口可能被拖动，
+                  因此每轮循环都按当前客户区原点重新换算。
     timeout: 持续轮询等待模板出现的秒数；0（默认）表示仅检测一次立即返回。
     interval: 轮询间隔（秒）。
 
@@ -668,11 +834,18 @@ def find_center_silent(template_path, threshold=0.8, region=None, timeout=0, int
     template = load_template(template_path)
     template_h, template_w = template.shape[:2]
 
-    search_region = _resolve_search_region(region)
-    region_refreshed = False
+    if client_region is not None:
+        # 每轮都重算客户区，漏判时无需再走「强制刷新窗口矩形」分支。
+        search_region = None
+        region_refreshed = True
+    else:
+        search_region = _resolve_search_region(region)
+        region_refreshed = False
     start_time = time.time()
     while True:
         check_stop()
+        if client_region is not None:
+            search_region = _resolve_search_region(client_region=client_region)
         screenshot = get_cached_screenshot()
         search_area = _clip_to_region(screenshot, search_region)
         if search_area is None:
@@ -693,16 +866,22 @@ def find_center_silent(template_path, threshold=0.8, region=None, timeout=0, int
 
         # 限定区域后漏判的首要原因是用户在运行中拖动了窗口：刷新一次窗口矩形再试，
         # 取不到窗口时会自动退化为整屏匹配，行为与限定前一致。
+        # 矩形没变时重匹配必然还是同一结果，直接进入超时判断，省一次 matchTemplate
+        # 与一次截图（高频轮询下这是主要的固定浪费）。
         if region is None and not region_refreshed:
             region_refreshed = True
+            previous_region = search_region
             search_region = game_client_region(refresh=True)
-            continue
+            if search_region != previous_region:
+                continue
 
         if timeout <= 0:
             return None
-        if time.time() - start_time >= timeout:
+        remaining = timeout - (time.time() - start_time)
+        if remaining <= 0:
             return None
-        time.sleep(interval)
+        # 不能睡满 interval：timeout=0.25、interval=0.5 时睡过 deadline 会拖慢调用方
+        time.sleep(min(interval, remaining))
 
 
 def click_blank_to_exit():
@@ -746,7 +925,8 @@ def at_main_interface(threshold=0.8):
     「已在主界面」直接返回，随后按 HUD 坐标点击的赛季手册 / 月桂之旅 / 当前进度
     三个入口全部落空。主界面本身不显示返回箭头，用它把子页区分出来。
     """
-    if not find_center_silent(get_template_path("wanfamulu.png"), threshold):
+    if not find_center_silent(get_template_path("wanfamulu.png"), threshold,
+                              client_region=BOTTOM_BAR_CLIENT_REGION):
         return False
     for back_template in ("exitck.png", "fanhui.png"):
         if find_center_silent(get_template_path(back_template), threshold):
@@ -1066,7 +1246,8 @@ def log(msg):
 
 
 def wait_and_click(template_path, name, threshold=0.8, timeout=None,
-                   recover_threshold=0, recover_func=None, max_recoveries=2):
+                   recover_threshold=0, recover_func=None, max_recoveries=2,
+                   region=None, client_region=None):
     """
     等待模板出现并点击一次
 
@@ -1080,6 +1261,9 @@ def wait_and_click(template_path, name, threshold=0.8, timeout=None,
             避免一直卡在「检测不到 wanfamulu」等第一步导致整个任务停滞。
         recover_func: 自定义兜底恢复函数（默认使用 recover_to_main_interface）。
         max_recoveries: 单次调用内最多触发的兜底恢复次数（避免无限点击）。
+        region: 整屏绝对坐标搜索范围 (x, y, w, h)，原样透传给 find_center。
+        client_region: 客户区相对坐标搜索范围 (x, y, w, h)，透传给 find_center；
+            与 region 互斥。位置未标定的界面不要指定。
 
     返回:
         True: 点击成功
@@ -1096,7 +1280,8 @@ def wait_and_click(template_path, name, threshold=0.8, timeout=None,
     while True:
         check_stop()
         attempt += 1
-        pos = find_center(template_path, threshold=threshold)
+        pos = find_center(template_path, threshold=threshold,
+                          region=region, client_region=client_region)
         if pos:
             print(f"{name} 识别成功，第 {attempt} 次，坐标: {pos}，发送给 AHK 点击")
             send_coord(*pos)
@@ -1175,15 +1360,18 @@ def is_lineup_acceptable(hero_levels, lineup_heroes, level_score=None, special_h
     return True
 
 
-def click_template(template_path, label=None, threshold=0.8, timeout=None):
+def click_template(template_path, label=None, threshold=0.8, timeout=None,
+                   region=None, client_region=None):
     """通用"等待模板出现并点击"，薄封装 wait_and_click，供各 flow 脚本复用。
 
     flow_migong 的 click_mg 等按特定命名/阈值封装的点击均以此为基础，
-    避免各脚本重复包装 wait_and_click。
+    避免各脚本重复包装 wait_and_click。region / client_region 原样透传，
+    语义见 wait_and_click。
     """
     if label is None:
         label = template_path
-    return wait_and_click(template_path, label, threshold, timeout=timeout)
+    return wait_and_click(template_path, label, threshold, timeout=timeout,
+                          region=region, client_region=client_region)
 
 
 def click_and_wait(click_name, next_name, timeout=10, cooldown=0.8,

@@ -55,7 +55,7 @@ from bot_runtime import (
     _notify_file_write_error,
 )
 
-import updater
+# updater 只在检查更新 / 下载 / 安装重启路径使用，延迟到用到时再导入以缩短启动
 
 # 路径解析统一复用 common 的实现，避免与底层模块重复定义（见 common.get_resource_path / get_work_path）
 from common import get_resource_path, get_work_path
@@ -83,6 +83,12 @@ STATUS_COLORS = {
 # 就绪（还没跑过）不抢视线：底色接近面板、文字留空
 STATUS_NEUTRAL = ("#ECEFF1", "#90A4AE", "")
 
+# 全局热键延后注册：keyboard 的导入 + add_hotkey 会让 `import Goldenhandmaidens`
+# 之后的构造阶段多花约 0.15s，而这部分是阻塞启动的来源。把注册挪到首帧之后的
+# after 回调里，双击图标到能操作会更快；代价是启动后约 0.2s 内 F8/F9 不可用，
+# 属于可接受的取舍。
+HOTKEY_REGISTER_DELAY_MS = 200
+
 class GameBotGUI:
     def __init__(self, root):
         _ensure_config_files()
@@ -99,7 +105,11 @@ class GameBotGUI:
         self.is_running = False
         self.current_script_index = 0
         self.stop_event = threading.Event()
+        # 热键注册被延后到首帧之后，注册前 _unregister_hotkeys 也可能被调用
+        # （如窗口提前关闭 / 测试清理），先置空避免 AttributeError
         self._hotkey_lib = None
+        self._hk_start = None
+        self._hk_stop = None
 
         # 日志：先建缓冲，setup_ui 中创建可见日志框后再冲刷
         self.log_text = None
@@ -211,8 +221,10 @@ class GameBotGUI:
             except Exception:
                 pass
 
-        # 注册全局热键 F8=开始运行 F9=停止运行
-        self._register_hotkeys()
+        # 注册全局热键 F8=开始运行 F9=停止运行。延后到首帧之后：keyboard 的
+        # 导入与 add_hotkey 是阻塞启动的主要来源；必须留在主线程（注册依赖
+        # 本线程的消息循环），所以用 after 而不是后台线程。
+        self.root.after(HOTKEY_REGISTER_DELAY_MS, self._register_hotkeys)
 
         # 启动后自动流程：可选启动游戏 + 可选自动运行脚本
         if self.launch_game_on_open or self.auto_start_on_launch:
@@ -1840,6 +1852,7 @@ class GameBotGUI:
     def _auto_check_update(self):
         """启动时自动检查更新（后台线程）"""
         def _check():
+            import updater
             result = updater.check_update()
             if result[0] is None:
                 return  # 启动时静默失败
@@ -1853,6 +1866,7 @@ class GameBotGUI:
         self.update_btn.configure(text="检查中...", state=tk.DISABLED)
 
         def _check():
+            import updater
             result = updater.check_update()
             if result[0] is None:
                 _, err_msg = result
@@ -1880,6 +1894,7 @@ class GameBotGUI:
         self.update_btn.configure(text="下载中...", state=tk.DISABLED)
 
         def _download():
+            import updater
             new_path = updater.download_update(download_url)
             if new_path is None:
                 self.root.after(0, lambda: self._update_result("下载失败，请检查网络"))
@@ -1890,6 +1905,7 @@ class GameBotGUI:
         threading.Thread(target=_download, daemon=True).start()
 
     def _install_and_restart(self, new_path):
+        import updater
         self.update_btn.configure(text="检查更新", state=tk.NORMAL)
         if messagebox.askyesno("下载完成", "更新已下载，是否立即重启应用？"):
             updater.install_and_restart(new_path)

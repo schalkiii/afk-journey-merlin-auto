@@ -17,6 +17,7 @@
 import time
 
 from common import (
+    BOTTOM_BAR_CLIENT_REGION,
     check_stop,
     click_position,
     find_center_silent,
@@ -35,7 +36,8 @@ SETTLE_DELAY = 2.0     # 界面切换后的稳定等待
 
 def flow_enter_guild_play(card_template, card_name):
     """从主界面进入公会玩法页并点击目标玩法卡片；点击完成返回 True（落地由调用方校验）。"""
-    if not wait_and_click(tpl_wanfamulu, "wanfamulu", 0.7, recover_threshold=20):
+    if not wait_and_click(tpl_wanfamulu, "wanfamulu", 0.7, recover_threshold=20,
+                          client_region=BOTTOM_BAR_CLIENT_REGION):
         log(f"【公会玩法】未找到玩法目录入口，无法进入{card_name}")
         return False
     time.sleep(SETTLE_DELAY)

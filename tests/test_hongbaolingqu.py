@@ -147,3 +147,103 @@ def test_journal_stops_when_sub_tab_row_did_not_move(monkeypatch):
     assert hb._sweep_journal("测试记") == 1
     assert swept == ["测试记-奖励"]
     assert len(clicks) == 3, "只应点 切任务页 + 两个子页签试探，不能继续扫下去"
+
+
+class _Clock:
+    """可控时钟：_panel_open 同时用到 time.time 与 time.sleep。"""
+
+    def __init__(self):
+        self.now = 0.0
+
+    def time(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+def _stub_panel_probe(monkeypatch, hit_round=None, hit_template=None):
+    """桩掉页签检测；hit_round 轮（从 0 起）命中 hit_template，None 表示恒 miss。"""
+    clock = _Clock()
+    calls = []
+    per_round = len(hb.PANEL_TAB_TEMPLATES)
+
+    def fake_find(template_path, *args, **kwargs):
+        round_index = len(calls) // per_round
+        calls.append((template_path, kwargs.get("timeout")))
+        if hit_round is not None and round_index == hit_round and template_path == hit_template:
+            return (100, 100)
+        return None
+
+    monkeypatch.setattr(hb, "time", clock)
+    monkeypatch.setattr(hb, "find_center_silent", fake_find)
+    monkeypatch.setattr(hb, "check_stop", lambda: None)
+    return clock, calls
+
+
+def test_panel_open_returns_true_when_second_round_hits(monkeypatch):
+    """第一轮全 miss、第二轮某页签命中 → True，且第二轮检查到命中即止。"""
+    clock, calls = _stub_panel_probe(
+        monkeypatch, hit_round=1, hit_template=hb.PANEL_TAB_TEMPLATES[2]
+    )
+
+    assert hb._panel_open() is True
+    assert len(calls) == len(hb.PANEL_TAB_TEMPLATES) + 3
+    assert [tpl for tpl, _timeout in calls[-3:]] == list(hb.PANEL_TAB_TEMPLATES[:3])
+    assert all(timeout == 0 for _tpl, timeout in calls)
+    assert clock.now == hb.PANEL_POLL_INTERVAL, "整轮无命中才等一个轮询间隔"
+
+
+def test_panel_open_polls_single_frame_until_deadline(monkeypatch):
+    """恒 miss：到 deadline 返回 False；每轮 4 个模板各查 1 次且都不带等待。"""
+    clock, calls = _stub_panel_probe(monkeypatch, hit_round=None)
+
+    assert hb._panel_open() is False
+    per_round = len(hb.PANEL_TAB_TEMPLATES)
+    assert len(calls) % per_round == 0
+    rounds = len(calls) // per_round
+    assert rounds >= int(hb.PANEL_OPEN_TIMEOUT / hb.PANEL_POLL_INTERVAL)
+    for template in hb.PANEL_TAB_TEMPLATES:
+        assert sum(1 for tpl, _timeout in calls if tpl == template) == rounds
+    assert all(timeout == 0 for _tpl, timeout in calls)
+    assert clock.now >= hb.PANEL_OPEN_TIMEOUT
+
+
+def test_panel_open_short_circuits_on_first_hit(monkeypatch):
+    """第一轮就命中时不再检查后面的模板，也不白等。"""
+    clock, calls = _stub_panel_probe(
+        monkeypatch, hit_round=0, hit_template=hb.PANEL_TAB_TEMPLATES[1]
+    )
+
+    assert hb._panel_open() is True
+    assert calls == [(hb.PANEL_TAB_TEMPLATES[0], 0), (hb.PANEL_TAB_TEMPLATES[1], 0)]
+    assert clock.now == 0.0
+
+
+def test_claim_first_round_waits_for_yijian_then_zero(monkeypatch):
+    """只有单个「领取」的界面：一键领取首轮 1s 宽限、后续零等待；单个领取始终 0.5s。"""
+    yijian_timeouts = []
+    lingqu_timeouts = []
+    lingqu_results = iter([(1100, 400), (1100, 400), (1100, 400), None])
+    clicks = []
+
+    def fake_wait_and_click(template_path, *args, **kwargs):
+        if template_path == hb.tpl_yijianlingqu:
+            yijian_timeouts.append(kwargs.get("timeout"))
+        return False
+
+    def fake_find(template_path, *args, **kwargs):
+        if template_path == hb.tpl_lingqu:
+            lingqu_timeouts.append(kwargs.get("timeout"))
+            return next(lingqu_results)
+        return None
+
+    monkeypatch.setattr(hb, "wait_and_click", fake_wait_and_click)
+    monkeypatch.setattr(hb, "find_center_silent", fake_find)
+    monkeypatch.setattr(hb, "click_position", lambda pos, **kwargs: clicks.append(pos))
+
+    assert hb.claim_current_view() == 3
+    assert clicks == [(1100, 400)] * 3
+    assert yijian_timeouts[0] == 1.0
+    assert yijian_timeouts[1:] == [0, 0, 0]
+    assert lingqu_timeouts == [0.5, 0.5, 0.5, 0.5]

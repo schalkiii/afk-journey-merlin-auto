@@ -1,7 +1,12 @@
 import os
 import time
 
-from common import find_center, get_templates_dir, wait_and_click
+from common import (
+    BOTTOM_BAR_CLIENT_REGION,
+    find_center,
+    get_templates_dir,
+    wait_and_click,
+)
 
 # 模板路径
 templates_dir = get_templates_dir()
@@ -75,7 +80,8 @@ def main(paid_times=0):
     
     # 1. 识别并点击wanfamulu
     wanfamulu_path = os.path.join(templates_dir, "wanfamulu.png")
-    if not wait_and_click(wanfamulu_path, "wanfamulu", threshold=0.7, recover_threshold=20):
+    if not wait_and_click(wanfamulu_path, "wanfamulu", threshold=0.7, recover_threshold=20,
+                          client_region=BOTTOM_BAR_CLIENT_REGION):
         print("未找到wanfamulu，任务终止")
         return False
     time.sleep(2)

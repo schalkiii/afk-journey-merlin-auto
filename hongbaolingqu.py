@@ -23,6 +23,7 @@ import time
 import cv2
 
 from common import (
+    BOTTOM_BAR_CLIENT_REGION,
     at_main_interface,
     check_stop,
     click_blank_to_exit,
@@ -115,6 +116,14 @@ SEASON_SUB_TAB_OFFSET_X = [0, 132, 264, 397, 532]
 # 单个界面最多点击多少次领取（防止领取后界面不刷新导致死循环）
 MAX_CLAIM_PER_VIEW = 30
 
+# 单个界面首轮给「一键领取」的宽限：页面刚打开时按钮可能还在加载
+YIJIAN_FIRST_TIMEOUT = 1.0
+
+# 确认任务面板已打开的总窗口与轮询间隔：每轮在同一帧上检查全部页签模板，
+# 只有整轮都没命中才等待下一帧（原实现 4 个模板各等 1s，未打开时最坏约 4s）
+PANEL_OPEN_TIMEOUT = 2.0
+PANEL_POLL_INTERVAL = 0.3
+
 # 进入任务面板的重试次数
 ENTRY_RETRY = 2
 
@@ -144,9 +153,14 @@ def claim_current_view():
     两者互不误命中，因此顺序只影响次数，不影响正确性。
     """
     clicked = 0
+    round_index = 0
     while clicked < MAX_CLAIM_PER_VIEW:
         check_stop()
-        if wait_and_click(tpl_yijianlingqu, "yijianlingqu", 0.8, timeout=1.0):
+        # 首轮留宽限等页面加载；一键领取要么一直在、要么本轮已确认不在，
+        # 单点「领取」不会让它新出现，后续轮次不再白等
+        yijian_timeout = YIJIAN_FIRST_TIMEOUT if round_index == 0 else 0
+        round_index += 1
+        if wait_and_click(tpl_yijianlingqu, "yijianlingqu", 0.8, timeout=yijian_timeout):
             clicked += 1
             _close_reward_popup()
             continue
@@ -164,11 +178,22 @@ def claim_current_view():
 
 
 def _panel_open():
-    """底部页签栏里任意一个未选中页签可见，即认为任务面板已打开。"""
-    return any(
-        find_center_silent(template, threshold=0.8, timeout=1.0)
-        for template in PANEL_TAB_TEMPLATES
-    )
+    """底部页签栏里任意一个未选中页签可见，即认为任务面板已打开。
+
+    每轮在同一帧上依次检查 4 个页签模板（timeout=0 只匹配一次，复用截图缓存），
+    整轮都没命中才等一个轮询间隔再取下一帧，直到 PANEL_OPEN_TIMEOUT。
+    这样面板没打开时不会逐个模板各白等 1s。
+    """
+    deadline = time.time() + PANEL_OPEN_TIMEOUT
+    while True:
+        for template in PANEL_TAB_TEMPLATES:
+            if find_center_silent(template, threshold=0.8, timeout=0,
+                                  client_region=BOTTOM_BAR_CLIENT_REGION):
+                return True
+        if time.time() >= deadline:
+            return False
+        check_stop()
+        time.sleep(PANEL_POLL_INTERVAL)
 
 
 def _open_task_panel_via_menu():
@@ -253,7 +278,8 @@ def _sweep_season_task_tab():
         (tpl_saijijieduan, "赛季阶段"),
     ):
         check_stop()
-        if not wait_and_click(template, f"赛季任务-{stage_name}", 0.8, timeout=2.0):
+        if not wait_and_click(template, f"赛季任务-{stage_name}", 0.8, timeout=2.0,
+                              client_region=BOTTOM_BAR_CLIENT_REGION):
             log(f"未找到赛季任务底部页签「{stage_name}」，跳过。")
             continue
         total += _sweep_view(f"赛季任务-{stage_name}")
@@ -264,11 +290,13 @@ def _claim_task_panel():
     """任务面板各页签依次领取。返回领取总数。"""
     total = 0
     # 面板会停在上次浏览的页签，先显式点回每日任务，避免漏扫
-    if wait_and_click(tpl_richangrenwu_tab, "richangrenwutab", 0.8, timeout=3.0):
+    if wait_and_click(tpl_richangrenwu_tab, "richangrenwutab", 0.8, timeout=3.0,
+                      client_region=BOTTOM_BAR_CLIENT_REGION):
         time.sleep(0.8)
     total += _sweep_view("每日任务")
 
-    if wait_and_click(tpl_gonghuirenwu, "gonghuirenwu", 0.8, timeout=2.0):
+    if wait_and_click(tpl_gonghuirenwu, "gonghuirenwu", 0.8, timeout=2.0,
+                      client_region=BOTTOM_BAR_CLIENT_REGION):
         total += _sweep_view("公会任务")
     else:
         log("未找到公会任务页签，跳过。")
@@ -279,7 +307,8 @@ def _claim_task_panel():
         (tpl_jiayuan, "家园目标"),
     ):
         check_stop()
-        if not wait_and_click(template, f"页签 {tab_name}", 0.8, timeout=3.0):
+        if not wait_and_click(template, f"页签 {tab_name}", 0.8, timeout=3.0,
+                              client_region=BOTTOM_BAR_CLIENT_REGION):
             log(f"未找到任务面板页签「{tab_name}」，跳过。")
             continue
         if tab_name == "赛季任务":

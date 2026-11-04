@@ -1,6 +1,7 @@
 import time
 
 from common import (
+    BOTTOM_BAR_CLIENT_REGION,
     click_blank_to_exit,
     find_center_silent,
     get_template_path,
@@ -163,7 +164,8 @@ def flow_mimengzhiyu(challenge_count=None, auto_configure_lineup=False):
             - 之后点击 pujingjieshu
     """
     # 1. 点击 wanfamulu 进入玩法目录界面
-    if not wait_and_click(tpl_wanfamulu, "wanfamulu", 0.7, recover_threshold=20):
+    if not wait_and_click(tpl_wanfamulu, "wanfamulu", 0.7, recover_threshold=20,
+                          client_region=BOTTOM_BAR_CLIENT_REGION):
         print("点击 wanfamulu 进入玩法目录界面失败。")
         return False
     random_sleep()
