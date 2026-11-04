@@ -9,6 +9,8 @@ goldenhandmaidens.exe
 # Python cache
 __pycache__/
 *.pyc
+.pytest_cache/
+.ruff_cache/
 
 # User data - not part of source
 game_bot_config.json
@@ -36,10 +38,6 @@ test-single-drag.py
 test-formation.py
 click_ab.py
 main0hao.py
-
-# Old backups
-*.txt
-!requirements*.txt
 
 # AHK source (only need the compiled exe)
 *.ahk

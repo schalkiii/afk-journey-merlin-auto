@@ -4,7 +4,19 @@
 所以这里必须锁住「哪些行会被改写、哪些必须原样通过」——改写过头会把子脚本
 自己判断用的措辞也吞掉。
 """
+import io
+import re
+import time
+
+import bot_runtime
 import log_format as lf
+
+TRACEBACK = (
+    "Traceback (most recent call last):\n"
+    '  File "Goldenhandmaidens.py", line 1705, in run_scripts_thread\n'
+    "ValueError: 示例异常"
+)
+LINE_WITH_TIMESTAMP = re.compile(r"^\[\d{2}:\d{2}:\d{2}\] .+$")
 
 
 def setup_function(_func):
@@ -68,3 +80,81 @@ def test_boundary_lines_carry_index_result_and_duration():
     assert lf.task_start_line(3, 16, "好友奖励") == "▶ [3/16] 好友奖励"
     assert lf.task_end_line(True, 3, 16, "好友奖励", 20.05) == "✔ [3/16] 好友奖励 · 20.1s"
     assert lf.task_end_line(False, 4, 16, "普竞", 3.0) == "✘ [4/16] 普竞 · 3.0s"
+
+
+def test_format_multiline_drops_blank_rows():
+    assert lf.format_multiline("甲\n\n乙\n") == ["甲", "乙"]
+
+
+def _persist_bodies(monkeypatch, tmp_path, bodies):
+    """按 GUI 异常路径的写法把正文逐行带戳落盘，返回文件里的行。"""
+    log_path = tmp_path / "game_bot.log"
+    monkeypatch.setattr(bot_runtime, "LOG_FILE", str(log_path))
+    for body in bodies:
+        bot_runtime.append_log_file(f"[{time.strftime('%H:%M:%S')}] {body}\n")
+    return log_path.read_text(encoding="utf-8").splitlines()
+
+
+def test_multiline_traceback_persists_one_stamped_line_per_row(monkeypatch, tmp_path):
+    lines = _persist_bodies(monkeypatch, tmp_path, lf.format_multiline(TRACEBACK))
+
+    assert len(lines) == 3, f"三行堆栈应落盘三行，实际 {lines}"
+    for line in lines:
+        assert LINE_WITH_TIMESTAMP.match(line), f"缺时间戳：{line!r}"
+        # 不在任务里时顶格，不能被 detail 缩进
+        assert not line.split("] ", 1)[1].startswith(lf.DETAIL_MARK), f"不应缩进：{line!r}"
+
+
+def test_multiline_traceback_is_grouped_under_running_task(monkeypatch, tmp_path):
+    lf.set_task("普竞")
+    try:
+        bodies = lf.format_multiline(TRACEBACK)
+    finally:
+        lf.set_task(None)
+    lines = _persist_bodies(monkeypatch, tmp_path, bodies)
+
+    assert len(lines) == 3, f"三行堆栈应落盘三行，实际 {lines}"
+    for line in lines:
+        assert line.split("] ", 1)[1].startswith(lf.DETAIL_MARK), f"任务中的堆栈行必须缩进：{line!r}"
+
+
+def _write_persistent(monkeypatch, tmp_path, chunks):
+    """构造早期 stdout 包装并喂入分片，返回（日志路径, 控制台流, 包装对象）。"""
+    log_path = tmp_path / "game_bot.log"
+    monkeypatch.setattr(bot_runtime, "LOG_FILE", str(log_path))
+    stream = io.StringIO()
+    stdout = bot_runtime._PersistentStdout(stream, str(log_path))
+    for chunk in chunks:
+        stdout.write(chunk)
+    return log_path, stream, stdout
+
+
+def test_persistent_stdout_buffers_half_line_until_newline(monkeypatch, tmp_path):
+    log_path, stream, _ = _write_persistent(monkeypatch, tmp_path, ["abc", "def\n"])
+
+    # 控制台即时拿到原始文本，文件侧只在凑齐一条完整行时才落盘
+    assert stream.getvalue() == "abcdef\n"
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1, f"半行不应提前落盘，实际 {lines}"
+    assert "abcdef" in lines[0]
+    assert LINE_WITH_TIMESTAMP.match(lines[0])
+
+
+def test_persistent_stdout_splits_one_multi_line_write(monkeypatch, tmp_path):
+    log_path, _, _ = _write_persistent(monkeypatch, tmp_path, ["第一行\n第二行\n"])
+
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2, f"一次写入的两行都应落盘，实际 {lines}"
+    assert "第一行" in lines[0]
+    assert "第二行" in lines[1]
+
+
+def test_persistent_stdout_flush_persists_pending(monkeypatch, tmp_path):
+    log_path, _, stdout = _write_persistent(monkeypatch, tmp_path, ["尾巴"])
+
+    stdout.flush()
+    stdout.flush()   # 再刷一次不能把同一条 pending 重复落盘
+
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1, f"flush 应把 pending 按一行落盘且不重复，实际 {lines}"
+    assert "尾巴" in lines[0]

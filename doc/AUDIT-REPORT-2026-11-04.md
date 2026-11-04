@@ -417,3 +417,38 @@ pillow 仅传递依赖），已改为按清单安装。
 
 **门禁**：`python -m compileall .` 通过；`pytest -q` 106 passed；`ruff check .` 64 条 = 存量基线，新增测试文件
 自身 0 条。产品代码本次只动了上述一行显式化。B2、B4–B10 未动。
+
+---
+
+## 八、执行进展（第二批，并行 Agent，2026-11-04 深夜）
+
+**已落地**：B2、B5、B6、B8、B9、B10、B11；B7 按用户决定**只整理结构、不升版本**；B4 按用户决定
+**只读评估、不改代码**。
+
+| 编号 | 结果 | 关键证据 |
+|---|---|---|
+| B2 | 已落地 | `common.crops_differ` / `region_changed_since`；3 个调用点复用，区域与阈值留在调用方；`tests/test_common_region_change.py` 9 条 |
+| B5 | 已落地 | `log_format.format_multiline`；堆栈逐行带戳；`_LineBuffer` 被 `_StdoutTee` / `_PersistentStdout` 共用；+7 用例 |
+| B6 | 已落地 | `common.tap_hud_entry`；原点换算 + 重试 + confirm 单源，3 个入口保留各自已验证的点击节奏；+2 用例 |
+| B8 | 已落地 | `build.ps1`（build/check/clean）；`check` 实跑退出码 0；探针告警能被指名拦截 |
+| B9 | 已落地 | `.ruff_baseline`（12 文件、合计 64 条）；`build.ps1 check` 消费并逐文件比对 |
+| B10 | 已落地（除批量重命名） | 删除 `_tmp_click_srv.py`（用户确认）；conftest 跳过改为显式 warning；README 命名说明与构建入口已补 |
+| B11 | 已落地 | `np.argwhere` 行主序贪婪抑制，与旧实现逐点等价；本机 20×24 实测 0.053–0.085 ms → 0.010–0.024 ms；等价性 + 2× 加速门槛用例 |
+| B7 | 部分完成 | CHANGELOG 按主题 6 组、正文 302 行多重集不变；**版本仍 v1.4.7、未打 tag** |
+| B4 | 评估完成（未改代码） | 建议只做第一阶段（`ScriptConfig.runner` + dispatch 派生），预计 +25/−65 行；不建议自动生成 params 面板 |
+
+**执行中的偏差与新事实**：
+
+- **B11 的耗时前提被实测推翻**：审计预估「20×24 旧实现 1–3 ms」不成立（本机仅 0.053–0.085 ms），
+  单纯 `< 1 ms` 门槛无法负验证；测试改为「< 1 ms 且对参考实现至少 2× 加速」，负验证才真正变红。
+- **B11 未采用审计的「按分数降序」**：那会改变与旧实现的逐点等价性；改为按 `np.argwhere` 行主序贪婪抑制。
+- **B2 非逐字节等价**：旧实现是「小图在整屏找最优匹配」，新实现是「同一客户区区域内自匹配」，语义更准；
+  三个调用点的阈值与区域常量未动，现有测试断言未改。
+- **B6 的 click 回调设计**：helper 只收敛「原点换算 + 重试 + confirm + 失败日志」，点击节奏仍由调用方注入，
+  否则现有 monkeypatch 断言会失效。这是对审计原文「helper 内部连点两下」的必要收敛。
+- **B4 不是完全单源**：无参功能追加 1 条 `ScriptConfig` 即可；带参功能仍需新增 `create_*_params` 分支。
+- **.gitignore 收窄**：删除 `*.txt` + `!requirements*.txt` 后，未来 `.txt` 数据文件不再被静默忽略
+  （`warehouse_heroes.txt` 已有单独规则）。
+
+**收尾门禁**：`pytest -q` **126 passed**；`ruff check .` **64 条 = 存量基线**；`build.ps1 check` 退出码 0；
+`git status` 仅含本轮预期改动。

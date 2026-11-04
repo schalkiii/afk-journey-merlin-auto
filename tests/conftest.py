@@ -4,6 +4,8 @@
 所以整个测试会话只建一个隐藏的根，各 GUI 测试模块复用它。
 测试会话还会把 `game_bot.log` 的写入路径整体挪到临时目录，避免污染用户日志。
 """
+import warnings
+
 import pytest
 
 
@@ -31,7 +33,13 @@ def tk_root():
     tk = pytest.importorskip("tkinter")
     try:
         root = tk.Tk()
-    except tk.TclError:
+    except tk.TclError as exc:
+        # 静默 skip 会让「全绿」掩盖关键 GUI 用例没跑：显式告警，让跳过在测试输出里可见
+        warnings.warn(
+            f"当前环境没有可用的图形显示，GUI 测试被跳过（{exc}）",
+            pytest.PytestWarning,
+            stacklevel=1,
+        )
         pytest.skip("当前环境没有可用的图形显示，跳过 GUI 测试")
     root.withdraw()
     yield root

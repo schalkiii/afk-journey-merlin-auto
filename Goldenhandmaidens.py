@@ -1617,6 +1617,11 @@ class GameBotGUI:
             return False
 
     def run_scripts_thread(self, scripts_to_run, respect_enabled=True):
+        # 单运行循环假设：log_format._task 是模块级全局，两个并行循环会互相覆盖任务上下文，
+        # 日志归组随之错乱。断言放在任何 set_task 之前，确保同一时刻只有一个循环在跑。
+        assert log_format.current_task() is None, (
+            "已有运行循环在执行（log_format 任务上下文非空），禁止并行启动第二个运行循环"
+        )
         # 先把子脚本的 print 调试日志转发到运行日志面板（经队列，主线程节流刷新）
         sys.stdout = _StdoutTee(self._enqueue_log)
 
@@ -1726,8 +1731,11 @@ class GameBotGUI:
                 script.status = "错误"
                 self.log(log_format.task_end_line(False, index, total, script.name,
                                                   time.time() - task_started) + f" 出错: {e!s}")
-                # 完整堆栈写入日志文件便于定位；面板只显示首行避免刷屏
-                append_log_file(traceback.format_exc())
+                # 完整堆栈写入日志文件便于定位；逐行加时间戳并归到当前任务下，
+                # 面板仍只显示上面那条首行，避免刷屏
+                for stack_line in log_format.format_multiline(traceback.format_exc()):
+                    stamp = time.strftime('%H:%M:%S')
+                    append_log_file(f'[{stamp}] {stack_line}\n')
             finally:
                 # 任务一结束就摘掉上下文，任务之间的等待/收尾行不再被误缩进到上一任务里
                 log_format.set_task(None)

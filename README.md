@@ -313,6 +313,10 @@ warehouse.py              仓库管理（英雄网格扫描、按头像边框识
 jiance.py                礼包 / 弹窗检测工具（check_and_handle_libao，被多任务复用）
 updater.py                检查更新与自更新
 version.py                本地版本号
+requirements.txt          运行时依赖（按本机 Python 3.13 实测版本 pin）
+requirements-dev.txt      开发依赖（pytest / ruff / pyinstaller）
+build.ps1                 统一构建入口：build / check / clean（需 PowerShell 7+）
+.ruff_baseline            ruff 存量基线（每行 `文件=条数`，由 build.ps1 check 消费）
 launch_game.py            命令行启动游戏并可联动启动本项目脚本（新增）
 click_from_file.exe       AHK 注入器（读取坐标文件执行点击）
 templates/                界面模板图片
@@ -326,6 +330,10 @@ config.json               启动器/脚本默认配置（新增）
 warehouse_heroes.txt      仓库扫描结果（运行时生成；flow_tower 读它判断「我方练度是否够这套阵容」）
 tests/                    pytest 用例（只测决策逻辑，真实屏幕全部打桩；跑法见「二次开发」）
 ```
+
+命名说明：`flow_*` 多为「流程模块」——既包括可被 GUI 直接分发的完整流程（如 `flow_migong`、
+`flow_push`），也包括供多个入口复用的跳转片段（如 `flow_enter`、`flow_gonghui`）；
+`push.py` / `pata.py` 等无前缀模块属历史命名。判别以本清单的职责说明为准，不要按前缀猜。
 
 ---
 
@@ -349,10 +357,13 @@ tests/                    pytest 用例（只测决策逻辑，真实屏幕全�
 python -m pip install -r requirements.txt -r requirements-dev.txt
 python Goldenhandmaidens.py
 ```
-打包为单文件 exe（输出到仓库根目录）：
+打包、门禁与清理统一走 `build.ps1`（需要 PowerShell 7+）：
 ```bash
-pyinstaller goldenhandmaidens.spec --distpath . --workpath build --noconfirm
+pwsh -NoProfile -File build.ps1 build    # 打包为单文件 exe（输出到仓库根，等价于 pyinstaller 命令）
+pwsh -NoProfile -File build.ps1 check    # compileall + pytest + ruff 逐文件基线比对
+pwsh -NoProfile -File build.ps1 clean    # 清理 build/dist/__pycache__/.pytest_cache/.ruff_cache
 ```
+`clean` 只删可再生的缓存与中间目录，**不会删除**根目录的 `goldenhandmaidens.exe` / `click_from_file.exe` 与 `templates/`。
 
 跑回归测试（不需要开游戏，全部在模块级接缝打桩）：
 ```bash

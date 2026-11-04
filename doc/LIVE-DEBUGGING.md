@@ -86,6 +86,10 @@
 噪声带里，会把「页面还没停稳」误判成「动作生效」。判据阈值必须**低于观测到的最差噪声**，
 而不是低于某一次好看 samples。
 
+这套「动作前后区域是否变化」的判据已收口为 `common.region_changed_since()`（内部复用
+`common.crops_differ()`）：比较与轮询等待只有一份实现，**区域与阈值仍由调用方注入**（不同界面
+的噪声底不同，不能合并成一个全局数）。新调用点必须在注释里写下「静止 X / 真变化 Y」两个实测数。
+
 **更狠的一种：信号本身比噪声还小**。月桂之旅内层「奖励/任务」页签行，实测静止噪声底
 **0.992**、而真的切了页之后自匹配仍有 **0.989**——变化量小于噪声量，这个区域**根本不能当判据**，
 再怎么调阈值都是随机漏扫。换区域重测才解决：子页签那一行静止 **1.000**、切页掉到 **-0.3**
@@ -109,9 +113,11 @@
 
 ## 7. 门禁与「零新增」基线比对
 
-- 每轮改动：`python -m compileall -q <files>` → `pytest -q` → `ruff check`。
-- 本仓 ruff 有既有基线（约 64 条）。判断「有没有引入新问题」不能只看总数，
-  要逐文件与 HEAD 比：
+- 每轮改动：`pwsh -NoProfile -File build.ps1 check`，一次跑完
+  `compileall` → `pytest -q` → `ruff check .` 并按基线比对。
+- lint 基线登记在仓库根的机器可读文件 `.ruff_baseline`（每行 `文件=条数`，全仓合计 64 条）。
+  `build.ps1 check` 逐文件比对：**任何文件高于基线即失败并指名文件与新增条数**，低于基线视为改善。
+  要判断某文件的告警是否出自本轮改动，仍逐文件与 HEAD 比：
   `git show HEAD:push.py | ruff check --stdin-filename push.py --output-format concise -`
 - 测试要覆盖**新写的分支**而不是只跑通主路径：吞点击重试、离开原页面后不盲点、
   领取上限截断，都各有一条确定性单测（`tests/test_push_fail_limit.py`、
@@ -124,7 +130,7 @@
 1. 文档同步（README 功能表 / 项目结构、CHANGELOG 记结论与**撤销过的方案**）；
 2. `git commit` → `GIT_TERMINAL_PROMPT=0 git -c credential.interactive=false push origin main`
    （本机 GCM 会卡 push，必须非交互）；
-3. `python -m PyInstaller goldenhandmaidens.spec --distpath . --workpath build --noconfirm`；
+3. `pwsh -NoProfile -File build.ps1 build`；
 4. **解包校验产物**，不要只看构建成功：
    ```python
    from PyInstaller.archive.readers import CArchiveReader

@@ -90,9 +90,8 @@ def test_pick_closest_default_path_looks_up_once(monkeypatch):
 def _patch_matcher(monkeypatch, res):
     """把匹配结果替换成预置分数图。
 
-    为什么：函数体是逐像素纯 Python 双层循环，循环次数 == res 尺寸；
-    真机上 res 约 1596x896（≈143 万次），测试必须用 20x20 量级的小图，
-    否则单条用例会跑到几十秒（审计报告 B11 点名的性能问题）。
+    为什么：真机 res 约 1596x896（≈143 万像素），测试只关心决策逻辑，
+    用 20x24 量级小图同时避免截图/模板加载与尺寸相关的耗时。
     模板桩成 5x5 → 中心偏移 (2, 2)。
     """
     import cv2
@@ -128,10 +127,10 @@ def test_find_all_instances_min_gap_dedup(clean_state, monkeypatch):
 def test_find_all_instances_sorted_by_y_ascending(clean_state, monkeypatch):
     """结果必须按 y 从上到下——调用方 _pick_closest_mgzd 之外还有一处依赖「第一个即最上面一行」。
 
-    诚实标注：本例无法通过删掉 `loc.sort` 来负验证。函数体是按 (y, x) 升序扫描的
-    双层循环，峰的发现顺序天然已按 y 递增，所以那行 sort 在当前实现下是恒等操作。
-    保留本用例是为了守住契约：一旦按审计 B4 把双层循环向量化（np.argwhere 的行序
-    不保证与 y 一致），这条就会变成真正的防线。
+    诚实标注：当前实现用 np.argwhere 取候选，其行主序在二维 res 上仍按 y 递增，
+    所以 `loc.sort` 在这一版里仍是恒等操作，删掉也不会让本例变红。保留本用例
+    是为了守住契约：一旦日后换成按分数排序或其它不保序的候选来源，这条排序
+    就成了真正承重的防线。
     """
     res = np.zeros((24, 24), np.float32)
     res[4, 10] = 0.9   # 中心 (12, 6)
@@ -140,6 +139,86 @@ def test_find_all_instances_sorted_by_y_ascending(clean_state, monkeypatch):
 
     peaks = flow_migong.find_all_instances_mg("x", threshold=0.5, min_gap=6, img=img)
     assert peaks == [(12, 6), (4, 18)]
+
+
+def _find_all_instances_reference(res, template_shape, threshold, min_gap):
+    """向量化之前的逐像素双层实现，仅作等价性对照与耗时基准，不参与生产调用。"""
+    th, tw = template_shape
+    loc = []
+    h, w = res.shape[:2]
+    for y in range(h):
+        for x in range(w):
+            if res[y, x] >= threshold:
+                cx, cy = x + tw // 2, y + th // 2
+                too_close = False
+                for ex, ey in loc:
+                    if abs(cx - ex) < min_gap and abs(cy - ey) < min_gap:
+                        too_close = True
+                        break
+                if not too_close:
+                    loc.append((cx, cy))
+    loc.sort(key=lambda p: p[1])
+    return loc
+
+
+def test_find_all_instances_matches_reference_implementation(clean_state, monkeypatch):
+    """向量化实现必须与旧双层循环逐点等价：含多个峰、阈值边界与近邻抑制。"""
+    res = np.zeros((24, 28), np.float32)
+    res[0, 0] = 0.5    # 恰等于阈值：保留
+    res[0, 1] = 0.9    # 与 (2,2) 相邻（dx=1, dy=0）：被抑制
+    res[3, 1] = 0.49   # 低于阈值：丢弃
+    res[0, 8] = 0.8    # x 与 (2,2) 相距 8：独立实例
+    res[1, 8] = 0.85   # 与 (10,2) 相邻：被抑制
+    res[8, 0] = 0.7    # y 与 (2,2) 相距 8：独立实例
+    res[8, 8] = 0.6    # 独立实例
+    res[8, 9] = 0.55   # 与 (10,10) 相邻：被抑制
+    res[0, 14] = 0.9   # 与 (10,2) 的 dx 恰为 min_gap(=6)：`<` 判定不算太近 → 保留
+    res[7, 25] = 0.5   # 恰等于阈值：保留
+    res[12, 24] = 0.49  # 低于阈值：丢弃
+    res[20, 25] = 0.9  # 右下角独立实例
+    img = _patch_matcher(monkeypatch, res)
+
+    got = flow_migong.find_all_instances_mg("x", threshold=0.5, min_gap=6, img=img)
+    expected = _find_all_instances_reference(res, (5, 5), 0.5, 6)
+    assert got == expected
+
+
+def test_find_all_instances_vectorized_within_budget(clean_state, monkeypatch):
+    """锁住「不要退回 O(像素) 的 Python 双层循环」。
+
+    本机实测（20x24 res、5x5 模板、min_gap=6、50 次均值）：旧双层实现
+    0.053–0.085 ms，向量化 0.010–0.023 ms。审计预估的「旧实现 1–3 ms」在本
+    尺寸不成立，单靠 `< 1 ms` 无法让旧实现失败；因此另加一条对参考实现的
+    2 倍加速断言，负验证（换回双层循环）时它才会真正变红。
+    """
+    res = np.zeros((20, 24), np.float32)
+    res[0, 0] = 0.9
+    res[1, 1] = 0.9
+    res[8, 12] = 0.8
+    res[16, 4] = 0.7
+    img = _patch_matcher(monkeypatch, res)
+    # 模板路径解析与本例无关，桩掉以免把路径开销算进耗时
+    monkeypatch.setattr(flow_migong, "tpl", lambda name: name)
+    kwargs = {"threshold": 0.5, "min_gap": 6, "img": img}
+
+    flow_migong.find_all_instances_mg("x", **kwargs)  # 预热 argwhere / 桩调用
+
+    def _average(func):
+        start = time.perf_counter()
+        for _ in range(50):
+            func()
+        return (time.perf_counter() - start) / 50
+
+    vector_avg = _average(lambda: flow_migong.find_all_instances_mg("x", **kwargs))
+    reference_avg = _average(
+        lambda: _find_all_instances_reference(res, (5, 5), 0.5, 6)
+    )
+
+    assert vector_avg < 0.001, f"向量化平均 {vector_avg * 1000:.4f} ms，超过 1 ms 门槛"
+    assert vector_avg * 2 < reference_avg, (
+        f"向量化 {vector_avg * 1000:.4f} ms 未显著快于旧实现 "
+        f"{reference_avg * 1000:.4f} ms"
+    )
 
 
 # ============================================================

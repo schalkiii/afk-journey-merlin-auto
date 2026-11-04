@@ -83,6 +83,30 @@ def test_hud_target_entry_adds_client_origin(monkeypatch):
     assert clicks[0] != hb.TASK_PANEL_HUD_POS
 
 
+def test_hud_target_entry_retries_without_drifting_coordinate(monkeypatch):
+    """confirm 恒为假：重试用尽返回 False，每轮连点两下，坐标始终是同一个「客户区原点 + 偏移」。
+
+    twice=True 路径下每次 click_position 代表两下点击，所以有效点击次数 = retries×2。
+    """
+    clicks = []
+    monkeypatch.setattr(hb, "check_stop", lambda: None)
+    monkeypatch.setattr(hb, "game_client_region", lambda: (2000, 100, 1600, 900))
+    monkeypatch.setattr(hb, "click_position",
+                        lambda pos, **kwargs: clicks.append((pos, kwargs.get("twice"))))
+    monkeypatch.setattr(hb, "_panel_open", lambda: False)
+    monkeypatch.setattr(hb, "time", types.SimpleNamespace(sleep=lambda *args: None))
+    monkeypatch.setattr(hb, "log", lambda *args, **kwargs: None)
+
+    assert hb._open_task_panel_via_hud() is False
+
+    expected = (2000 + hb.TASK_PANEL_HUD_POS[0], 100 + hb.TASK_PANEL_HUD_POS[1])
+    assert len(clicks) == hb.ENTRY_RETRY
+    assert all(pos == expected and twice is True for pos, twice in clicks), (
+        "重试只能重复同一个入口点位，且每轮必须连点两下"
+    )
+    assert sum(2 if twice else 1 for _pos, twice in clicks) == hb.ENTRY_RETRY * 2
+
+
 def _stub_journal(monkeypatch, switch_changed):
     """桩掉一记扫描的外部依赖；switch_changed 表示「子页签行是否确认发生了切换」。"""
     clicks = []

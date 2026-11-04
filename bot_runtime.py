@@ -19,6 +19,34 @@ import log_format
 from common import get_work_path
 
 
+class _LineBuffer:
+    """跨多次 write 按行拼装文本，凑齐一行才产出，正文统一走 `log_format.format_body`。
+
+    print 会分两次调用 write（正文 + 换行），直接落盘会留下带时间戳的半行。
+    `_StdoutTee` 与 `_PersistentStdout` 共用这一份实现，避免两处各维护一套 while 循环。
+    """
+
+    def __init__(self):
+        self._pending = ""
+
+    def feed(self, text):
+        """喂入一段文本，返回本次凑齐的完整行（已格式化、已丢弃空行）。"""
+        self._pending += text
+        lines = []
+        while "\n" in self._pending:
+            line, self._pending = self._pending.split("\n", 1)
+            body = log_format.format_body(line)
+            if body:
+                lines.append(body)
+        return lines
+
+    def take_pending(self):
+        """取走尚未换行的残余并清空缓冲（flush 时按一行处理）。"""
+        body = log_format.format_body(self._pending)
+        self._pending = ""
+        return [body] if body else []
+
+
 class _StdoutTee:
     """把 stdout 同时输出到原始 stdout 与面板日志汇聚回调，
     使各子脚本中的 print(...) 调试日志也能显示在应用内「运行日志」面板。
@@ -30,20 +58,14 @@ class _StdoutTee:
     def __init__(self, sink):
         self._sink = sink
         self._orig = sys.__stdout__
-        self._pending = ""
+        self._lines = _LineBuffer()
 
     def write(self, s):
         with contextlib.suppress(Exception):
             self._orig.write(s)  # type: ignore[union-attr]
         # 落盘必须带时刻：子脚本的 print 以前整段没有时间戳，调试时分不清
-        # 「识别失败 12 次」是同一秒的抖动还是跨了半分钟。print 会分两次调用
-        # （正文 + 换行），所以按行缓冲，凑齐一行才写一条，避免半行带时间戳。
-        self._pending += s
-        while "\n" in self._pending:
-            line, self._pending = self._pending.split("\n", 1)
-            body = log_format.format_body(line)
-            if not body:
-                continue
+        # 「识别失败 12 次」是同一秒的抖动还是跨了半分钟。
+        for body in self._lines.feed(s):
             stamp = time.strftime("%H:%M:%S")
             # 面板那一路由 _drain_log_queue 统一加时间戳，这里只送正文，否则会成双时间戳
             with contextlib.suppress(Exception):
@@ -116,11 +138,16 @@ def append_log_file(text):
 
 
 class _PersistentStdout:
-    """同时保留控制台输出和写入本地日志文件（用于 GUI 实例创建前的早期阶段）。"""
+    """同时保留控制台输出和写入本地日志文件（用于 GUI 实例创建前的早期阶段）。
+
+    控制台仍即时就写原始文本，保证启动期提示不延迟；文件侧按行缓冲，凑齐一行才
+    走 formatter + 时间戳落盘，`flush()` 时把残余的半行也按一行写出。
+    """
 
     def __init__(self, stream, path):
         self.stream = stream
         self.path = path
+        self._lines = _LineBuffer()
 
     def write(self, text):
         if not text:
@@ -131,12 +158,19 @@ class _PersistentStdout:
         except Exception:
             # 打包后的 GUI 程序可能没有可用控制台，忽略控制台输出失败。
             pass
-        append_log_file(text)
+        self._persist(self._lines.feed(text))
         return len(text)
+
+    @staticmethod
+    def _persist(bodies):
+        for body in bodies:
+            stamp = time.strftime("%H:%M:%S")
+            append_log_file(f"[{stamp}] {body}\n")
 
     def flush(self):
         with contextlib.suppress(Exception):
             self.stream.flush()
+        self._persist(self._lines.take_pending())
 
 
 def _enable_persistent_console_log():

@@ -7,6 +7,7 @@
 - 一条消息只落盘一行（面板与文件各一次，不能重复写文件）。
 """
 import os
+import pathlib
 import re
 import sys
 
@@ -60,3 +61,12 @@ def test_subscript_log_line_is_persisted_with_timestamp(app, monkeypatch, tmp_pa
     assert len(lines) == 1, f"一条子脚本日志应只落盘一行，实际 {lines}"
     assert LINE_WITH_TIMESTAMP.match(lines[0]), f"缺时间戳：{lines[0]!r}"
     assert "当前不在家园视图" in lines[0]
+
+
+def test_run_loop_start_guards_against_a_second_loop():
+    """单运行循环守卫必须静态存在，且在任何 set_task 之前（不能真跑循环去触发它）。"""
+    source = pathlib.Path(gui.__file__).read_text(encoding="utf-8")
+    body = source[source.index("def run_scripts_thread("):source.index("def _enqueue_log(")]
+    guard = "assert log_format.current_task() is None"
+    assert guard in body, "run_scripts_thread 启动处必须断言当前没有任务上下文"
+    assert body.index(guard) < body.index("log_format.set_task("), "断言必须早于任何 set_task"

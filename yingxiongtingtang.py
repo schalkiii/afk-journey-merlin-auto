@@ -12,8 +12,6 @@
 
 import time
 
-import cv2
-
 from common import (
     check_stop,
     find_center_silent,
@@ -22,6 +20,7 @@ from common import (
     invalidate_screenshot_cache,
     log,
     recover_to_main_interface,
+    region_changed_since,
     screenshot_bgr,
     wait_and_click,
 )
@@ -62,15 +61,9 @@ def _enter_hero_hall():
 
 def _wait_level_change(before, timeout=3.0):
     """等待等级区域与点击前不再一致；升级数字有跳字动画，只读一次会误判成没变化。"""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        check_stop()
-        frame = screenshot_bgr()
-        match = cv2.matchTemplate(frame, before, cv2.TM_CCOEFF_NORMED)
-        if float(match.max()) < LEVEL_CHANGED_BELOW:
-            return True
-        time.sleep(0.4)
-    return False
+    return region_changed_since(
+        before, LEVEL_REGION, threshold=LEVEL_CHANGED_BELOW, timeout=timeout
+    )
 
 
 def quick_upgrade(times=DEFAULT_QUICK_UPGRADE_TIMES):

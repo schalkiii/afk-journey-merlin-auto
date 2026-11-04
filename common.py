@@ -942,6 +942,83 @@ def click_position(pos, wait=1.5, twice=True):
     return True
 
 
+# ===== 无 OCR 区域变化检测（B2）=====
+# 「某区域动作前后是否发生变化」在多个玩法里都要用：翻翻乐看钥匙余量、英雄厅堂看
+# 等级数字、红点领取看页签行。比较与等待拆成两层，阈值与区域常量仍留在调用方
+# （不同界面的噪声底不同，不能合并成一个全局数）。
+def crops_differ(before_crop, after_crop, threshold):
+    """判定两帧裁剪图是否「不再一致」；形状不一致视为未变化（与红点领取的既有语义一致）。
+
+    用 TM_CCOEFF_NORMED 把 before 当作模板在 after 里自匹配：完全相同时为 1.0，
+    界面真变化时明显掉分。阈值由调用方按各自界面的实测噪声底注入。
+    """
+    if before_crop.shape[:2] != after_crop.shape[:2]:
+        return False
+    return float(cv2.matchTemplate(after_crop, before_crop, cv2.TM_CCOEFF_NORMED).max()) < threshold
+
+
+def region_changed_since(before_crop, region, *, threshold, timeout=3.0, interval=0.4):
+    """轮询等待客户区某区域与 before_crop 不再一致；超时返回 False。
+
+    region 是客户区相对坐标 (x, y, w, h)。每轮都重新取帧：0.4s 级轮询若用
+    get_cached_screenshot 会一直拿到缓存旧帧，永远看不到变化。窗口取不到时按整屏
+    原点裁剪（与 find_center 的全屏回退一致）。timeout=0 也会先确认一次，
+    与仓库 `_wait_gone` 的既有语义一致。check_stop 放在循环内，F9 可随时中断。
+    """
+    deadline = time.time() + timeout
+    while True:
+        check_stop()
+        frame = screenshot_bgr()
+        rect = game_client_region()
+        origin_x, origin_y = (rect[0], rect[1]) if rect else (0, 0)
+        region_x, region_y, region_w, region_h = region
+        left, top = origin_x + region_x, origin_y + region_y
+        after_crop = frame[top:top + region_h, left:left + region_w]
+        if crops_differ(before_crop, after_crop, threshold):
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(interval)
+
+
+# ===== HUD 固定点位入口（B6）=====
+def _default_hud_click(client_pos):
+    """HUD 入口的默认点击方式：客户区原点换算 + click_position 连点两下。
+
+    窗口未在前台时第一次点击会被系统用于激活而吞掉（实测角落 HUD 图标单点无反应），
+    因此默认连点两下。跳转型入口需要 twice=False 时，调用方注入自己的 click 回调。
+    """
+    region = game_client_region()
+    origin_x, origin_y = (region[0], region[1]) if region else (0, 0)
+    click_position((origin_x + client_pos[0], origin_y + client_pos[1]), twice=True)
+
+
+def tap_hud_entry(client_pos, confirm, *, retries=2, click=None, log_func=None, precheck=False):
+    """点固定 HUD 点位进入子面板：客户区原点换算 → 每轮尝试 → confirm 校验 → 失败日志。
+
+    client_pos 是客户区相对坐标 (x, y)；换算成整屏坐标由 click 回调完成。各调用方
+    把「本模块命名空间」的点击方式（wait / twice / send_coord 两次 + sleep）封装进
+    闭包注入，既保留各自实测的点击节奏，也让测试对模块符号的 monkeypatch 继续生效。
+    click 缺省为 _default_hud_click（客户区换算 + 连点两下）。
+    precheck=True 时先调 confirm：已成立（例如已不在主界面）就直接返回 True，不点。
+    confirm 每轮为假时累计重试 retries 轮，失败日志由 log_func(attempt) 输出。
+    """
+    if precheck and confirm():
+        return True
+    if click is None:
+        click = _default_hud_click
+    for attempt in range(1, retries + 1):
+        check_stop()
+        click(client_pos)
+        if confirm():
+            return True
+        if log_func is not None:
+            log_func(attempt)
+        else:
+            log(f"第 {attempt} 次点击 HUD 入口后未确认进入界面。")
+    return False
+
+
 def dismiss_popup_away_from(offset=(-400, -200), wait=1.5):
     """关闭「点击空白处关闭」类结算弹窗，但避开热区中心本身。
 

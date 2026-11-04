@@ -19,6 +19,7 @@ from common import (
     game_client_region,
     get_templates_dir,
     send_coord,
+    tap_hud_entry,
     wait_and_click,
 )
 from flow_enter import flow_return_main
@@ -67,18 +68,24 @@ def _open_friends_via_hud(retries=2):
     角落 HUD 图标在窗口未前台时，第一次点击会被系统当成激活点击吞掉（实测单次点击
     完全无反应），所以每轮连点两下，再用按钮是否出现来确认，不靠「点了就当进去了」。
     """
-    region = game_client_region()
-    pos = (region[0] + FRIENDS_HUD_POS[0], region[1] + FRIENDS_HUD_POS[1])
-    for attempt in range(1, retries + 1):
+    def click(corner_pos):
+        region = game_client_region()
+        pos = (region[0] + corner_pos[0], region[1] + corner_pos[1])
         send_coord(pos[0], pos[1])
         time.sleep(0.4)
         send_coord(pos[0], pos[1])
         time.sleep(2.0)
-        if _friends_panel_visible():
-            print(f"【好友奖励】第 {attempt} 次经主界面好友图标进入好友面板")
-            return True
-        print(f"【好友奖励】第 {attempt} 次点主界面好友图标后未见好友面板按钮")
-    return False
+
+    if not tap_hud_entry(
+        FRIENDS_HUD_POS,
+        _friends_panel_visible,
+        retries=retries,
+        click=click,
+        log_func=lambda attempt: print(f"【好友奖励】第 {attempt} 次点主界面好友图标后未见好友面板按钮"),
+    ):
+        return False
+    print("【好友奖励】经主界面好友图标进入好友面板")
+    return True
 
 
 def _collect_gifts():

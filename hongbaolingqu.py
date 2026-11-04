@@ -27,6 +27,7 @@ from common import (
     check_stop,
     click_blank_to_exit,
     click_position,
+    crops_differ,
     find_center_silent,
     game_client_region,
     get_cached_screenshot,
@@ -35,6 +36,7 @@ from common import (
     load_template,
     log,
     recover_to_main_interface,
+    tap_hud_entry,
     wait_and_click,
 )
 
@@ -199,17 +201,23 @@ def _open_task_panel_via_hud():
     twice=False 点它完全没有反应，改 twice=True 立刻进得去，所以这里连点两下，
     并且每次都再用页签栏确认，不靠「点了就当进去了」。
     """
-    region = game_client_region()
-    pos = (region[0] + TASK_PANEL_HUD_POS[0], region[1] + TASK_PANEL_HUD_POS[1])
-    for attempt in range(1, ENTRY_RETRY + 1):
-        check_stop()
-        click_position(pos, wait=2.0, twice=True)
-        if _panel_open():
-            log(f"第 {attempt} 次经主界面「目标」入口进入任务面板。")
-            time.sleep(0.8)
-            return True
-        log(f"第 {attempt} 次点「目标」后未见任务面板页签栏。")
-    return False
+    def click(corner_pos):
+        region = game_client_region()
+        click_position(
+            (region[0] + corner_pos[0], region[1] + corner_pos[1]), wait=2.0, twice=True
+        )
+
+    if not tap_hud_entry(
+        TASK_PANEL_HUD_POS,
+        _panel_open,
+        retries=ENTRY_RETRY,
+        click=click,
+        log_func=lambda attempt: log(f"第 {attempt} 次点「目标」后未见任务面板页签栏。"),
+    ):
+        return False
+    log("经主界面「目标」入口进入任务面板。")
+    time.sleep(0.8)
+    return True
 
 
 def _open_task_panel():
@@ -341,16 +349,20 @@ def _tap_into_panel(pos, name, max_attempts=2):
     子页，实测月桂之旅的「旅行手记」页签只在赛季月桂之旅II 存在），所以用
     「主界面 HUD 是否消失」判定是否真的进去了，没进去就补点一次。
     """
-    win_x, win_y, _w, _h = game_client_region()
-    for attempt in range(1, max_attempts + 1):
-        check_stop()
-        if not _is_at_main_interface():
-            return True
-        click_position((win_x + pos[0], win_y + pos[1]), wait=1.8, twice=False)
-        if not _is_at_main_interface():
-            return True
-        log(f"第 {attempt} 次点击{name}入口后仍在主界面。")
-    return False
+    def click(corner_pos):
+        region = game_client_region()
+        click_position(
+            (region[0] + corner_pos[0], region[1] + corner_pos[1]), wait=1.8, twice=False
+        )
+
+    return tap_hud_entry(
+        pos,
+        lambda: not _is_at_main_interface(),
+        retries=max_attempts,
+        click=click,
+        log_func=lambda attempt: log(f"第 {attempt} 次点击{name}入口后仍在主界面。"),
+        precheck=True,
+    )
 
 
 # 每个手记/行记面板里还有两层页签，实测四本记布局一致（客户区固定 1600x900）：
@@ -374,9 +386,7 @@ def _sub_tab_row():
 
 
 def _row_changed(before, after):
-    if after.shape[:2] != before.shape[:2]:
-        return False
-    return float(cv2.matchTemplate(after, before, cv2.TM_CCOEFF_NORMED).max()) < TAB_SWITCHED_BELOW
+    return crops_differ(before, after, TAB_SWITCHED_BELOW)
 
 
 def _sweep_journal(name):

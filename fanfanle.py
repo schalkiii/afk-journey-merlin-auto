@@ -14,8 +14,6 @@
 
 import time
 
-import cv2
-
 from common import (
     check_stop,
     click_position,
@@ -25,6 +23,7 @@ from common import (
     invalidate_screenshot_cache,
     log,
     recover_to_main_interface,
+    region_changed_since,
     screenshot_bgr,
     wait_and_click,
 )
@@ -85,14 +84,9 @@ def _enter_fanfanle():
 
 def _wait_keys_change(before, timeout=3.0):
     """等待钥匙余量区域与点击前不再一致；数字有滚动动画，只读一次会误判成没变化。"""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        check_stop()
-        match = cv2.matchTemplate(screenshot_bgr(), before, cv2.TM_CCOEFF_NORMED)
-        if float(match.max()) < KEYS_CHANGED_BELOW:
-            return True
-        time.sleep(0.4)
-    return False
+    return region_changed_since(
+        before, KEYS_REGION, threshold=KEYS_CHANGED_BELOW, timeout=timeout
+    )
 
 
 def burn_keys(max_rounds=DEFAULT_MAX_ROUNDS):

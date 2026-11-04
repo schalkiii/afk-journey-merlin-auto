@@ -13,6 +13,7 @@
 import re
 
 # 当前任务名。任务循环里同步设置（不能用 root.after，那是异步的，会漏掉紧随其后的行）。
+# 单运行循环假设：工作线程写、GUI log 与 stdout tee 读；并行启动第二个运行循环会互相覆盖。
 _task = None
 
 # 高频行压缩：措辞固定、量大，压成等宽短语后一眼能扫。
@@ -74,6 +75,14 @@ def format_body(text):
     if body.startswith(BOUNDARY_MARKS):
         return body
     return f"{DETAIL_MARK}{body}" if _task else body
+
+
+def format_multiline(text):
+    """把多行文本（异常堆栈这类）逐行整理成正文列表，空行丢弃。
+
+    逐行而不是整段处理，是为了让每一行都能独立带 `[HH:MM:SS]` 前缀并排进任务上下文。
+    """
+    return [body for body in (format_body(line) for line in str(text).splitlines()) if body]
 
 
 def task_start_line(index, total, name):

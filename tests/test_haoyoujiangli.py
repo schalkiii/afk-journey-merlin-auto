@@ -32,6 +32,21 @@ def test_collect_gifts_capped_when_button_never_gone(monkeypatch):
     assert hy._collect_gifts() == hy.MAX_GIFT_CLICKS
 
 
+def test_hud_fallback_returns_false_after_retries_with_exact_click_count(monkeypatch):
+    """confirm 恒为假：retries 用尽返回 False，send_coord 精确调用 retries×2（每轮两次）。"""
+    sent = []
+    monkeypatch.setattr(hy, "game_client_region", lambda: (2000, 100, 1600, 900))
+    monkeypatch.setattr(hy, "send_coord", lambda x, y: sent.append((x, y)))
+    monkeypatch.setattr(hy, "time", _NO_SLEEP)
+    monkeypatch.setattr(hy, "_friends_panel_visible", lambda: False)
+
+    assert hy._open_friends_via_hud(retries=3) is False
+
+    expected = (2000 + hy.FRIENDS_HUD_POS[0], 100 + hy.FRIENDS_HUD_POS[1])
+    assert len(sent) == 3 * 2
+    assert set(sent) == {expected}, "重试期间坐标不能漂移"
+
+
 def test_hud_fallback_adds_client_origin_and_confirms_panel(monkeypatch):
     """兜底入口：坐标必须是「客户区原点 + 偏移」的整屏坐标，且要点两次（首次被激活吞掉）。"""
     clicks = []

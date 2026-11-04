@@ -5,6 +5,9 @@
 import json
 import time
 
+import cv2
+import numpy as np
+
 from common import (
     click_and_wait,
     click_template,
@@ -232,7 +235,6 @@ def do_battle_and_skip(zhandou_retries=0):
 # ============================================================
 def find_all_instances_mg(name, threshold=None, min_gap=30, img=None):
     """检测屏幕上模板的多个实例，返回 [(x, y), ...]，按 y 坐标升序"""
-    import cv2
     if threshold is None:
         threshold = cfg("thresholds", {}).get("default", 0.8)
     tpl_path = tpl(name)
@@ -243,19 +245,18 @@ def find_all_instances_mg(name, threshold=None, min_gap=30, img=None):
     if img is None:
         img = screenshot_bgr()
     res = cv2.matchTemplate(img, template, cv2.TM_CCOEFF_NORMED)
+    # argwhere 按 (row, col) 行主序给出候选，与旧 (y, x) 双层扫描同序；
+    # 沿该顺序贪婪抑制近邻，保证替换前后输出逐点等价。
     loc = []
-    h, w = res.shape[:2]
-    for y in range(h):
-        for x in range(w):
-            if res[y, x] >= threshold:
-                cx, cy = x + tw // 2, y + th // 2
-                too_close = False
-                for ex, ey in loc:
-                    if abs(cx - ex) < min_gap and abs(cy - ey) < min_gap:
-                        too_close = True
-                        break
-                if not too_close:
-                    loc.append((cx, cy))
+    for row, col in np.argwhere(res >= threshold):
+        cx, cy = int(col) + tw // 2, int(row) + th // 2
+        too_close = False
+        for ex, ey in loc:
+            if abs(cx - ex) < min_gap and abs(cy - ey) < min_gap:
+                too_close = True
+                break
+        if not too_close:
+            loc.append((cx, cy))
     loc.sort(key=lambda p: p[1])  # 按 y 从上到下
     return loc
 
