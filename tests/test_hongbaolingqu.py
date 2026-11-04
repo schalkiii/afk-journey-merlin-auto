@@ -1,4 +1,6 @@
 """红点领取模块：领取循环的计数、停止条件与上限保护。"""
+import types
+
 import hongbaolingqu as hb
 
 
@@ -46,3 +48,34 @@ def test_claim_loop_stops_at_cap(monkeypatch):
     monkeypatch.setattr(hb, "find_center_silent", lambda *args, **kwargs: None)
     monkeypatch.setattr(hb, "click_blank_to_exit", lambda *args, **kwargs: None)
     assert hb.claim_current_view() == hb.MAX_CLAIM_PER_VIEW
+
+
+def test_task_panel_falls_back_to_hud_target_entry(monkeypatch):
+    """菜单→任务 进不去时改用主界面左下角「目标」直达入口，而不是直接放弃整个面板。"""
+    tried = []
+    monkeypatch.setattr(hb, "_open_task_panel_via_menu", lambda: False)
+    monkeypatch.setattr(hb, "log", lambda *args, **kwargs: None)
+
+    def fake_hud_entry():
+        tried.append("hud")
+        return True
+
+    monkeypatch.setattr(hb, "_open_task_panel_via_hud", fake_hud_entry)
+
+    assert hb._open_task_panel() is True
+    assert tried == ["hud"]
+
+
+def test_hud_target_entry_adds_client_origin(monkeypatch):
+    """HUD 固定点位必须换算成整屏坐标——历史上多次因为直接把客户区坐标传进去而点空。"""
+    clicks = []
+    monkeypatch.setattr(hb, "check_stop", lambda: None)
+    monkeypatch.setattr(hb, "game_client_region", lambda: (2000, 100, 1600, 900))
+    monkeypatch.setattr(hb, "click_position", lambda pos, **kwargs: clicks.append(pos))
+    monkeypatch.setattr(hb, "_panel_open", lambda: True)
+    monkeypatch.setattr(hb, "time", types.SimpleNamespace(sleep=lambda *args: None))
+    monkeypatch.setattr(hb, "log", lambda *args, **kwargs: None)
+
+    assert hb._open_task_panel_via_hud() is True
+    assert clicks[0] == (2000 + hb.TASK_PANEL_HUD_POS[0], 100 + hb.TASK_PANEL_HUD_POS[1])
+    assert clicks[0] != hb.TASK_PANEL_HUD_POS

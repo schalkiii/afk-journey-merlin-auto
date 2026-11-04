@@ -93,6 +93,10 @@ MILESTONE_ROW_Y_FALLBACK = 349
 # 主界面「当前进度」入口：HUD 上的仓鼠位置（半透明标签与脉动角标都不能做模板，
 # 客户区固定 1600x900 下直接点该位置，再用里程碑轨道锚点校验是否真的进了面板）
 PROGRESS_HUD_POS = (72, 833)
+# 主界面左下角「目标」是任务面板的**直达入口**（实测客户区 (35,747)，有可领时带红色「!」）。
+# 菜单→任务 要连中 caidan、renwu 两处模板，任一处失效就进不了面板；这条只点一次的兜底
+# 路径少一层依赖，作为失败后的第二选择。
+TASK_PANEL_HUD_POS = (35, 747)
 MILESTONE_TRACK_REGION = (400, 320, 880, 60)
 
 # 里程碑节点间距实测 54px，最左节点中心在 x=432
@@ -165,7 +169,7 @@ def _panel_open():
     )
 
 
-def _open_task_panel():
+def _open_task_panel_via_menu():
     """菜单 -> 任务，用底部页签栏确认面板已打开。
 
     重试时必须先判断是否已经停在菜单里：菜单打开后 HUD 上的 caidan 按钮就消失了，
@@ -186,6 +190,34 @@ def _open_task_panel():
             return True
         log(f"第 {attempt} 次点击任务后未确认进入任务面板（底部页签栏缺失）。")
     return False
+
+
+def _open_task_panel_via_hud():
+    """兜底入口：主界面左下角「目标」直达任务面板（少一层菜单模板依赖）。
+
+    角落 HUD 图标在窗口未前台时，第一次点击会被系统当成激活点击吞掉——实测
+    twice=False 点它完全没有反应，改 twice=True 立刻进得去，所以这里连点两下，
+    并且每次都再用页签栏确认，不靠「点了就当进去了」。
+    """
+    region = game_client_region()
+    pos = (region[0] + TASK_PANEL_HUD_POS[0], region[1] + TASK_PANEL_HUD_POS[1])
+    for attempt in range(1, ENTRY_RETRY + 1):
+        check_stop()
+        click_position(pos, wait=2.0, twice=True)
+        if _panel_open():
+            log(f"第 {attempt} 次经主界面「目标」入口进入任务面板。")
+            time.sleep(0.8)
+            return True
+        log(f"第 {attempt} 次点「目标」后未见任务面板页签栏。")
+    return False
+
+
+def _open_task_panel():
+    """先进任务面板：菜单路径优先，失败再用主界面「目标」直达入口兜底。"""
+    if _open_task_panel_via_menu():
+        return True
+    log("菜单 → 任务 没能打开面板，改用主界面左下角「目标」直达入口。")
+    return _open_task_panel_via_hud()
 
 
 def _sweep_view(name):
