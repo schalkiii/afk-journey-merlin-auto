@@ -63,6 +63,17 @@ def test_burn_uses_single_click_not_double(monkeypatch):
     assert seen.get("twice") is False
 
 
+def test_threshold_sits_below_the_measured_transition_noise():
+    """阈值必须低于实测到的最差噪声底，否则页面切换动画会被误判成「钥匙已烧」。
+
+    实测：稳定帧自匹配 1.000，但刚进页面的过渡期同一区域出现过 0.964–0.975。
+    """
+    observed_noise_floor = 0.964
+    assert ff.KEYS_CHANGED_BELOW < observed_noise_floor, (
+        f"阈值 {ff.KEYS_CHANGED_BELOW} 落在实测噪声带内，空烧会被当成推进成功"
+    )
+
+
 def test_main_caps_rounds_before_burning(monkeypatch):
     """轮数上限要夹住，防止配置里写进一个离谱值把钥匙一次烧光。"""
     asked = []
