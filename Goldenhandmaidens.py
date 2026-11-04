@@ -31,6 +31,7 @@ from datetime import datetime, timedelta
 from tkinter import messagebox, ttk
 
 import common
+import log_format
 from version import __version__
 
 
@@ -1672,7 +1673,10 @@ class GameBotGUI:
             script.status = "运行中"
             self.root.after(0, self.update_script_panel)
             self.root.after(0, self._set_current_task, f"{script.name} ({index}/{total})")
-            self.log(f"===== [{index}/{total}] 开始执行: {script.name} =====")
+            # 任务上下文必须**同步**设好：子脚本的行是紧接着 print 出来的，
+            # 靠 root.after 异步设置会漏掉紧随的几行，那些行就不会归组缩进。
+            log_format.set_task(script.name)
+            self.log(log_format.task_start_line(index, total, script.name))
             task_started = time.time()
 
             # 点击器退出后所有任务都只会空转，逐轮跑下去毫无意义：开局先确认它还活着
@@ -1703,7 +1707,7 @@ class GameBotGUI:
                 duration = time.time() - task_started
                 if result:
                     script.status = "完成"
-                    self.log(f"[{index}/{total}] {script.name} 执行完成（耗时 {duration:.1f} 秒）")
+                    self.log(log_format.task_end_line(True, index, total, script.name, duration))
 
                     # 更新最后执行时间。这里**不再**改动 script.enabled：
                     # 旧的「每日重置脚本跑完自动关闭」会把用户的勾选写回配置，
@@ -1711,7 +1715,7 @@ class GameBotGUI:
                     script.last_run_time = datetime.now().isoformat()
                 else:
                     script.status = "失败"
-                    self.log(f"[{index}/{total}] {script.name} 执行失败（耗时 {duration:.1f} 秒）")
+                    self.log(log_format.task_end_line(False, index, total, script.name, duration))
                     
             except common.StopRequested:
                 script.status = "已停止"
@@ -1720,9 +1724,13 @@ class GameBotGUI:
                 break
             except Exception as e:
                 script.status = "错误"
-                self.log(f"[{index}/{total}] {script.name} 执行出错（耗时 {time.time() - task_started:.1f} 秒）: {e!s}")
+                self.log(log_format.task_end_line(False, index, total, script.name,
+                                                  time.time() - task_started) + f" 出错: {e!s}")
                 # 完整堆栈写入日志文件便于定位；面板只显示首行避免刷屏
                 append_log_file(traceback.format_exc())
+            finally:
+                # 任务一结束就摘掉上下文，任务之间的等待/收尾行不再被误缩进到上一任务里
+                log_format.set_task(None)
                 
             self.root.after(0, self.update_script_panel)
             
@@ -1780,11 +1788,17 @@ class GameBotGUI:
 
     def log(self, message):
         """兼容旧调用：直接入队（主线程也可调用），由 _drain_log_queue 统一刷新到面板；
-        同时持久化到本地日志文件 game_bot.log，便于查看与反馈问题。"""
-        self._enqueue_log(message)
+        同时持久化到本地日志文件 game_bot.log，便于查看与反馈问题。
+
+        面板与文件写同一份整理后的正文（`log_format.format_body`），时间戳各路由自己的
+        加戳方式补齐，所以这里送出去的是不带戳的正文。"""
+        body = log_format.format_body(message)
+        if not body:
+            return
+        self._enqueue_log(body)
         try:
             timestamp = time.strftime('%H:%M:%S')
-            append_log_file(f'[{timestamp}] {message}\n')
+            append_log_file(f'[{timestamp}] {body}\n')
         except Exception:
             _notify_file_write_error(LOG_FILE)
     

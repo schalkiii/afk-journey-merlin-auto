@@ -15,12 +15,18 @@ import threading
 import time
 from ctypes import wintypes
 
+import log_format
 from common import get_work_path
 
 
 class _StdoutTee:
     """把 stdout 同时输出到原始 stdout 与面板日志汇聚回调，
-    使各子脚本中的 print(...) 调试日志也能显示在应用内「运行日志」面板。"""
+    使各子脚本中的 print(...) 调试日志也能显示在应用内「运行日志」面板。
+
+    面板与文件都写**同一份整理后的行**：以前面板收的是逐次 write 的碎片（print 会分
+    正文和换行两次调用），文件收的是带时间戳的整行，两边看到的东西不一样。现在统一
+    按行缓冲，凑齐一行再同时送面板和文件，面板也因此不会再出现半行。
+    """
     def __init__(self, sink):
         self._sink = sink
         self._orig = sys.__stdout__
@@ -29,17 +35,20 @@ class _StdoutTee:
     def write(self, s):
         with contextlib.suppress(Exception):
             self._orig.write(s)  # type: ignore[union-attr]
-        if s and s.strip():
-            with contextlib.suppress(Exception):
-                self._sink(s.rstrip("\n"))
         # 落盘必须带时刻：子脚本的 print 以前整段没有时间戳，调试时分不清
         # 「识别失败 12 次」是同一秒的抖动还是跨了半分钟。print 会分两次调用
         # （正文 + 换行），所以按行缓冲，凑齐一行才写一条，避免半行带时间戳。
         self._pending += s
         while "\n" in self._pending:
             line, self._pending = self._pending.split("\n", 1)
-            if line.strip():
-                append_log_file(f"[{time.strftime('%H:%M:%S')}] {line}\n")
+            body = log_format.format_body(line)
+            if not body:
+                continue
+            stamp = time.strftime("%H:%M:%S")
+            # 面板那一路由 _drain_log_queue 统一加时间戳，这里只送正文，否则会成双时间戳
+            with contextlib.suppress(Exception):
+                self._sink(body)
+            append_log_file(f"[{stamp}] {body}\n")
 
     def flush(self):
         with contextlib.suppress(Exception):
