@@ -22,6 +22,7 @@ import time
 import cv2
 
 from common import (
+    at_main_interface,
     check_stop,
     click_blank_to_exit,
     click_position,
@@ -72,8 +73,6 @@ tpl_panel_back = get_template_path("exitck.png")
 tpl_fanhui = get_template_path("fanhui.png")
 PANEL_BACK_TEMPLATES = (tpl_panel_back, tpl_fanhui)
 
-# 主界面判据：HUD 上的玩法目录入口
-tpl_wanfamulu = get_template_path("wanfamulu.png")
 
 # 主界面右侧竖排的「赛季月桂之旅」入口图标位置，与进入后的底部手记页签栅格
 LAUREL_HUD_POS = (1550, 610)
@@ -81,6 +80,10 @@ LAUREL_CAROUSEL_SLOTS = [(480, 845), (630, 845), (780, 845), (880, 845), (990, 8
 
 # 赛季挂机关卡页右上角的「x440」挂机收益按钮（实测点击即弹「获得奖励」）
 IDLE_REWARD_POS = (1120, 240)
+
+# 页面中部的产出宝箱（满箱金光态）与点开后弹出的「收获奖励」按钮
+tpl_baoxiang_full = get_template_path("baoxiang_full.png")
+tpl_shouhuojiangli = get_template_path("shouhuojiangli.png")
 
 # 赛季挂机关卡里程碑轨道上的未解锁节点（灰色瓶子），用于取节点行的 y
 tpl_milestone_locked = get_template_path("guajiguajia_locked.png")
@@ -289,9 +292,13 @@ def _find_all_matches(template_path, threshold, client_region):
 
 
 def _is_at_main_interface():
-    """主界面判据：HUD 上的玩法目录入口可见。"""
+    """主界面判据复用 common.at_main_interface()。
+
+    只看玩法目录图标会被骗：英雄厅堂等子页的底部栏有同一个图标，实测停在厅堂时
+    按 HUD 坐标点赛季手册 / 月桂之旅 / 当前进度三个入口全部落空。
+    """
     invalidate_screenshot_cache()
-    return find_center_silent(tpl_wanfamulu, threshold=0.7, timeout=0.6) is not None
+    return at_main_interface()
 
 
 def _tap_into_panel(pos, name, max_attempts=2):
@@ -333,30 +340,51 @@ def _sweep_laurel_journey():
     return total
 
 
-def _sweep_progress_milestones():
-    """主界面「当前进度」→ 赛季挂机关卡里程碑节点。
+def _harvest_idle_chest():
+    """赛季挂机关卡页中部的产出宝箱：点开 → 点「收获奖励」。
 
-    这页没有一键领取，也没有稳定的节点坐标规律（实测节点间距 54/65/83 不等，
-    轨道还会随领取平移），所以按 54px 栅格逐点试点，只把弹出奖励的算作领取。
-    实测点到未解锁节点与英雄节点都不会跳转，因此盲点是安全的。
+    实测收获是**静默入账**（没有「获得奖励」弹窗），领完宝箱变成关闭态并重新开始
+    计时，所以只能靠模板判断：满箱金光态 1.000 / 空箱关闭态 0.450，收获按钮 1.000 / 0.323。
+    """
+    chest = find_center_silent(tpl_baoxiang_full, threshold=0.8, timeout=1.5)
+    if not chest:
+        return False
+    click_position(chest, wait=1.2, twice=False)
+    if wait_and_click(tpl_shouhuojiangli, "shouhuojiangli", 0.8, timeout=3.0):
+        time.sleep(0.8)
+        return True
+    log("宝箱点开了但没看到「收获奖励」按钮，跳过挂机宝箱。")
+    return False
+
+
+def _sweep_progress_milestones():
+    """主界面「当前进度」→ 赛季挂机关卡：挂机收益、产出宝箱、里程碑节点。
+
+    里程碑这页没有一键领取，节点间距实测也不规整（54/65/83 不等，轨道还会随领取平移），
+    所以按 54px 栅格逐点试点，只把弹出奖励的算作领取。实测点到未解锁节点与英雄节点
+    都不会跳转，因此盲点是安全的。
     """
     if not _tap_into_panel(PROGRESS_HUD_POS, "当前进度"):
         log("未能进入赛季挂机关卡界面，跳过。")
         return 0
 
-    win_x, _win_y, _w, _h = game_client_region()
-    anchors = _find_all_matches(tpl_milestone_locked, 0.9, MILESTONE_TRACK_REGION)
+    win_x, win_y, _w, _h = game_client_region()
 
-    # 先领挂机收益（页面右上角的 x440 瓶子），再扫里程碑节点
-    win_x2, win_y2, _w2, _h2 = game_client_region()
+    # 1) 右上角 x440 挂机收益
     idle_claimed = 0
-    click_position((win_x2 + IDLE_REWARD_POS[0], win_y2 + IDLE_REWARD_POS[1]),
+    click_position((win_x + IDLE_REWARD_POS[0], win_y + IDLE_REWARD_POS[1]),
                    wait=1.0, twice=False)
     if _close_reward_popup():
         idle_claimed += 1
 
-    row_y = sorted(anchor[1] for anchor in anchors)[len(anchors) // 2] if anchors else         game_client_region()[1] + MILESTONE_ROW_Y_FALLBACK
-    claimed = idle_claimed
+    # 2) 中部产出宝箱
+    chest_claimed = 1 if _harvest_idle_chest() else 0
+
+    # 3) 里程碑节点栅格
+    anchors = _find_all_matches(tpl_milestone_locked, 0.9, MILESTONE_TRACK_REGION)
+    row_y = (sorted(anchor[1] for anchor in anchors)[len(anchors) // 2] if anchors
+             else win_y + MILESTONE_ROW_Y_FALLBACK)
+    node_claimed = 0
     for step in range(MAX_MILESTONE_CLICKS):
         check_stop()
         x = win_x + MILESTONE_X_START + step * MILESTONE_X_STEP
@@ -364,8 +392,11 @@ def _sweep_progress_milestones():
             break
         click_position((x, row_y), wait=0.8, twice=False)
         if _close_reward_popup():
-            claimed += 1
-    log(f"红点领取：赛季挂机关卡 领取 {claimed} 项（含挂机收益 {idle_claimed} 项）。")
+            node_claimed += 1
+
+    claimed = idle_claimed + chest_claimed + node_claimed
+    log(f"红点领取：赛季挂机关卡 领取 {claimed} 项"
+        f"（挂机收益 {idle_claimed}、产出宝箱 {chest_claimed}、里程碑 {node_claimed}）。")
     _click_panel_back("当前进度")
     return claimed
 
@@ -403,9 +434,6 @@ def main():
     check_stop()
     recover_to_main_interface()
     total += _sweep_progress_milestones()
-
-    check_stop()
-    recover_to_main_interface()
 
     # 收尾必须把游戏带回主界面：中途任一入口失败都可能停在子页面，
     # 交给下一个任务时就会从错误界面开始（实测盲点卡片曾停在「纷战争锋」内）。

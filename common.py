@@ -738,15 +738,30 @@ def dismiss_popup():
     return True
 
 
+def at_main_interface(threshold=0.8):
+    """主界面判据：底部「玩法目录」可见，**且没有任何返回箭头**。
+
+    只看 wanfamulu 会被骗：英雄厅堂 / 玩法目录子页的底部栏里有同一个图标。
+    2026-11-04 实测——任务停在英雄厅堂时 `recover_to_main_interface()` 判定
+    「已在主界面」直接返回，随后按 HUD 坐标点击的赛季手册 / 月桂之旅 / 当前进度
+    三个入口全部落空。主界面本身不显示返回箭头，用它把子页区分出来。
+    """
+    if not find_center_silent(get_template_path("wanfamulu.png"), threshold):
+        return False
+    for back_template in ("exitck.png", "fanhui.png"):
+        if find_center_silent(get_template_path(back_template), threshold):
+            return False
+    return True
+
+
 def recover_to_main_interface(max_tries=8):
     """兜底回主界面：任务卡在某界面（弹窗 / 子界面）反复检测不到目标时使用。
 
     依次尝试点击「点击空白处关闭」(dianjikongbaichuguanbi)、tuichulibao（退出礼包）、
-    exitck、exit（返回上一层），逐层从卡住处退出，直到主界面「玩法目录 wanfamulu」
-    按钮可见。无任何退出按钮时点击屏幕空白处兜底。供 wait_and_click 的兜底恢复与
+    exitck、exit（返回上一层），逐层从卡住处退出，直到 `at_main_interface()` 成立。
+    无任何退出按钮时点击屏幕空白处兜底。供 wait_and_click 的兜底恢复与
     任务切换前的 ensure_main_interface 复用，避免把游戏停在中间界面导致后续任务卡死。
     """
-    tpl_wanfamulu = get_template_path("wanfamulu.png")
     tpl_exit = get_template_path("exit.png")
     tpl_close = get_template_path("dianjikongbaichuguanbi.png")
     tpl_tuichulibao = get_template_path("tuichulibao.png")
@@ -756,7 +771,7 @@ def recover_to_main_interface(max_tries=8):
 
     for _ in range(max_tries):
         check_stop()
-        if find_center_silent(tpl_wanfamulu, 0.8):
+        if at_main_interface():
             return True
         clicked = False
         for tpl in exit_templates:
@@ -770,18 +785,19 @@ def recover_to_main_interface(max_tries=8):
             # 没有任何退出按钮：点击屏幕空白处兜底，尝试关闭遮挡弹窗
             click_blank_to_exit()
             time.sleep(1.0)
-    return find_center_silent(tpl_wanfamulu, 0.8) is not None
+    return at_main_interface()
 
 
 def ensure_main_interface():
     """任务切换前的兜底：先关闭残留弹窗，若仍未在主界面则逐层退出回到主界面。
 
     返回 True 表示已处于（或已回到）主界面。供运行循环在每个任务开始前调用，
-    确保上一任务卡在子界面时，本次 wanfamulu 检测能正常进行，不连锁卡死后续任务。
+    确保上一任务卡在子界面时，本次入口检测能正常进行，不连锁卡死后续任务。
+    判据用 `at_main_interface()`（玩法目录可见 **且** 无返回箭头），
+    否则停在英雄厅堂这类底部同样有玩法目录图标的子页时会被误判为已回主界面。
     """
     dismiss_popup()
-    tpl_wanfamulu = get_template_path("wanfamulu.png")
-    if find_center_silent(tpl_wanfamulu, 0.8):
+    if at_main_interface():
         return True
     return recover_to_main_interface()
 

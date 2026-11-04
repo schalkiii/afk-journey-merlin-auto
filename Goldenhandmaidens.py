@@ -158,6 +158,8 @@ class GameBotGUI:
             # 红点领取覆盖任务面板各页签、赛季手册里程碑、月桂之旅与当前进度，
             # 与「日常任务」互补：日常任务只点每日/公会的一键领取。
             ScriptConfig("红点领取", enabled=False),
+            # 英雄厅堂：点「快速升级」提升赛季共鸣等级（每级吃共鸣资源，故给次数上限）
+            ScriptConfig("英雄厅堂", enabled=False, params={"quick_upgrade_times": 10}),
             ScriptConfig("爬塔", enabled=False),
             ScriptConfig("幻灵推图", enabled=False),
             ScriptConfig("推图", enabled=False),
@@ -664,6 +666,8 @@ class GameBotGUI:
             self.create_mimengzhiyu_params(script, 0)
         elif script.name == "挂机奖励":
             self.create_shouquguajijiangli_params(script, 0)
+        elif script.name == "英雄厅堂":
+            self.create_yingxiong_params(script, 0)
         elif script.name == "异界迷宫":
             self.create_yijiemigong_params(script, 0)
         elif script.name in ("幻灵推图", "推图", "循环推图"):
@@ -693,6 +697,28 @@ class GameBotGUI:
         challenge_spinbox.bind("<FocusOut>", lambda e: on_param_change())
         challenge_spinbox.bind("<Return>", lambda e: on_param_change())
         
+    def create_yingxiong_params(self, script, row=0):
+        """英雄厅堂参数：每次运行最多点几次「快速升级」。"""
+        ttk.Label(self.param_frame, text="快速升级次数 (1-99):").grid(row=row, column=0, sticky=tk.W, pady=2)
+
+        self.quick_upgrade_times_var = tk.IntVar(value=script.params.get("quick_upgrade_times", 10))
+        spinbox = ttk.Spinbox(
+            self.param_frame,
+            from_=1,
+            to=99,
+            textvariable=self.quick_upgrade_times_var,
+            width=10
+        )
+        spinbox.grid(row=row, column=1, sticky=tk.W, pady=2)
+
+        def on_param_change():
+            # 每升一级都要吃共鸣资源，次数上限防止把资源一次点光
+            script.params["quick_upgrade_times"] = self._clamp_int_var(self.quick_upgrade_times_var, 1, 99)
+            self.save_config()
+
+        spinbox.bind("<FocusOut>", lambda e: on_param_change())
+        spinbox.bind("<Return>", lambda e: on_param_change())
+
     def create_push_params(self, row=0):
         push_settings = self.config.get("push_settings", {})
 
@@ -1377,6 +1403,10 @@ class GameBotGUI:
         import meirirenwulingqu
         return meirirenwulingqu.main()
 
+    def _run_yingxiongtingtang(self, script):
+        import yingxiongtingtang
+        return yingxiongtingtang.main(script.params.get("quick_upgrade_times", 10))
+
     def _run_hongbaolingqu(self, script):
         import hongbaolingqu
         return hongbaolingqu.main()
@@ -1531,6 +1561,7 @@ class GameBotGUI:
             "商城": self._run_shangcheng,
             "日常任务": self._run_meiri,
             "红点领取": self._run_hongbaolingqu,
+            "英雄厅堂": self._run_yingxiongtingtang,
             "结社战线": self._run_jieshezhanxian,
             "狩猎悬赏": self._run_lieshouxunshang,
             "家园愿望单": self._run_yuanwangdan,

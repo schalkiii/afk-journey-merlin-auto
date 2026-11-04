@@ -12,6 +12,7 @@ import shlex
 import subprocess
 import sys
 import threading
+import time
 from ctypes import wintypes
 
 from common import get_work_path
@@ -23,6 +24,7 @@ class _StdoutTee:
     def __init__(self, sink):
         self._sink = sink
         self._orig = sys.__stdout__
+        self._pending = ""
 
     def write(self, s):
         with contextlib.suppress(Exception):
@@ -30,8 +32,14 @@ class _StdoutTee:
         if s and s.strip():
             with contextlib.suppress(Exception):
                 self._sink(s.rstrip("\n"))
-        # 同时持久化到本地日志文件（统一经 append_log_file 加锁写入）
-        append_log_file(s)
+        # 落盘必须带时刻：子脚本的 print 以前整段没有时间戳，调试时分不清
+        # 「识别失败 12 次」是同一秒的抖动还是跨了半分钟。print 会分两次调用
+        # （正文 + 换行），所以按行缓冲，凑齐一行才写一条，避免半行带时间戳。
+        self._pending += s
+        while "\n" in self._pending:
+            line, self._pending = self._pending.split("\n", 1)
+            if line.strip():
+                append_log_file(f"[{time.strftime('%H:%M:%S')}] {line}\n")
 
     def flush(self):
         with contextlib.suppress(Exception):

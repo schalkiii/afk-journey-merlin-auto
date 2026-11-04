@@ -73,11 +73,15 @@ tpl_back = get_template_path("fanhui.png")                  # 建筑内左下角
 tpl_exit = get_template_path("exit.png")                    # 通用返回箭头（公会大厅/玩法目录）
 tpl_exitck = get_template_path("exitck.png")                # 通用退出按钮（部分界面）
 tpl_label = get_template_path("xinyuandanbiaoti.png")       # 左上角「愿望单」标题标签（定位礼盒点击点）
+tpl_gift = get_template_path("yuanwangdanjindu.png")        # 第一档礼盒（金色心形）本体
 tpl_claim = get_template_path("huodejiangli.png")           # 领奖弹窗「获得奖励」标题
 tpl_close_popup = get_template_path("dianjikongbaichuguanbi.png")
 
 MATCH_THRESHOLD = 0.8
-GIFT_CLICK_OFFSET = (120, 40)  # 礼盒可领取时的点击点，相对「愿望单」标题中心（1600×900 实测有效点 2629,135 - 标题中心 2509,95）
+# 礼盒相对「愿望单」标题中心的偏移。原值 (120, 40) 实测落在礼盒右侧约 55px 的空白处，
+# 进度奖励因此一直没被领到；2026-11-04 重新量得礼盒中心 (486,56)、标题中心 (418,31)。
+GIFT_CLICK_OFFSET = (68, 25)
+GIFT_THRESHOLD = 0.85
 MAX_ORDERS = 20           # 单次任务最多交付订单数，防止无限刷单
 MAX_CRAFTS = 5            # 单次任务最多制作次数，防止资源误消耗失控
 MAX_CLAIMS = 10           # 单次任务最多成功领奖次数（愿望单奖励档位逐级提升）
@@ -174,11 +178,13 @@ def _panel_state():
 def _claim_reward(label_pos):
     """尝试点礼盒领取心愿单进度奖励：点礼盒 → 关闭「获得奖励」弹窗，返回是否实际领取。
 
-    礼盒图标在不同档位下外观不同（第一档金色心形、第二档青色宝石），模板匹配无法跨档位；
-    改为用固定的「愿望单」标题标签做锚点、按偏移点击其右侧礼盒区域（实测有效点）。
-    已领取状态下点击无副作用（无弹窗），故可以每轮安全尝试，以弹出「获得奖励」为准。
+    先按礼盒模板直接命中（第一档金色心形，实测可领 1.000 / 已领 0.693）；
+    其它档位（如青色宝石）外观不同、模板跨不了档，退回「标题锚点 + 偏移」。
+    已领取状态下点击无副作用（无弹窗），故可以安全重试，以弹出「获得奖励」为准。
     """
-    gift_pos = (label_pos[0] + GIFT_CLICK_OFFSET[0], label_pos[1] + GIFT_CLICK_OFFSET[1])
+    gift_pos = _find(tpl_gift, threshold=GIFT_THRESHOLD)
+    if gift_pos is None:
+        gift_pos = (label_pos[0] + GIFT_CLICK_OFFSET[0], label_pos[1] + GIFT_CLICK_OFFSET[1])
     _click(gift_pos, 1.5)
     claim_pos = _find(tpl_claim, timeout=1.5)
     if claim_pos is None:
