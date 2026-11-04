@@ -106,9 +106,12 @@ class GameBotGUI:
         # 日志队列：工作线程只入队，主线程通过 after() 节流刷新，避免高频直冲 Tk 卡顿
         self._log_queue = queue.Queue()
 
-        # 把各子脚本的调试日志（common.log）汇聚到应用内「运行日志」面板
-        # 注意：sink 仅把消息放入队列（线程安全），真正的 UI 刷新由 _drain_log_queue 完成
-        common.set_log_sink(self._enqueue_log)
+        # 把各子脚本的调试日志（common.log）汇聚到应用内「运行日志」面板，同时落盘。
+        # sink 必须是线程安全的（`log()` 只做入队 + 带锁追加文件，不碰 Tk 组件）；
+        # UI 刷新由 _drain_log_queue 完成。之前只挂 _enqueue_log，盘上的 game_bot.log
+        # 里完全没有子脚本行（实测用户跑完一轮后搜「家园愿望单」只剩开始/结束两条），
+        # 而这些行恰恰是排查「识别没命中 / 没领到」最需要的。
+        common.set_log_sink(self.log)
         # 注入停止检查器：F9 置位 stop_event 后，子脚本在下一次截图/点击
         # 原语调用处会抛出 StopRequested，实现「立即停止」而非等脚本跑完
         common.set_stop_checker(self.stop_event.is_set)
