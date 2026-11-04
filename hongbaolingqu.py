@@ -353,22 +353,84 @@ def _tap_into_panel(pos, name, max_attempts=2):
     return False
 
 
+# 每个手记/行记面板里还有两层页签，实测四本记布局一致（客户区固定 1600x900）：
+# 内层「奖励 / 任务」在 y=210，任务下再分「每日 / 每周 / 挑战」在 y=265。
+# 文字随记名变（手记任务 / 行记任务），做不了一张通吃模板，故用固定点位 + 切页确认。
+JOURNAL_REWARD_TAB_POS = (712, 210)
+JOURNAL_TASKS_TAB_POS = (845, 210)
+JOURNAL_SUB_TAB_POSS = [(605, 265), (700, 265), (800, 265)]
+# 确认「切到任务页」靠子页签那一行：绿色选中胶囊横向移动后自匹配实测掉到 **-0.3**，
+# 静止时 1.000。内层页签行本身不能用——真切了页也只有 0.989，而噪声底 0.992（实测），
+# 拿它当判据会随机漏扫整片周常/挑战奖励。
+JOURNAL_SUB_TAB_REGION = (560, 245, 290, 40)
+TAB_SWITCHED_BELOW = 0.97
+
+
+def _sub_tab_row():
+    """取子页签那一行（每日/每周/挑战）的图像，用于确认切页是否真的生效。"""
+    win_x, win_y, _w, _h = game_client_region()
+    x, y, w, h = JOURNAL_SUB_TAB_REGION
+    return get_cached_screenshot()[win_y + y:win_y + y + h, win_x + x:win_x + x + w]
+
+
+def _row_changed(before, after):
+    if after.shape[:2] != before.shape[:2]:
+        return False
+    return float(cv2.matchTemplate(after, before, cv2.TM_CCOEFF_NORMED).max()) < TAB_SWITCHED_BELOW
+
+
+def _sweep_journal(name):
+    """扫一本手记/行记：奖励页 + 任务页下的 每日/每周/挑战 三个子页签。
+
+    只扫奖励页会整片漏掉任务奖励（每周行记 / 挑战行记 尤其明显）。切页是否真的生效
+    由子页签行的自匹配确认，确认不到就不继续——那三个坐标在奖励页上落在奖励列表区，
+    盲点等于拿未验证的界面赌。
+    """
+    win_x, win_y, _w, _h = game_client_region()
+    total = _sweep_view(f"{name}-奖励")
+
+    def tap(sub_index):
+        sub_x, sub_y = JOURNAL_SUB_TAB_POSS[sub_index]
+        click_position((win_x + sub_x, win_y + sub_y), wait=1.0, twice=False)
+
+    click_position((win_x + JOURNAL_TASKS_TAB_POS[0], win_y + JOURNAL_TASKS_TAB_POS[1]),
+                   wait=1.2, twice=False)
+    tap(0)
+    row_daily = _sub_tab_row()
+    tap(1)
+    if not _row_changed(row_daily, _sub_tab_row()):
+        log(f"{name}：没确认切到任务页签，跳过任务子页。")
+        return total
+
+    # 确认成功时人已停在「每周」，先把这页扫掉，再依次扫挑战、每日
+    total += _sweep_view(f"{name}-任务子页2")
+    for sub_index in (2, 0):
+        tap(sub_index)
+        total += _sweep_view(f"{name}-任务子页{sub_index + 1}")
+
+    # 切回奖励页，让下一本记从已知状态开始
+    click_position((win_x + JOURNAL_REWARD_TAB_POS[0], win_y + JOURNAL_REWARD_TAB_POS[1]),
+                   wait=1.0, twice=False)
+    return total
+
+
 def _sweep_laurel_journey():
     """主界面右侧「赛季月桂之旅」入口 → 逐个子页签一键领取。
 
     实测入口图标在客户区 (1550,610)，进去后底部有 4–5 个手记页签（秋夜手记 /
-    赛季月桂之旅II / I / 魔法行记），每个页签各自带一键领取，所以逐个切过去扫。
+    赛季月桂之旅II / I / 魔法行记），每个页签各自带一键领取，所以逐个切过去扫；
+    每本记内部还有 奖励/任务 两层页签，由 _sweep_journal 负责遍历。
     """
     if not _tap_into_panel(LAUREL_HUD_POS, "月桂之旅"):
         log("未能进入赛季月桂之旅界面，跳过。")
         return 0
 
     win_x, win_y, _w, _h = game_client_region()
-    total = _sweep_view("月桂之旅-当前页签")
+    total = _sweep_journal("月桂之旅-当前记")
     for slot_x, slot_y in LAUREL_CAROUSEL_SLOTS:
         check_stop()
         click_position((win_x + slot_x, win_y + slot_y), wait=1.2, twice=False)
-        total += _sweep_view(f"月桂之旅-页签({slot_x},{slot_y})")
+        total += _sweep_journal(f"月桂之旅-页签({slot_x},{slot_y})")
     _click_panel_back("月桂之旅")
     return total
 
