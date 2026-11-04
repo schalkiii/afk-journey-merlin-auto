@@ -8,9 +8,9 @@
 - **仓库扫描**：`_iter_scales` 的 `step<=0` 空产出与 `+1e-9` 上界容差；`_best_multiscale_match_score` 的退化输入必须返回 `-1.0` 而不是崩在 `cv2.resize`；`has_fancy_border` / `_top_band_edge_count` 只吃传入 ROI，可测则一并补上（纯色不误判为华丽边框）。
 - **跨模块文本契约**：`warehouse._save_heroes_to_txt` 写、`flow_tower._load_warehouse_levels` 读，中间只有一条「名字,高/低/未拥有」的文本格式约定、没有共享代码——做了一组 round-trip 用例把它钉住（格式一变即静默丢练度，是本轮价值最高的一条）。
 - **迷梦之役**：`cfg` 运行时参数压过文件配置 / 缺 key 回 default；`_pick_closest_mgzd` 的欧氏距离最近与空表短路（显式传 `[]` 不得回退查屏）；`find_all_instances_mg` 的阈值边界、`min_gap` 去重、按 y 升序；`handle_failure` 的清理序列与 `drag_repeat` 长按次数；外层循环次数耗尽后不再点 `jinru`。桩图固定在 20×24 量级——该函数是逐像素双层 Python 循环，真机 `res` 约 1596×896，用大图单条用例会跑到几十秒。
-- **负验证**：46 条新用例逐条翻转产品判据验证，45 条变红。**1 条如实标注为无法负验证**——`find_all_instances_mg` 的 `loc.sort(key=y)` 在当前双层升序扫描下是恒等操作（发现顺序天然已按 y 递增），删掉也不会红；用例保留作 B4 向量化（`np.argwhere` 行序不保证）之后的防线，测试内已写明原因。
+- **负验证**：46 条新用例逐条翻转产品判据验证，45 条变红。**1 条如实标注为无法负验证**——`find_all_instances_mg` 的 `loc.sort(key=y)` 在当前双层升序扫描下是恒等操作（发现顺序天然已按 y 递增），删掉也不会红；用例保留作 B11 向量化（`np.argwhere` 行序不保证）之后的防线，测试内已写明原因。
 - **顺带修两处**：`yuanwangdan.py:309` 的 `_find(tpl_wish_label, 0.85)` 改为显式 `timeout=0.85`——**行为完全不变**，`_find` 第二个位置参数是 timeout 而非阈值，裸写极易误读成「阈值 0.85」（由新测试暴露；若将来真需要收紧该阈值，须实跑验证后另行改动）；`.gitignore` 的 `!requirements.txt` 改 `!requirements*.txt`，否则 `requirements-dev.txt` 被上一条 `*.txt` 吞掉、clone 后根本拿不到。
-- **发现但登记未改**（都需要实跑或更大的改动范围，不在补测试分支内动）：`warehouse.has_fancy_border` 在主流程 `warehouse.py:630` 未被调用（该处实际走 `_top_band_edge_count`），疑似遗留代码；零方差 / 纯色图上 `cv2.matchTemplate` 返回 **1.0** 而非报错，模板全黑时会「满分命中」；`flow_tower.py:84` 的 `SPECIAL_HERO_SET` 是空集，故其特殊角色分支实际不可达（只有 `push.py:68` 含 meimo/kululu/shizi），属配置而非缺陷。
+- **发现但登记未改**（都需要实跑或更大的改动范围，不在补测试分支内动）：`warehouse.has_fancy_border`（:469）**全仓无调用点**（主流程实际走 `_top_band_edge_count`，`flow_tower` / `push` 另各有一份 `has_fancy_border_lineup`），疑似遗留代码；零方差 / 纯色图上 `cv2.matchTemplate` 返回 **1.0** 而非报错，模板全黑时会「满分命中」；`flow_tower.py:84` 的 `SPECIAL_HERO_SET` 是空集，故其特殊角色分支实际不可达（只有 `push.py:68` 含 meimo/kululu/shizi），属配置而非缺陷。
 
 ### 建立依赖清单（B1：新机器 clone 后跑不起来）
 - 新增 `requirements.txt`（运行时）与 `requirements-dev.txt`（pytest / ruff / pyinstaller），全部按本机 **Python 3.13.17** 实盘 `==` pin；文件顶注写明用途与「只装一个 OpenCV 发行版」。

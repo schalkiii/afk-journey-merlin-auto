@@ -78,6 +78,7 @@
 | D3-3 | `fanfanle.py:91`、`yingxiongtingtang.py:69`、`hongbaolingqu.py:379` | **同一个原语实现了三遍**：无 OCR 场景下「某区域点击前后自匹配是否掉分」判定动作是否生效，各自带阈值常量（0.90 / 0.97 / 0.97）与轮询循环 | 中-高 | 2026-11-04 刚踩过「阈值压在噪声底上导致误判」，同一课要踩三次；经验无法共享 |
 | D3-4 | `hongbaolingqu.py:337 _tap_into_panel`、`hongbaolingqu.py:195 _open_task_panel_via_hud`、`haoyoujiangli.py:64 _open_friends_via_hud` | **「点固定 HUD 点位 + 校验进入」三份实现且写法不一致**：两份用 `click_position(twice=True)`，一份用 `send_coord` × 2 + `sleep(0.4)` | 中 | 同一教训两种编码，后续改动容易只改一处 |
 | D3-5 | `log_format.py` 模块级 `_task` | 由工作线程写、由 GUI `log()` 与 stdout tee 读的全局可变状态 | 低-中 | 若同时存在两个运行循环（GUI 运行中再单独跑一个脚本），细节行会被归到错误的任务下 |
+| D3-6 | `flow_migong.py:233 find_all_instances_mg` | **多实例检测是逐像素纯 Python 双层循环**（`for y in range(h): for x in range(w)`）。真机 `res` 约 1596×896 ≈ 143 万次迭代/次调用，而迷梦每层事件都要调它；补测试时不得不把桩图压到 20×24 量级才能避免单条用例跑到几十秒，反向印证了开销 | 中 | 迷梦每层的地图刷新被拖慢；调阈值也减不了迭代次数，无法靠参数缓解 |
 
 ### 维度 4 · 代码写法
 
@@ -175,6 +176,8 @@
 
 **涉及文件**：`tests/test_warehouse_logic.py`、`tests/test_yuanwangdan_state.py`、
 `tests/test_flow_tower_pure.py`、`tests/test_flow_migong_pure.py`、`tests/test_smoke.py`
+（以上为当时的建议命名；实际落地为 `test_warehouse.py` / `test_yuanwangdan.py` /
+`test_flow_tower.py` / `test_flow_migong.py` + `test_smoke.py`，见第七节）
 **验证方式**
 - `pytest -q` 全绿；
 - **每条新用例都要做反向验证**：故意反转一个判定，用例必须失败（`doc/LIVE-DEBUGGING.md` §7 已立此规矩）；
@@ -301,6 +304,25 @@ bot_runtime 11 / 全仓 64），并让 B8 的 `check` 目标读取它做逐文�
 
 ---
 
+### B11【中】多实例检测向量化（对应 D3-6，B3 执行中新登记）
+
+**做法**：把 `flow_migong.find_all_instances_mg` 的逐像素双层循环换成向量化实现：
+`cv2.matchTemplate` 得到 `res` 后先 `res >= threshold` 取候选，再按分数降序做邻域抑制
+（保持 `min_gap` 原语义：dx、dy **都**小于 `min_gap` 视为同一实例），最后按 (y, x) 排序返回中心点。
+`_pick_closest_mgzd` 等调用方签名与返回格式不变。
+
+**涉及文件**：`flow_migong.py`、`tests/test_flow_migong.py`
+**验证方式**
+- 现有 4 条 `find_all_instances_mg` 用例全绿且**不改断言**（阈值边界、`min_gap` 去重、按 y 升序、
+  显式 `img` 入参）；
+- 新增**等价性**用例：测试内保留一份旧实现作为参考函数，用固定的小 `res` 同时喂新旧两版，
+  断言输出完全一致；
+- 新增耗时门槛用例：20×24 的 `res` 向量化后应 < 1 ms，锁住「不要再退回 O(像素) 的 Python 循环」；
+- 注意 `test_find_all_instances_sorted_by_y_ascending` 的注释：向量化后 `np.argwhere` 的行序不再
+  天然按 y 递增，那行排序从「恒等」变成真正承重的契约。
+
+---
+
 ## 四、优先级与并行性
 
 | 优先级 | 建议 | 可并行组 | 理由 |
@@ -315,6 +337,7 @@ bot_runtime 11 / 全仓 64），并让 B8 的 `check` 目标读取它做逐文�
 | **P3** | B4 任务注册单源化 | **依赖 B5**（同改 Goldenhandmaidens.py） | 收益大但改动面最广，必须串行且先有 B3/B5 的保护网 |
 | **P3** | B9 lint 基线文件 | 依赖 B8（由 `check` 目标消费） | |
 | **P3** | B10 整洁性收尾 | 组 6（除删除动作外文件独立） | 删除 `_tmp_click_srv.py` **需用户明确确认** |
+| **P2** | B11 多实例检测向量化 | 独立组（只动 `flow_migong.py` + 其测试） | 真机每帧约 143 万次纯 Python 循环，迷梦每层都调 |
 
 **并行执行建议**：组 1 + 组 2 + 组 3 + 组 4 可同时开工（已核对文件集合互不相交）。
 组 5/6 及 B4/B6/B8/B9 之间存在文件重叠，按上表依赖顺序串行。
@@ -379,7 +402,7 @@ pillow 仅传递依赖），已改为按清单安装。
 
 - **唯一无法负验证的一条**：`find_all_instances_mg` 的 `loc.sort(key=y)`（`flow_migong.py:263`）。函数体是按
   (y, x) 升序的双层扫描，发现顺序天然已按 y 递增，删掉该 sort 不会让用例变红——**这行当前是恒等操作**。
-  用例保留，改为守 B4（向量化后行序不保证）这条防线，测试内已写明理由。这比原建议的措辞更准确：
+  用例保留，改为守 B11（向量化后行序不保证）这条防线，测试内已写明理由。这比原建议的措辞更准确：
   sort 不是必需的契约，而是冗余保险。
 - **由新测试暴露并修掉**：`yuanwangdan.py:309` 的 `_find(tpl_wish_label, 0.85)`——`_find` 的第二位置参数是
   `timeout`，裸写极易被读成「阈值 0.85」。改为显式 `timeout=0.85`，**运行时行为完全不变**（若要真收紧该阈值，
@@ -390,7 +413,7 @@ pillow 仅传递依赖），已改为按清单安装。
   零方差 / 纯色图上 `cv2.matchTemplate` 返回 1.0，模板全黑时会「满分命中」，`_recognize_hero` 的阈值拦不住；
   `flow_tower.py:84` 的 `SPECIAL_HERO_SET` 为空集，使特殊角色分支在该模块不可达（仅 `push.py:68` 有内容）。
 - **附带证据**：单测里 `find_all_instances_mg` 的桩图必须压到 20×24 量级（真机 `res` 约 1596×896 ≈ 143 万次循环），
-  这为 **B4 的双层循环性能项**提供了可复现的量级证据。
+  这为 **B11 的多实例检测向量化**提供了可复现的量级证据。
 
 **门禁**：`python -m compileall .` 通过；`pytest -q` 106 passed；`ruff check .` 64 条 = 存量基线，新增测试文件
 自身 0 条。产品代码本次只动了上述一行显式化。B2、B4–B10 未动。
