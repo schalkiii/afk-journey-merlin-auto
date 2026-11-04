@@ -121,7 +121,7 @@
 
 ## 三、改进建议（逐条：做法 / 涉及文件 / 验证方式）
 
-### B1【高】补依赖清单与安装文档（对应 D2-1、D1-3）
+### B1【高】补依赖清单与安装文档（对应 D2-1、D1-3）— ✅ 已执行（见第七节）
 
 **做法**
 1. 新建 `requirements.txt`，按 AST 扫描结果分两组写死可复现版本（本机实测版本）：
@@ -163,7 +163,7 @@
 
 ---
 
-### B3【高】按「每天真跑」的顺序补纯逻辑测试（对应 D5-1、D5-2、D6-1）
+### B3【高】按「每天真跑」的顺序补纯逻辑测试（对应 D5-1、D5-2、D6-1）— ✅ 已执行（见第七节）
 
 **做法**：只测**不依赖真实窗口的纯逻辑**，用 monkeypatch 桩掉 `find_center*` / `screenshot_bgr` /
 `click_position`（仓库已有这套写法可抄：`test_hongbaolingqu.py`、`test_push_fail_limit.py`）。优先级：
@@ -359,3 +359,38 @@ B3 属**测试**分支，B5/B9/B10 属**代码质量**分支，B1/B7/B8 属**工
   判据必须用钥匙余量（`fanfanle.py` 已按此实现）。
 - **测试不污染产品日志**：`tests/conftest.py` 会话级夹具已把 `LOG_FILE` 指向临时目录，
   实测一次 pytest 前后计数不变。
+
+## 七、执行进展（2026-11-04 晚间，B1 与 B3 已落地）
+
+**B1 依赖清单**：新增 `requirements.txt`（运行时）与 `requirements-dev.txt`（pytest / ruff / pyinstaller），
+按本机 Python 3.13.17 实盘 `==` pin。三个 opencv 发行版共存于 site-packages，据运行时 cv2 同时含 contrib
+独有模块与 GUI、且 `cv2.pyd` 时间戳与 `opencv_contrib_python` 的 dist-info 一致（晚于另两个），判定生效者为
+**opencv-contrib-python**；清单只保留它并注明「只装一个发行版」。另查出建议中未列的隐藏依赖
+`keyboard`（`Goldenhandmaidens.py:1345`）与 `certifi`（`updater.py:17`），以及 `psutil` 全仓零 import 的事实。
+README「运行环境 / 二次开发」的 `pip install ... requests pillow opencv-python` 一行有误（requests 从未 import、
+pillow 仅传递依赖），已改为按清单安装。
+
+**B3 补测试**：用例 60 → **106**。`test_yuanwangdan`(18) / `test_warehouse`(9) / `test_flow_migong`(12) /
+`test_flow_tower`(5) + `test_smoke` 加强 2 条，覆盖建议里点名的四个模块。度量口径据实际情况修正：建议原文写的
+「modules imported by tests: 8 → ≥13」把 `test_smoke.test_all_modules_import` 的 importlib 全量导入误当成了覆盖，
+真实口径应为「tests 目录里显式 import 且有断言的产品模块」，**7 → 11**。
+
+**执行中的偏差与产出（原建议未预见）**：
+
+- **唯一无法负验证的一条**：`find_all_instances_mg` 的 `loc.sort(key=y)`（`flow_migong.py:263`）。函数体是按
+  (y, x) 升序的双层扫描，发现顺序天然已按 y 递增，删掉该 sort 不会让用例变红——**这行当前是恒等操作**。
+  用例保留，改为守 B4（向量化后行序不保证）这条防线，测试内已写明理由。这比原建议的措辞更准确：
+  sort 不是必需的契约，而是冗余保险。
+- **由新测试暴露并修掉**：`yuanwangdan.py:309` 的 `_find(tpl_wish_label, 0.85)`——`_find` 的第二位置参数是
+  `timeout`，裸写极易被读成「阈值 0.85」。改为显式 `timeout=0.85`，**运行时行为完全不变**（若要真收紧该阈值，
+  需实跑验证后另行改动，与待办 #14 同类）。
+- **清单落地时踩到的仓库级坑**：`.gitignore` 有 `*.txt` 而只反选 `!requirements.txt`，`requirements-dev.txt`
+  会被静默忽略、clone 后拿不到。已改为 `!requirements*.txt`。建议 B1 未预见这一条。
+- **新登记三项（本次不改，均在补测试分支范围外）**：`warehouse.has_fancy_border`（:469）主流程未调用、疑似遗留；
+  零方差 / 纯色图上 `cv2.matchTemplate` 返回 1.0，模板全黑时会「满分命中」，`_recognize_hero` 的阈值拦不住；
+  `flow_tower.py:84` 的 `SPECIAL_HERO_SET` 为空集，使特殊角色分支在该模块不可达（仅 `push.py:68` 有内容）。
+- **附带证据**：单测里 `find_all_instances_mg` 的桩图必须压到 20×24 量级（真机 `res` 约 1596×896 ≈ 143 万次循环），
+  这为 **B4 的双层循环性能项**提供了可复现的量级证据。
+
+**门禁**：`python -m compileall .` 通过；`pytest -q` 106 passed；`ruff check .` 64 条 = 存量基线，新增测试文件
+自身 0 条。产品代码本次只动了上述一行显式化。B2、B4–B10 未动。

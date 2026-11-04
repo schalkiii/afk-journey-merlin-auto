@@ -39,7 +39,7 @@ main0hao.py
 
 # Old backups
 *.txt
-!requirements.txt
+!requirements*.txt
 
 # AHK source (only need the compiled exe)
 *.ahk

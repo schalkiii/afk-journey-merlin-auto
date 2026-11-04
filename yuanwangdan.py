@@ -306,7 +306,8 @@ def _craft_from_lack():
         start_template, cook_pos = _find_start_button()
         if cook_pos is not None:
             break
-        label_pos = _find(tpl_wish_label, 0.85)
+        # 0.85 是等待秒数（_find 的第二个位置参数是 timeout，写成裸值容易被误读成阈值）
+        label_pos = _find(tpl_wish_label, timeout=0.85)
         if label_pos is not None:
             log("【家园愿望单】进入生产选择界面，选择愿望单需求产品")
             _click_once((label_pos[0], label_pos[1] + WISH_SELECT_OFFSET_Y), SETTLE_DELAY)

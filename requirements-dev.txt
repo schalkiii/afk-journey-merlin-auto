@@ -1,0 +1,12 @@
+# 开发/构建依赖 —— 测试、静态检查、打包
+# 按本机实盘 pin：Python 3.13.17。
+# 安装：python -m pip install -r requirements.txt -r requirements-dev.txt
+
+# 单元测试（tests/ 目录）
+pytest==9.1.1
+
+# Lint / 代码风格（项目收尾要求 ruff 清零 error/warning）
+ruff==0.16.10
+
+# 打包单文件 exe（goldenhandmaidens.spec）
+pyinstaller==6.22.3

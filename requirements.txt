@@ -1,0 +1,34 @@
+# 运行时依赖 —— 《剑与远征：启程》挂机脚本（Python + Tkinter + OpenCV 模板匹配）
+# 按本机实盘 pin：Python 3.13.17（Windows 官方发行版）；tkinter 由官方 Python 自带，无需列在此处。
+# 安装：python -m pip install -r requirements.txt
+
+# OpenCV：本机同时装了 opencv-python / opencv-contrib-python / opencv-python-headless 三个发行版，
+# 三者都往同一个 cv2/ 目录安装、互相覆盖文件，实际 import 到谁取决于最后一次安装。
+# 经判定本机生效的是 opencv-contrib-python（证据：cv2 运行时含 xphoto/bgsegm/SIFT/wechat_qrcode 等
+# contrib 独有模块且含 imshow/namedWindow 的 GUI 版本，二者并存只有 contrib 全量版才有；
+# 且 site-packages/cv2/cv2.pyd 与 cv2/__init__.py 的时间戳(2026-10-05)与 opencv_contrib_python
+# 的 dist-info 一致，晚于另两个(2026-09-19)，即 contrib 最后覆盖安装）。
+# 本清单只保留这一个以精确复现本机 cv2 行为；注意：仓库当前并未实际调用任何 contrib 独有模块
+# （全仓 grep 无 xphoto/bgsegm/sift 等），故 plain opencv-python 功能上也够用。
+# ⚠️ 只装一个 opencv 发行版，切勿与 opencv-python / -headless 共存，否则 cv2 会被互相覆盖、行为不可复现。
+opencv-contrib-python==5.0.0.93
+
+# 数值计算：common.py 顶层 import，模板匹配数组运算必需（硬依赖，缺失即崩）
+numpy==2.5.3
+
+# 鼠标/截屏自动化：common.py 顶层 import 并在 send_coord/screenshot 使用（硬依赖，缺失即崩）
+# 其传递依赖 PyScreeze/MouseInfo/msgpack/pyperclip/pillow 交由 pip 自动解析，不在此逐条 pin。
+PyAutoGUI==0.9.54
+
+# 后台截取被遮挡/提权的游戏窗口（Windows Graphics Capture）：common._start_background_capture 使用。
+# 代码有 try/except 回退到普通屏幕截图，但「远程桌面/窗口遮挡时仍能识别」是本项目核心功能，
+# 缺它该功能失效，故列为运行依赖。
+windows-capture==2.0.1
+
+# 全局热键 F8/F9（任意窗口聚焦都生效）：Goldenhandmaidens._register_hotkeys 使用，缺失自动回退为
+# 仅 GUI 聚焦时生效（tkinter bind_all）。属可选但已在用的依赖。
+keyboard==0.13.5
+
+# HTTPS 根证书包（certifi.where()）：updater._ssl_context 用它校验 GitHub 更新接口，缺失回退系统 CA。
+# 属可选但已在用的依赖。
+certifi==2026.7.22

@@ -240,10 +240,10 @@
 
 - **操作系统**：Windows（依赖 `user32`/`shell32` 窗口管理与 AHK 注入）
 - **游戏客户区**：1600×900、横向（模板基于此客户区采集；窗口被拖动/缩放到其他尺寸会识别失败，程序会在启动时提示）
-- **Python**：3.10+（仅开发/源码运行需要；普通用户直接运行打包好的 `goldenhandmaidens.exe`）
+- **Python**：源码运行需 **3.13**（本机 3.13.17 实测，全部依赖按此版本实盘 pin，清单见 `requirements.txt`/`requirements-dev.txt`；`3.10+` 仅理论下限）；**OpenCV 三发行版只装一个**——本机生效的是 `opencv-contrib-python`，切勿再叠加 `opencv-python`/`opencv-python-headless`（三者共用同一 `cv2` 目录会互相覆盖、行为不可复现）；普通用户直接运行打包好的 `goldenhandmaidens.exe` 即可，无需装 Python
 - **依赖组件**：
   - `click_from_file.exe` / AutoHotkey：负责实际鼠标点击注入（由 `common.send_coord` 写入坐标文件驱动）
-  - `windows-capture`：可选依赖，负责后台截图（Windows Graphics Capture）；缺失时自动回退普通屏幕截图
+  - `windows-capture`：负责后台截图（Windows Graphics Capture），用于截取被遮挡/提权的游戏窗口；代码有缺失回退普通截图，但这是核心功能所需，已列入 `requirements.txt`
   - 桌面《剑与远征：启程》快捷方式：用于「启动游戏」/ `launch_game.py`
   - `templates/` 目录：界面元素模板图片（含 `tongguanzhenrong.png`、`yijiancaiyong.png` 等）。
     采集与标定规则见 [doc/TEMPLATE-AUTHORING.md](doc/TEMPLATE-AUTHORING.md)——新增模板前先读，
@@ -343,13 +343,19 @@ config.json               启动器/脚本默认配置（新增）
 ## 二次开发（源码运行）
 
 ```bash
-pip install pyautogui opencv-python numpy pillow requests windows-capture
+python -m pip install -r requirements.txt -r requirements-dev.txt
 python Goldenhandmaidens.py
 ```
 打包为单文件 exe（输出到仓库根目录）：
 ```bash
 pyinstaller goldenhandmaidens.spec --distpath . --workpath build --noconfirm
 ```
+
+跑回归测试（不需要开游戏，全部在模块级接缝打桩）：
+```bash
+python -m pytest -q
+```
+测试只覆盖**决策逻辑**——判定优先级、次数上限、去重排序、跨模块文本格式契约；**不覆盖像素阈值**（0.8 够不够只能实跑判断）。新增用例沿用 `tests/test_push_fail_limit.py`（状态机/失败上限）与 `tests/test_hongbaolingqu.py`（调用序列/匹配分数桩）的范式，且每条都要做负验证：翻转一个判据后该用例必须变红，否则是恒真的假测试。
 
 A: 请确保 shared 文件夹已创建，启动时需要当前界面可以看到玩法目录四个字，在其他界面无法顺利运行。
 

@@ -2,6 +2,24 @@
 
 ## 未发布（Working）
 
+### 补纯逻辑测试（B3：四个零测试模块）
+- 用例 **60 → 106**。新增 `tests/test_yuanwangdan.py`(18) / `tests/test_warehouse.py`(9) / `tests/test_flow_migong.py`(12) / `tests/test_flow_tower.py`(5)，并给 `tests/test_smoke.py` 补 2 条阵容判定用例；只测决策逻辑，不碰像素阈值。
+- **愿望单**：`_panel_state` 的判定优先级表（领奖 > 不足 > 交付 > 一键 > 结算），含「只有『点击空白处关闭』提示命中也算结算」这条兜底判据（`yuanwangdan.py:171`，当初因结算标题流光动画 0.82–0.95 抖动才改的设计）；`_wait_gone` 的超时语义（含 `timeout=0` 时仍做最后一次确认）；`_claim_reward` 礼盒模板跨不了档时退回「锚点 + 偏移」的兜底坐标。
+- **仓库扫描**：`_iter_scales` 的 `step<=0` 空产出与 `+1e-9` 上界容差；`_best_multiscale_match_score` 的退化输入必须返回 `-1.0` 而不是崩在 `cv2.resize`；`has_fancy_border` / `_top_band_edge_count` 只吃传入 ROI，可测则一并补上（纯色不误判为华丽边框）。
+- **跨模块文本契约**：`warehouse._save_heroes_to_txt` 写、`flow_tower._load_warehouse_levels` 读，中间只有一条「名字,高/低/未拥有」的文本格式约定、没有共享代码——做了一组 round-trip 用例把它钉住（格式一变即静默丢练度，是本轮价值最高的一条）。
+- **迷梦之役**：`cfg` 运行时参数压过文件配置 / 缺 key 回 default；`_pick_closest_mgzd` 的欧氏距离最近与空表短路（显式传 `[]` 不得回退查屏）；`find_all_instances_mg` 的阈值边界、`min_gap` 去重、按 y 升序；`handle_failure` 的清理序列与 `drag_repeat` 长按次数；外层循环次数耗尽后不再点 `jinru`。桩图固定在 20×24 量级——该函数是逐像素双层 Python 循环，真机 `res` 约 1596×896，用大图单条用例会跑到几十秒。
+- **负验证**：46 条新用例逐条翻转产品判据验证，45 条变红。**1 条如实标注为无法负验证**——`find_all_instances_mg` 的 `loc.sort(key=y)` 在当前双层升序扫描下是恒等操作（发现顺序天然已按 y 递增），删掉也不会红；用例保留作 B4 向量化（`np.argwhere` 行序不保证）之后的防线，测试内已写明原因。
+- **顺带修两处**：`yuanwangdan.py:309` 的 `_find(tpl_wish_label, 0.85)` 改为显式 `timeout=0.85`——**行为完全不变**，`_find` 第二个位置参数是 timeout 而非阈值，裸写极易误读成「阈值 0.85」（由新测试暴露；若将来真需要收紧该阈值，须实跑验证后另行改动）；`.gitignore` 的 `!requirements.txt` 改 `!requirements*.txt`，否则 `requirements-dev.txt` 被上一条 `*.txt` 吞掉、clone 后根本拿不到。
+- **发现但登记未改**（都需要实跑或更大的改动范围，不在补测试分支内动）：`warehouse.has_fancy_border` 在主流程 `warehouse.py:630` 未被调用（该处实际走 `_top_band_edge_count`），疑似遗留代码；零方差 / 纯色图上 `cv2.matchTemplate` 返回 **1.0** 而非报错，模板全黑时会「满分命中」；`flow_tower.py:84` 的 `SPECIAL_HERO_SET` 是空集，故其特殊角色分支实际不可达（只有 `push.py:68` 含 meimo/kululu/shizi），属配置而非缺陷。
+
+### 建立依赖清单（B1：新机器 clone 后跑不起来）
+- 新增 `requirements.txt`（运行时）与 `requirements-dev.txt`（pytest / ruff / pyinstaller），全部按本机 **Python 3.13.17** 实盘 `==` pin；文件顶注写明用途与「只装一个 OpenCV 发行版」。
+- **OpenCV 三发行版判定**：本机同时装了 `opencv-python` / `-contrib-python` / `-headless`，三者往同一 `cv2/` 目录互相覆盖。据运行时 `cv2` 同时含 contrib 独有模块（xphoto / bgsegm / SIFT / wechat_qrcode）与 GUI（imshow / namedWindow），且 `site-packages/cv2/cv2.pyd`、`cv2/__init__.py` 时间戳（2026-10-05）与 `opencv_contrib_python` 的 dist-info 一致、晚于另两个（2026-09-19）——判定生效者为 **opencv-contrib-python**，清单据此只保留它一个以精确复现本机行为（仓库实际未调用任何 contrib 模块，plain `opencv-python` 功能上也够，注释已说明）。
+- **依赖分级**：`cv2` / `numpy` / `PyAutoGUI` 是 `common.py` 顶层 import 的硬依赖（缺失即崩）；`windows-capture`（后台截取遮挡 / 提权窗口）、`keyboard`（全局热键 F8/F9）、`certifi`（更新接口 SSL 根证书）三者在代码里都有 try/except 回退，属「可选但已在用」，已列入运行时清单并注明回退行为。`PyAutoGUI` 的传递依赖（pyscreeze / mouseinfo / msgpack / pyperclip / pillow）交给 pip 解析，不逐条 pin。
+- **顺带查出两处勘察遗漏的隐藏依赖**：`keyboard`（`Goldenhandmaidens.py:1345` 函数内 import）、`certifi`（`updater.py:17`）——本机都已装，但原「第三方 import 仅 cv2/numpy/pyautogui」的结论没覆盖到，已补进清单。
+- **清理过时文档**：README「二次开发」里 `pip install pyautogui opencv-python numpy pillow requests windows-capture` 有误——`requests` 全仓未 import（`updater.py` 走标准库 `urllib`）、`pillow` 只是传递依赖、opencv 应写 contrib；改为 `python -m pip install -r requirements.txt -r requirements-dev.txt`，并在「运行环境」补 Python 3.13 实测与 OpenCV 单发行版注意事项。**装了但没用**：`psutil==7.2.2` 全仓无任何 import，未列入清单。
+- 验证：`python -m pip show` 逐条核对 9 个顶层包版本与清单一致（全程离线，未安装/升级/卸载）；`python -c "import common, cv2, numpy, pyautogui, windows_capture"` 通过（`cv2 5.0.0` / `numpy 2.5.3`）。
+
 ### 日志格式统一（新增 `log_format.py`）
 - **只在出口整理一次**，不去改三十个流程模块里的 print：GUI 的 `log()` 与 `_StdoutTee` 两条路都过 `format_body`。做三件事——任务运行期间的细节行缩进加 `·` 归到该任务下（以前「命中 caidan」根本看不出属于哪个任务，只能往上翻找「开始执行」）；高频行压短；任务边界单独成行。
 - 压缩只认**整行就是这个形状**的四类（实测一份日常日志里 命中 717 行、未命中重试 1322 行、状态跳转 617 行）：`X 识别成功，第 N 次，坐标: (x, y)，发送给 AHK 点击` → `命中 X (x, y) 第N次`；`X 第 N 次未找到，0.5 秒后重试（已等待 s 秒）...` → `未命中 X 第N次（已等 ss）`；`X 在 t 秒内未出现，放弃等待。` → `放弃 X（ts 内未出现）`；`a -> b` → `状态 a → b`。**没命中的行原样通过**，一个字符都不改。
