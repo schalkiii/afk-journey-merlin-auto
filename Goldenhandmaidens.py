@@ -68,6 +68,20 @@ from hero_metadata import (
 )
 from warehouse import ALL_HERO_NAMES, WAREHOUSE_TXT_PATH
 
+# 左侧功能列表的状态色（bg, fg, 短标签）：一眼扫出「正在跑哪个 / 哪个挂了」。
+# 用经典 tk.Label 上色而不是给 ttk.Button 设 background——Windows 的 vista 主题会
+# 忽略 ttk 控件的 background，只有 tk 控件能真正变色。
+STATUS_COLORS = {
+    "运行中": ("#1565C0", "white", "运行"),
+    "等待中": ("#F9A825", "black", "排队"),
+    "完成": ("#2E7D32", "white", "完成"),
+    "失败": ("#C62828", "white", "失败"),
+    "错误": ("#C62828", "white", "错误"),
+    "已停止": ("#616161", "white", "停止"),
+}
+# 就绪（还没跑过）不抢视线：底色接近面板、文字留空
+STATUS_NEUTRAL = ("#ECEFF1", "#90A4AE", "")
+
 class GameBotGUI:
     def __init__(self, root):
         _ensure_config_files()
@@ -128,20 +142,22 @@ class GameBotGUI:
         self.scheduled_time = None
         self.schedule_cancel_event = threading.Event()
         
+        # 启用状态只由用户在左侧列表勾选，运行结束后不再自动改（原 daily_reset
+        # 「完成即停用」会让第二天的任务被静默跳过，且改动会被持久化覆盖用户设置）。
         self.scripts = [
             ScriptConfig("登录", enabled=True),
             ScriptConfig("仓库管理", enabled=True),
-            ScriptConfig("邮件", enabled=False, daily_reset=True),
-            ScriptConfig("好友奖励", enabled=False, daily_reset=True),
+            ScriptConfig("邮件", enabled=False),
+            ScriptConfig("好友奖励", enabled=False),
             ScriptConfig("普竞", enabled=False),
             ScriptConfig("迷梦之域", enabled=False, params={"challenge_count": 5}),
             ScriptConfig("女神塔", enabled=False),
-            ScriptConfig("挂机奖励", enabled=False, params={"paid_times": 0}, daily_reset=True),
-            ScriptConfig("商城", enabled=False, daily_reset=True),
-            ScriptConfig("日常任务", enabled=False, daily_reset=True),
-            # 红点领取覆盖任务面板各页签与赛季手册里程碑，与「日常任务」互补：
-            # 日常任务只点每日/公会的一键领取，这里把成长挑战/赛季任务/家园目标也扫一遍。
-            ScriptConfig("红点领取", enabled=False, daily_reset=True),
+            ScriptConfig("挂机奖励", enabled=False, params={"paid_times": 0}),
+            ScriptConfig("商城", enabled=False),
+            ScriptConfig("日常任务", enabled=False),
+            # 红点领取覆盖任务面板各页签、赛季手册里程碑、月桂之旅与当前进度，
+            # 与「日常任务」互补：日常任务只点每日/公会的一键领取。
+            ScriptConfig("红点领取", enabled=False),
             ScriptConfig("爬塔", enabled=False),
             ScriptConfig("幻灵推图", enabled=False),
             ScriptConfig("推图", enabled=False),
@@ -154,11 +170,11 @@ class GameBotGUI:
             }),
             # 结社战线 / 狩猎悬赏 均为「玩法目录 → 公会玩法」页签下的公会日常，
             # 共用 flow_gonghui 的入口流程，结束后各自兜底回主界面。
-            ScriptConfig("结社战线", enabled=False, daily_reset=True),
-            ScriptConfig("狩猎悬赏", enabled=False, daily_reset=True),
+            ScriptConfig("结社战线", enabled=False),
+            ScriptConfig("狩猎悬赏", enabled=False),
             # 家园愿望单在「家园」内执行，结束后游戏停留在家园视图，而项目其余流程
             # 以主界面「玩法目录」为起点判定，故必须排在执行顺序末尾，避免阻断后续任务。
-            ScriptConfig("家园愿望单", enabled=False, daily_reset=True),
+            ScriptConfig("家园愿望单", enabled=False),
         ]
         
         # 从配置中加载脚本状态
@@ -166,7 +182,6 @@ class GameBotGUI:
             script_config = self.config.get("scripts", {}).get(script.name, {})
             script.enabled = script_config.get("enabled", script.enabled)
             script.params = script_config.get("params", script.params)
-            script.daily_reset = script_config.get("daily_reset", script.daily_reset)
             script.last_run_time = script_config.get("last_run_time", None)
 
         # 恢复用户拖出来的执行顺序；配置里没有的功能（新版本新增）按默认顺序补到末尾
@@ -354,7 +369,8 @@ class GameBotGUI:
         dashboard_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 10))
         
         # 添加滚动条
-        canvas = tk.Canvas(dashboard_frame, width=150, height=300)
+        # 宽度要容下一行的三段：勾选框 + 状态色块 + 名称按钮（原来只有按钮，150 够）
+        canvas = tk.Canvas(dashboard_frame, width=205, height=300)
         scrollbar = ttk.Scrollbar(dashboard_frame, orient=tk.VERTICAL, command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas)
         
@@ -371,20 +387,41 @@ class GameBotGUI:
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
+        # 每行 = 启用勾选框 + 状态色块 + 名称按钮。启用状态直接在这一列勾选，
+        # 不再放进右侧子页（原来「子页里一个开启勾选 + 列表 ✓ 前缀」是两份状态，
+        # 用户看不出到底哪个算数）。拖拽仍然抓名称按钮，行 Frame 是 pack 单位。
+        self.script_rows = []
         self.script_buttons = []
+        self.script_checks = []
+        self.script_status_labels = []
+        self.script_enabled_vars = []
         for i, script in enumerate(self.scripts):
+            row = tk.Frame(scrollable_frame)
+            enabled_var = tk.BooleanVar(value=script.enabled)
+            check = tk.Checkbutton(
+                row, variable=enabled_var, width=2, takefocus=0,
+                command=lambda idx=i, var=enabled_var: self.on_row_enabled_changed(idx, var)
+            )
+            check.pack(side=tk.LEFT)
+            status_label = tk.Label(row, width=4, font=("Microsoft YaHei", 9))
+            status_label.pack(side=tk.LEFT, padx=(0, 4))
             btn = ttk.Button(
-                scrollable_frame,
+                row,
                 text=script.name,
-                width=15,
+                width=13,
                 command=lambda idx=i: self.select_script(idx)
             )
-            btn.pack(pady=5, fill=tk.X)
+            btn.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            row.pack(pady=4, fill=tk.X)
             # 按住上下拖动即可调整执行顺序；command 在松开时也会触发，故用 _drag_moved 抑制误选
             btn.bind("<ButtonPress-1>", lambda event, b=btn: self._drag_begin(event, b))
             btn.bind("<B1-Motion>", lambda event, b=btn: self._drag_motion(event, b))
             btn.bind("<ButtonRelease-1>", lambda event, b=btn: self._drag_end(event, b))
+            self.script_rows.append(row)
             self.script_buttons.append(btn)
+            self.script_checks.append(check)
+            self.script_status_labels.append(status_label)
+            self.script_enabled_vars.append(enabled_var)
             
         self.update_dashboard_buttons()
 
@@ -397,11 +434,11 @@ class GameBotGUI:
         self._drag_start_y = event.y_root
 
     def _drop_index_at(self, root_y):
-        """落点下标 = 第一个「垂直中点低于鼠标」的按钮下标，越过它即排到末尾。"""
-        for index, btn in enumerate(self.script_buttons):
-            if root_y < btn.winfo_rooty() + btn.winfo_height() // 2:
+        """落点下标 = 第一个「垂直中点低于鼠标」的行下标，越过它即排到末尾。"""
+        for index, row in enumerate(self.script_rows):
+            if root_y < row.winfo_rooty() + row.winfo_height() // 2:
                 return index
-        return len(self.script_buttons) - 1
+        return len(self.script_rows) - 1
 
     def _drag_motion(self, event, button):
         if not self._drag_moved and abs(event.y_root - self._drag_start_y) < 8:
@@ -413,17 +450,20 @@ class GameBotGUI:
             self._move_script(from_index, to_index)
 
     def _move_script(self, from_index, to_index):
-        """把第 from 个功能移到 to 位置，数据顺序与按钮 pack 顺序同步重排。"""
+        """把第 from 个功能移到 to 位置，数据顺序与各行 pack 顺序同步重排。"""
         selected_name = self.scripts[self.current_script_index].name
-        script = self.scripts.pop(from_index)
-        self.scripts.insert(to_index, script)
-        button = self.script_buttons.pop(from_index)
-        self.script_buttons.insert(to_index, button)
+        # 数据与它的四份控件必须一起换位：漏一份，勾选框和状态色就会跟着错误的任务
+        for collection in (
+            self.scripts, self.script_rows, self.script_buttons, self.script_checks,
+            self.script_status_labels, self.script_enabled_vars,
+        ):
+            item = collection.pop(from_index)
+            collection.insert(to_index, item)
 
-        for btn in self.script_buttons:
-            btn.pack_forget()
-        for btn in self.script_buttons:
-            btn.pack(pady=5, fill=tk.X)
+        for row in self.script_rows:
+            row.pack_forget()
+        for row in self.script_rows:
+            row.pack(pady=4, fill=tk.X)
 
         # 按钮下标随重排变化，按名字找回当前选中项，避免面板显示到别的功能上
         self.current_script_index = next(
@@ -448,18 +488,10 @@ class GameBotGUI:
         self.script_name_label = ttk.Label(self.script_panel, text="", font=("Microsoft YaHei", 12, "bold"))
         self.script_name_label.grid(row=0, column=0, columnspan=2, pady=(0, 10))
         
-        self.script_enabled_var = tk.BooleanVar()
-        self.script_enabled_check = ttk.Checkbutton(
-            self.script_panel,
-            text="开启",
-            variable=self.script_enabled_var,
-            command=self.on_script_enabled_changed
-        )
-        self.script_enabled_check.grid(row=1, column=0, sticky=tk.W, pady=5)
-
+        # 「开启」勾选框已移到左侧列表每行行首，子页不再重复放一份启用状态
         # 一键全选 / 全不选：每天启动后批量勾选 / 取消勾选所有功能脚本
         select_btns = ttk.Frame(self.script_panel)
-        select_btns.grid(row=1, column=1, sticky=tk.E, pady=5)
+        select_btns.grid(row=1, column=0, columnspan=2, sticky=tk.E, pady=5)
         self.select_all_btn = ttk.Button(
             select_btns, text="一键全选", command=self.enable_all_scripts
         )
@@ -595,21 +627,28 @@ class GameBotGUI:
             messagebox.showinfo("赞助", "赞助二维码图片未找到。")
 
     def update_dashboard_buttons(self):
-        for i, (btn, script) in enumerate(zip(self.script_buttons, self.scripts, strict=False)):
-            if i == self.current_script_index:
-                btn.state(['pressed'])
-            else:
-                btn.state(['!pressed'])
-            
-            if script.enabled:
-                btn.configure(text=f"✓ {script.name}")
-            else:
-                btn.configure(text=script.name)
-                
+        """刷新左侧列表：选中高亮、启用勾选状态、以及每行的状态色块。"""
+        for index, script in enumerate(self.scripts):
+            btn = self.script_buttons[index]
+            btn.state(['pressed'] if index == self.current_script_index else ['!pressed'])
+            # 名称不再加 ✓ 前缀：启用状态已由行首勾选框表达，两处各写一份迟早互相打脸
+            btn.configure(text=script.name)
+            self.script_enabled_vars[index].set(script.enabled)
+            background, foreground, short_text = STATUS_COLORS.get(
+                script.status, STATUS_NEUTRAL)
+            self.script_status_labels[index].configure(
+                text=short_text, bg=background, fg=foreground)
+
+    def on_row_enabled_changed(self, index, var):
+        """行首勾选框改动启用状态：只按用户意图写入并立即持久化。"""
+        self.scripts[index].enabled = var.get()
+        self.save_config()
     def update_script_panel(self):
         script = self.scripts[self.current_script_index]
         self.script_name_label.configure(text=script.name)
-        self.script_enabled_var.set(script.enabled)
+        # 运行循环每改一次 status 都会经本方法刷新（root.after 派发），
+        # 顺带刷左侧行首的勾选框与状态色，避免同一份状态要两个入口各自维护。
+        self.update_dashboard_buttons()
 
         # 缓存仓库面板，避免切换时重建 472 个 widget 导致卡顿
         wh_container = getattr(self, '_warehouse_container', None)
@@ -984,28 +1023,20 @@ class GameBotGUI:
         self.update_dashboard_buttons()
         self.update_script_panel()
         
-    def on_script_enabled_changed(self):
-        script = self.scripts[self.current_script_index]
-        script.enabled = self.script_enabled_var.get()
-        self.save_config()
-        self.update_dashboard_buttons()
-
     def enable_all_scripts(self):
         """一键勾选全部功能脚本：每天启动后批量启用，省去逐个勾选。"""
         for script in self.scripts:
             script.enabled = True
-        self.update_script_panel()      # 刷新当前脚本「开启」勾选框
-        self.update_dashboard_buttons() # 刷新列表的 ✓ 标记
-        self.save_config()              # 持久化到配置
+        self.update_dashboard_buttons()  # 刷新左侧各行行首的勾选框
+        self.save_config()               # 持久化到配置
         self.log("已一键勾选全部功能")
 
     def disable_all_scripts(self):
         """一键取消勾选全部功能脚本：批量停用，省去逐个取消。"""
         for script in self.scripts:
             script.enabled = False
-        self.update_script_panel()      # 刷新当前脚本「开启」勾选框
-        self.update_dashboard_buttons() # 刷新列表的 ✓ 标记
-        self.save_config()              # 持久化到配置
+        self.update_dashboard_buttons()  # 刷新左侧各行行首的勾选框
+        self.save_config()               # 持久化到配置
         self.log("已一键取消勾选全部功能")
 
     def on_auto_start_changed(self):
@@ -1608,14 +1639,11 @@ class GameBotGUI:
                 if result:
                     script.status = "完成"
                     self.log(f"[{index}/{total}] {script.name} 执行完成（耗时 {duration:.1f} 秒）")
-                    
-                    # 更新最后执行时间
+
+                    # 更新最后执行时间。这里**不再**改动 script.enabled：
+                    # 旧的「每日重置脚本跑完自动关闭」会把用户的勾选写回配置，
+                    # 导致第二天该任务被静默跳过，且用户下次打开看到的是被程序改过的设置。
                     script.last_run_time = datetime.now().isoformat()
-                    
-                    # 对于每日重置的脚本，执行完成后自动关闭
-                    if script.daily_reset:
-                        script.enabled = False
-                        self.log(f"{script.name} 已自动关闭（每日重置脚本）")
                 else:
                     script.status = "失败"
                     self.log(f"[{index}/{total}] {script.name} 执行失败（耗时 {duration:.1f} 秒）")
@@ -1638,7 +1666,7 @@ class GameBotGUI:
                 
             time.sleep(2)
         
-        # 运行结束后保存（使 auto-disable / last_run_time 等状态持久化）
+        # 运行结束后保存（使 last_run_time 等状态持久化；勾选状态只反映用户自己的设置）
         # 保持 tee 接管（窗口模式下 sys.__stdout__ 为 None，直接重置会令后续 print 崩溃）
         sys.stdout = _StdoutTee(self._enqueue_log)
         self.root.after(0, self._set_current_task, "无")
@@ -1704,7 +1732,6 @@ class GameBotGUI:
             scripts_config[script.name] = {
                 "enabled": script.enabled,
                 "params": script.params,
-                "daily_reset": script.daily_reset,
                 "last_run_time": script.last_run_time
             }
         self.config["scripts"] = scripts_config

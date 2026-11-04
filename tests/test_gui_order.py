@@ -21,16 +21,10 @@ import bot_runtime
 import Goldenhandmaidens as gui
 
 
-@pytest.fixture(scope="module")
-def root():
-    """整模块共用一个 Tk 根：反复创建/销毁根在同一进程内不稳定，会随机抛 TclError。"""
-    try:
-        instance = tk.Tk()
-    except tk.TclError:
-        pytest.skip("当前环境没有可用的图形显示，跳过 GUI 测试")
-    instance.withdraw()   # 不弹窗，避免干扰正在跑的任务
-    yield instance
-    instance.destroy()
+@pytest.fixture
+def root(tk_root):
+    """共用 conftest 里的会话级 Tk 根：同进程再建第二个根会随机 TclError 导致整组 skip。"""
+    return tk_root
 
 
 @pytest.fixture

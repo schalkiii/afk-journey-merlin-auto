@@ -151,12 +151,11 @@ def save_config(config):
         return False
 
 class ScriptConfig:
-    def __init__(self, name, enabled=False, params=None, daily_reset=False):
+    def __init__(self, name, enabled=False, params=None):
         self.name = name
         self.enabled = enabled
         self.params = params or {}
         self.status = "就绪"
-        self.daily_reset = daily_reset  # 是否每日重置
         self.last_run_time: str | None = None  # 最后执行时间
 
 def _ensure_config_files():
