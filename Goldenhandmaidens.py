@@ -163,6 +163,8 @@ class GameBotGUI:
             ScriptConfig("红点领取", enabled=False),
             # 英雄厅堂：点「快速升级」提升赛季共鸣等级（每级吃共鸣资源，故给次数上限）
             ScriptConfig("英雄厅堂", enabled=False, params={"quick_upgrade_times": 10}),
+            # 翻翻乐：一次点击会连抽到本轮 100 满，故给轮数上限（每轮最多烧 100 把钥匙）
+            ScriptConfig("翻翻乐", enabled=False, params={"max_rounds": 10}),
             ScriptConfig("爬塔", enabled=False),
             ScriptConfig("幻灵推图", enabled=False),
             ScriptConfig("推图", enabled=False),
@@ -671,6 +673,8 @@ class GameBotGUI:
             self.create_shouquguajijiangli_params(script, 0)
         elif script.name == "英雄厅堂":
             self.create_yingxiong_params(script, 0)
+        elif script.name == "翻翻乐":
+            self.create_fanfanle_params(script, 0)
         elif script.name == "异界迷宫":
             self.create_yijiemigong_params(script, 0)
         elif script.name in ("幻灵推图", "推图", "循环推图"):
@@ -717,6 +721,28 @@ class GameBotGUI:
         def on_param_change():
             # 每升一级都要吃共鸣资源，次数上限防止把资源一次点光
             script.params["quick_upgrade_times"] = self._clamp_int_var(self.quick_upgrade_times_var, 1, 99)
+            self.save_config()
+
+        spinbox.bind("<FocusOut>", lambda e: on_param_change())
+        spinbox.bind("<Return>", lambda e: on_param_change())
+
+    def create_fanfanle_params(self, script, row=0):
+        """翻翻乐参数：每次运行最多烧几轮（一轮最多消耗 100 把钥匙）。"""
+        ttk.Label(self.param_frame, text="最多轮数 (1-50):").grid(row=row, column=0, sticky=tk.W, pady=2)
+
+        self.fanfanle_max_rounds_var = tk.IntVar(value=script.params.get("max_rounds", 10))
+        spinbox = ttk.Spinbox(
+            self.param_frame,
+            from_=1,
+            to=50,
+            textvariable=self.fanfanle_max_rounds_var,
+            width=10
+        )
+        spinbox.grid(row=row, column=1, sticky=tk.W, pady=2)
+
+        def on_param_change():
+            # 一次点击就会连抽到本轮 100 满，轮数上限防止把钥匙一次性烧光
+            script.params["max_rounds"] = self._clamp_int_var(self.fanfanle_max_rounds_var, 1, 50)
             self.save_config()
 
         spinbox.bind("<FocusOut>", lambda e: on_param_change())
@@ -1410,6 +1436,10 @@ class GameBotGUI:
         import yingxiongtingtang
         return yingxiongtingtang.main(script.params.get("quick_upgrade_times", 10))
 
+    def _run_fanfanle(self, script):
+        import fanfanle
+        return fanfanle.main(script.params.get("max_rounds", 10))
+
     def _run_hongbaolingqu(self, script):
         import hongbaolingqu
         return hongbaolingqu.main()
@@ -1564,6 +1594,7 @@ class GameBotGUI:
             "商城": self._run_shangcheng,
             "日常任务": self._run_meiri,
             "红点领取": self._run_hongbaolingqu,
+            "翻翻乐": self._run_fanfanle,
             "英雄厅堂": self._run_yingxiongtingtang,
             "结社战线": self._run_jieshezhanxian,
             "狩猎悬赏": self._run_lieshouxunshang,
