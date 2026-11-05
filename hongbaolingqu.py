@@ -43,7 +43,9 @@ from common import (
 
 tpl_caidan = get_template_path("caidan.png")
 tpl_renwu = get_template_path("renwu.png")
-tpl_richangrenwu_tab = get_template_path("richangrenwutab.png")
+# 任务面板下方 HUD 快捷栏的「日常任务」入口（客户区固定 1600×900 实测图标中心）。
+# 不能靠「日常任务」文字模板定位：底栏几个图标文字灰度相近，实测会误匹配到「赛季任务」。
+TASK_HUD_DAILY_POS = (687, 850)
 tpl_gonghuirenwu = get_template_path("gonghuirenwu.png")
 tpl_chengzhang = get_template_path("chengzhangtiaozhan.png")
 tpl_saijirenwu = get_template_path("saijirenwu.png")
@@ -62,8 +64,8 @@ SEASON_BOOK_THRESHOLD = 0.85
 tpl_saijilichengbei = get_template_path("saijilichengbei.png")
 # 任务面板底部页签栏（未选中态灰字）。面板会记住上次停留的页签，选中态会变绿
 # （实测 fanfanle 选中后只剩 0.724 分），因此「面板已打开」用多页签或判断。
+# 「日常任务」文字与底栏其它图标灰度相近、会误匹配（实测命中赛季任务），不放进这里。
 PANEL_TAB_TEMPLATES = (
-    tpl_richangrenwu_tab,
     tpl_chengzhang,
     tpl_saijirenwu,
     tpl_jiayuan,
@@ -78,8 +80,10 @@ tpl_fanhui = get_template_path("fanhui.png")
 PANEL_BACK_TEMPLATES = (tpl_panel_back, tpl_fanhui)
 
 
-# 主界面右侧竖排的「赛季月桂之旅」入口图标位置，与进入后的底部手记页签栅格
-LAUREL_HUD_POS = (1550, 610)
+# 月桂之旅入口：实测主界面右侧竖排 HUD 没有直达图标（点 (1550,610) 只会落回主界面），
+# 真正的入口在「菜单」第二行第 4 张卡片（客户区固定 1600x900 实测中心 (905,625)）。
+LAUREL_MENU_POS = (905, 625)
+# 进入后底部的手记页签栅格（实测 4 本记：秋夜手记 / 赛季月桂之旅II / I / 魔法行记）
 LAUREL_CAROUSEL_SLOTS = [(480, 845), (630, 845), (780, 845), (880, 845), (990, 845)]
 
 # 赛季挂机关卡页右上角的「x440」挂机收益按钮（实测点击即弹「获得奖励」）
@@ -113,10 +117,14 @@ MAX_MILESTONE_CLICKS = 16
 # 以「玩法」命中位置为基准横向偏移，避免为每个页签单独存一份模板。
 SEASON_SUB_TAB_OFFSET_X = [0, 132, 264, 397, 532]
 
+# 底部「赛季阶段」子页的固定点位（客户区相对坐标，实测 1600×900 布局）。
+# 顶部 5 个分类页签只在该子页出现，而面板常停在「赛季成长任务」，需要先点过去。
+SEASON_STAGE_SUB_TAB_POS = (1152, 795)
+
 # 「玩法」页签模板识别不到时的兜底基准点（客户区相对坐标）：实测 tpl_wanfa
 # 常因背景透光匹配失败，导致上方 5 个页签整段被跳过，这里直接按固定栅格盲点。
-# 数值按 1600×900 客户区布局估算，实机截图后校准。
-SEASON_SUB_TAB_FALLBACK_ORIGIN = (480, 180)
+# 数值取自「赛季阶段」子页实机截图（页签文字行 y≈248，x≈531）。
+SEASON_SUB_TAB_FALLBACK_ORIGIN = (531, 248)
 
 # 红点领取子项的运行时开关键（GUI 面板写入 script.params，缺省一律视为开启）。
 CLAIM_SUB_KEYS = (
@@ -298,8 +306,22 @@ def _sweep_view(name):
 
 
 def _sweep_season_task_tab():
-    """赛季任务：当前视图 + 二级玩法页 + 底部三个阶段页。"""
+    """赛季任务：当前视图 + 二级玩法页 + 底部三个阶段页。
+
+    顶部 5 个分类页签只在底部「赛季阶段」子页出现；面板会记住上次停留的子页，
+    实测常停在「赛季成长任务」——那一页没有页签行，tpl_wanfa 会把任务文案误当
+    锚点，把 5 个页签整段点到错位的位置。所以先确保切到「赛季阶段」再扫。
+    """
     total = _sweep_view("赛季任务")
+
+    if wait_and_click(tpl_saijijieduan, "赛季阶段", 0.8, timeout=2.0,
+                      client_region=BOTTOM_BAR_CLIENT_REGION):
+        time.sleep(0.8)
+    elif not find_center_silent(tpl_wanfa, threshold=0.8, timeout=1.0):
+        # 选中态模板可能匹配不上：顶部页签也不在，说明还停在其他子页，按固定点补切一次
+        win_x, win_y, _w, _h = game_client_region()
+        click_position((win_x + SEASON_STAGE_SUB_TAB_POS[0],
+                        win_y + SEASON_STAGE_SUB_TAB_POS[1]), wait=1.2, twice=False)
 
     anchor = find_center_silent(tpl_wanfa, threshold=0.8, timeout=1.5)
     if anchor:
@@ -341,9 +363,10 @@ def _claim_task_panel(params=None):
     total = 0
     # 面板会停在上次浏览的页签，先显式点回每日任务，避免漏扫
     if _enabled(params, "claim_daily"):
-        if wait_and_click(tpl_richangrenwu_tab, "richangrenwutab", 0.8, timeout=3.0,
-                          client_region=BOTTOM_BAR_CLIENT_REGION):
-            time.sleep(0.8)
+        win_x, win_y, _w, _h = game_client_region()
+        click_position((win_x + TASK_HUD_DAILY_POS[0], win_y + TASK_HUD_DAILY_POS[1]),
+                       wait=1.2, twice=False)
+        time.sleep(0.5)
         total += _sweep_view("每日任务")
     else:
         log("每日任务子项关闭，跳过。")
@@ -511,14 +534,34 @@ def _sweep_journal(name):
     return total
 
 
-def _sweep_laurel_journey():
-    """主界面右侧「赛季月桂之旅」入口 → 逐个子页签一键领取。
+def _open_laurel_journey():
+    """主界面 → 菜单 → 「月桂之旅」卡片。
 
-    实测入口图标在客户区 (1550,610)，进去后底部有 4–5 个手记页签（秋夜手记 /
-    赛季月桂之旅II / I / 魔法行记），每个页签各自带一键领取，所以逐个切过去扫；
-    每本记内部还有 奖励/任务 两层页签，由 _sweep_journal 负责遍历。
+    实测 HUD 右侧没有月桂之旅的直达入口；菜单里的卡片才是真入口。进入后菜单消失，
+    因此以菜单内的「任务」卡片是否还在判断有没有真的进去。
     """
-    if not _tap_into_panel(LAUREL_HUD_POS, "月桂之旅"):
+    if not wait_and_click(tpl_caidan, "菜单", 0.8, timeout=5.0):
+        log("未能打开菜单，跳过月桂之旅。")
+        return False
+    time.sleep(1.0)
+    win_x, win_y, _w, _h = game_client_region()
+    for _ in range(2):
+        click_position((win_x + LAUREL_MENU_POS[0], win_y + LAUREL_MENU_POS[1]),
+                       wait=1.8, twice=True)
+        if not find_center_silent(tpl_renwu, threshold=0.8, timeout=1.0):
+            return True
+        log("菜单仍在，重试点击「月桂之旅」卡片。")
+    return False
+
+
+def _sweep_laurel_journey():
+    """菜单 →「月桂之旅」→ 逐个子页签一键领取。
+
+    进去后底部有 4–5 个手记页签（秋夜手记 / 赛季月桂之旅II / I / 魔法行记 / 商店），
+    每个页签各自带一键领取，所以逐个切过去扫；每本记内部还有 奖励/任务 两层页签，
+    由 _sweep_journal 负责遍历。
+    """
+    if not _open_laurel_journey():
         log("未能进入赛季月桂之旅界面，跳过。")
         return 0
 

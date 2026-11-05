@@ -2,7 +2,9 @@ import time
 
 from common import (
     BOTTOM_BAR_CLIENT_REGION,
+    click_position,
     find_center_silent,
+    game_client_region,
     get_template_path,
     random_sleep,
     recover_to_main_interface,
@@ -26,6 +28,21 @@ TOWER_ORDER = [
     ("manxuezhita", tpl_manxuezhita),
     ("wanglingzhita", tpl_wanglingzhita),
 ]
+
+# 「天穹试炼」卡片位于玩法目录第三行，卡片名称被底部页签栏遮住，
+# pata.png 的文本模板匹配不到（实测 15 秒超时）。这时按客户区固定点位点击
+# 卡片可见区域，再用任意一座塔的「出发」按钮确认已进入选择界面。
+# 数值取自实机 1600x900 截图（第三行首张卡片可见区域中心）。
+PATA_CARD_POS = (625, 700)
+
+
+def _pata_panel_open():
+    """任一塔的「出发」按钮出现即认为已进入爬塔选择界面。"""
+    return any(
+        find_center_silent(tower_tpl, threshold=0.8, timeout=0)
+        for _name, tower_tpl in TOWER_ORDER
+    )
+
 
 def flow_pata():
     """
@@ -58,9 +75,14 @@ def flow_pata():
     random_sleep()
 
     # 2. 点击 pata 进入爬塔选择界面
-    if not wait_and_click(tpl_pata, "pata", 0.8):
-        print("点击 pata 进入爬塔选择界面失败。")
-        return False
+    if not wait_and_click(tpl_pata, "pata", 0.8, timeout=3.0):
+        win_x, win_y, _w, _h = game_client_region()
+        click_position((win_x + PATA_CARD_POS[0], win_y + PATA_CARD_POS[1]),
+                       wait=1.5, twice=False)
+        if not _pata_panel_open():
+            print("点击 pata 进入爬塔选择界面失败。")
+            return False
+        print("「天穹试炼」卡名被页签栏遮挡，已按固定卡片点位进入。")
     random_sleep()
 
     # 3. 按照顺序依次点击各个塔

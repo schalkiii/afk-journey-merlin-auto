@@ -296,6 +296,8 @@ def _stub_task_panel(monkeypatch):
     monkeypatch.setattr(hb, "log", lambda *args, **kwargs: None)
     monkeypatch.setattr(hb, "time", types.SimpleNamespace(sleep=lambda *args: None))
     monkeypatch.setattr(hb, "wait_and_click", lambda *args, **kwargs: True)
+    monkeypatch.setattr(hb, "game_client_region", lambda: (2000, 100, 1600, 900))
+    monkeypatch.setattr(hb, "click_position", lambda *args, **kwargs: None)
     monkeypatch.setattr(hb, "_sweep_view", lambda name: swept.append(name) or 1)
     monkeypatch.setattr(hb, "_sweep_season_task_tab",
                         lambda: swept.append("赛季任务-二级") or 1)
@@ -407,14 +409,19 @@ def _stub_season_task_tab(monkeypatch, anchor):
 
 
 def test_season_tab_falls_back_to_fixed_points_when_anchor_missing(monkeypatch):
-    """「玩法」锚点识别不到时必须按固定点位把 5 个页签都扫一遍，而不是整段跳过。"""
+    """「玩法」锚点识别不到时必须按固定点位把 5 个页签都扫一遍，而不是整段跳过。
+
+    锚点与「赛季阶段」页签模板都识别不到时，先按固定点切到「赛季阶段」子页，
+    再按固定栅格扫 5 个分类页签。
+    """
     clicks, swept = _stub_season_task_tab(monkeypatch, None)
 
     hb._sweep_season_task_tab()
 
+    stage_pos = (2000 + hb.SEASON_STAGE_SUB_TAB_POS[0], 100 + hb.SEASON_STAGE_SUB_TAB_POS[1])
     base_x, base_y = hb.SEASON_SUB_TAB_FALLBACK_ORIGIN
-    expected = [(2000 + base_x + offset, 100 + base_y)
-                for offset in hb.SEASON_SUB_TAB_OFFSET_X]
+    expected = [stage_pos] + [(2000 + base_x + offset, 100 + base_y)
+                              for offset in hb.SEASON_SUB_TAB_OFFSET_X]
     assert clicks == expected
     assert [name for name in swept if name.startswith("赛季任务-固定页")] == [
         f"赛季任务-固定页(偏移 {offset})" for offset in hb.SEASON_SUB_TAB_OFFSET_X]
