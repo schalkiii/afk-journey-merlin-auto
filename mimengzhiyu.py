@@ -7,6 +7,7 @@ from common import (
     click_position,
     dismiss_popup_away_from,
     find_center_silent,
+    game_client_region,
     get_template_path,
     log,
     random_sleep,
@@ -35,6 +36,8 @@ tpl_baoxiang_full     = get_template_path("baoxiang_full.png")
 tpl_shouhuojiangli    = get_template_path("shouhuojiangli.png")
 tpl_lingqu            = get_template_path("lingqu.png")
 tpl_yijianlingqu      = get_template_path("yijianlingqu.png")
+tpl_mimeng_rank       = get_template_path("mimengpaiming.png")
+tpl_huodejiangli      = get_template_path("huodejiangli.png")
 
 # 迷梦之域界面右上角的奖励入口（客户区相对坐标，按 1600×900 给出；实机截图后可校准）
 MIMENG_TOP_RIGHT_REGION = (1200, 0, 400, 300)
@@ -109,13 +112,45 @@ def close_result_popups(timeout=10.0):
     return ok
 
 
-def _claim_top_right_reward():
-    """点击迷梦之域界面右上角的可领奖励，返回是否领到。
+def _claim_rank_gift():
+    """领取迷梦排行榜右上角的礼包奖励。
 
-    右上角在不同轮次可能是宝箱或「领取 / 一键领取」，按这几种模板依次探测；
-    命中后若弹出「收获奖励」也点掉，最后关闭弹窗。找不到就静默跳过，不影响挑战流程。
-    区域按固定 1600×900 客户区给出，实机截图后可校准。
+    实测路径：点右侧「排行榜」→ 用标题确认面板 → 点右上角礼包图标。
+    有可领时会直接弹「获得奖励」，或出现「一键领取 / 领取」按钮；领完用 exitck 返回。
+    没有可领时只确认界面后原路返回，不盲点其它按钮。
     """
+    x0, y0, _w, _h = game_client_region()
+    click_position((x0 + 1216, y0 + 90), wait=1.5, twice=False)   # 右侧「排行榜」
+    if not find_center_silent(tpl_mimeng_rank, 0.8, timeout=3.0):
+        log("【迷梦之域】未打开排行榜，跳过排名礼包。")
+        return False
+
+    click_position((x0 + 1163, y0 + 62), wait=1.2, twice=False)   # 排行榜右上角礼包
+    claimed = False
+    if find_center_silent(tpl_huodejiangli, 0.8, timeout=2.0):
+        dismiss_popup_away_from()
+        claimed = True
+    else:
+        for tpl, name in ((tpl_yijianlingqu, "一键领取"), (tpl_lingqu, "领取")):
+            if wait_and_click(tpl, f"rankreward({name})", 0.8, timeout=1.5):
+                if find_center_silent(tpl_huodejiangli, 0.8, timeout=2.0):
+                    dismiss_popup_away_from()
+                    claimed = True
+                break
+    wait_and_click(tpl_exitck, "exitck(ranking)", 0.8, timeout=3.0)
+    log("【迷梦之域】已领取排行榜礼包。" if claimed else "【迷梦之域】排行榜里没有可领礼包。")
+    return claimed
+
+
+def _claim_top_right_reward():
+    """点击迷梦之域界面上可领的奖励，返回是否领到。
+
+    先走「排行榜 → 右上角礼包」（实测可领时礼包角标挂在排行榜图标上），
+    没领到再按旧逻辑在右上角区域探测宝箱 / 领取 / 一键领取。
+    找不到就静默跳过，不影响挑战流程。
+    """
+    if _claim_rank_gift():
+        return True
     for template_path, name in (
         (tpl_baoxiang_full, "宝箱"),
         (tpl_lingqu, "领取"),
@@ -210,7 +245,8 @@ def handle_battle():
         _recover_to_main()
     return ok
 
-def flow_mimengzhiyu(challenge_count=None, auto_configure_lineup=False):
+def flow_mimengzhiyu(challenge_count=None, auto_configure_lineup=False,
+                     claim_reward=True):
     """
     功能：迷梦之域挑战
 
@@ -247,8 +283,9 @@ def flow_mimengzhiyu(challenge_count=None, auto_configure_lineup=False):
         return False
     random_sleep()
 
-    # 进入迷梦之域界面后先领右上角奖励；找不到不影响后面的挑战流程
-    _claim_top_right_reward()
+    # 进入迷梦之域界面后先领排行榜礼包；找不到不影响后面的挑战流程
+    if claim_reward:
+        _claim_top_right_reward()
 
     # 主循环：一直执行，直到无法继续
     completed_count = 0

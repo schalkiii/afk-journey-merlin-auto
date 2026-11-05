@@ -1155,6 +1155,30 @@ class ClickerNotRunning(RuntimeError):
 CLICKER_MISS_LIMIT = 3
 _clicker_miss = {"streak": 0}
 
+# 点击后把鼠标放回原处：click_from_file 会把光标留在目标点，连续批处理会一直「拽着」
+# 用户的鼠标。窗口消息注入（PostMessage/SendMessage）实测被本游戏忽略，做不到零打扰，
+# 因此这里至少让光标即刻归位；焦点仍会被 ensure_game_clickable 激活一次。
+_restore_cursor = {"enabled": True}
+
+
+def set_restore_cursor(enabled):
+    """开关「点击后归还鼠标位置」。"""
+    _restore_cursor["enabled"] = bool(enabled)
+
+
+def _read_cursor_pos():
+    """读当前光标位置；拿不到返回 None（非 Windows 或调用失败）。"""
+    point = wintypes.POINT()
+    if ctypes.windll.user32.GetCursorPos(ctypes.byref(point)):
+        return point.x, point.y
+    return None
+
+
+def _restore_cursor_pos(pos):
+    """把光标放回 pos。调用方需先等点击器完成移动，否则会被它再次覆盖。"""
+    if pos:
+        ctypes.windll.user32.SetCursorPos(int(pos[0]), int(pos[1]))
+
 
 def clicker_alive():
     """探测 click_from_file.exe 是否还在消费坐标文件。
@@ -1190,6 +1214,7 @@ def send_coord(x, y):
     """
     check_stop()
     ensure_game_clickable()
+    cursor_before = _read_cursor_pos() if _restore_cursor["enabled"] else None
     wait_count = 0
     while os.path.exists(coord_path) and wait_count < 20:
         check_stop()  # 若 AHK 迟迟未消费上一条坐标，允许 F9 在此期间中断
@@ -1215,6 +1240,11 @@ def send_coord(x, y):
             raise ClickerNotRunning("click_from_file.exe 未在消费坐标")
     else:
         _clicker_miss["streak"] = 0
+
+    if cursor_before is not None:
+        # 等点击器把「移动 + 点击」做完再归位，否则可能被它随后的 MouseMove 覆盖
+        time.sleep(0.12)
+        _restore_cursor_pos(cursor_before)
 
 
 def click_position(pos, wait=1.5, twice=True):

@@ -6,13 +6,21 @@
 import mimengzhiyu as mm
 
 
-def _stub_claim_seams(monkeypatch, hits):
-    """桩掉领取接缝；hits 是 {client_region: (template_path, pos)}，返回调用记账。"""
+def _stub_claim_seams(monkeypatch, hits, rank_panel=False, rank_reward=False):
+    """桩掉领取接缝；hits 是 {client_region: (template_path, pos)}，返回调用记账。
+
+    rank_panel / rank_reward 控制「排行榜礼包」这条新链路：前者表示排行榜面板能打开，
+    后者表示点礼包后直接弹出「获得奖励」。两者都为 False 时走旧的右上角探测分支。
+    """
     clicks, waits, closes, finds = [], [], [], []
 
     def fake_find(template_path, threshold=0.8, region=None, timeout=0,
                   interval=0.5, client_region=None):
         finds.append((template_path, client_region))
+        if template_path == mm.tpl_mimeng_rank:
+            return (100, 100) if rank_panel else None
+        if template_path == mm.tpl_huodejiangli:
+            return (200, 200) if rank_reward else None
         hit = hits.get(client_region)
         if hit and hit[0] == template_path:
             return hit[1]
@@ -29,6 +37,7 @@ def _stub_claim_seams(monkeypatch, hits):
     monkeypatch.setattr(mm, "find_center_silent", fake_find)
     monkeypatch.setattr(mm, "click_position", fake_click)
     monkeypatch.setattr(mm, "wait_and_click", fake_wait_click)
+    monkeypatch.setattr(mm, "game_client_region", lambda *a, **k: (1000, 500, 1600, 900))
     monkeypatch.setattr(mm, "dismiss_popup_away_from", lambda: closes.append("close"))
     monkeypatch.setattr(mm, "log", lambda *args, **kwargs: None)
     return clicks, waits, closes, finds
@@ -38,29 +47,50 @@ CHEST_HIT = (mm.tpl_baoxiang_full, (1500, 120))
 
 
 def test_claim_top_right_chest_clicks_harvest_and_closes(monkeypatch):
-    """右上角命中宝箱：点一次宝箱 → 点「收获奖励」→ 关弹窗，返回 True。"""
+    """排行榜无礼包时回退到右上角宝箱：点宝箱 → 点「收获奖励」→ 关弹窗，返回 True。"""
     clicks, waits, closes, finds = _stub_claim_seams(
         monkeypatch, {mm.MIMENG_TOP_RIGHT_REGION: CHEST_HIT}
     )
 
     assert mm._claim_top_right_reward() is True
 
-    assert finds == [(mm.tpl_baoxiang_full, mm.MIMENG_TOP_RIGHT_REGION)]
-    assert clicks == [((1500, 120), 1.5, False)]
+    # 先点右侧「排行榜」入口，确认打不开后才走旧的右上角区域探测
+    assert clicks[0] == ((2216, 590), 1.5, False)
+    assert finds[0] == (mm.tpl_mimeng_rank, None)
+    assert finds[1] == (mm.tpl_baoxiang_full, mm.MIMENG_TOP_RIGHT_REGION)
+    assert clicks[1] == ((1500, 120), 1.5, False)
     assert waits == [(mm.tpl_shouhuojiangli, "shouhuojiangli(右上角)", 2.0)]
     assert closes == ["close"]
 
 
-def test_claim_top_right_returns_false_without_click_when_nothing_found(monkeypatch):
-    """三种模板都没命中：返回 False，且不得点击、不得关弹窗，不影响后续挑战。"""
+def test_claim_rank_gift_clicks_popup_and_returns(monkeypatch):
+    """排行榜可打开且礼包直接弹「获得奖励」：领到并原路返回。"""
+    clicks, waits, closes, finds = _stub_claim_seams(
+        monkeypatch, {}, rank_panel=True, rank_reward=True
+    )
+
+    assert mm._claim_top_right_reward() is True
+
+    assert clicks[0] == ((2216, 590), 1.5, False)   # 排行榜入口
+    assert clicks[1] == ((2163, 562), 1.2, False)   # 右上角礼包
+    assert closes == ["close"]
+    assert waits == [(mm.tpl_exitck, "exitck(ranking)", 3.0)]
+    # 领到之后不再走旧的右上角区域探测
+    assert all(region is None for _tpl, region in finds)
+
+
+def test_claim_top_right_returns_false_when_nothing_found(monkeypatch):
+    """排行榜与三种右上角模板都没命中：返回 False，且不点任何奖励、不关弹窗。"""
     clicks, waits, closes, finds = _stub_claim_seams(monkeypatch, {})
 
     assert mm._claim_top_right_reward() is False
 
-    assert clicks == []
+    # 只有「排行榜」入口这一次点击（它是无害的界面跳转），没有任何奖励点击
+    assert clicks == [((2216, 590), 1.5, False)]
     assert waits == []
     assert closes == []
     assert [template for template, _region in finds] == [
+        mm.tpl_mimeng_rank,
         mm.tpl_baoxiang_full,
         mm.tpl_lingqu,
         mm.tpl_yijianlingqu,

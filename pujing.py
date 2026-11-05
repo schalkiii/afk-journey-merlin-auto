@@ -288,14 +288,25 @@ def execute_battle_flow(battle_tpl, battle_name, battle_pos):
         return False
     random_sleep()
 
-    # 等待战斗结束，点击 tiaoguo 跳过
-    if not wait_and_click(tpl_tiaoguo, "tiaoguo", 0.8):
-        print("点击 tiaoguo 失败，普晶流程结束。")
+    # 战斗开始后会先出现「跳过」，也可能因战斗自动结束/加载较慢而直接出结算。
+    # 旧实现只等 tiaoguo 15 秒，等不到就中止整轮（实测打到第 3 场停在 2/5 次），
+    # 这里改为「跳过 / 结算谁先出现就按谁走」，并把等待上限放宽到整场战斗时长。
+    outcome = wait_for_any(
+        [(tpl_tiaoguo, "tiaoguo"), (tpl_pujingjieshu, "pujingjieshu")],
+        threshold=0.8,
+        timeout=MAX_BATTLE_TIME,
+        interval=0.5,
+    )
+    if outcome is None:
+        print("跳过/结算都未出现，普晶流程结束。")
         return False
-    random_sleep()
-
-    # 等待 pujingjieshu 出现，识别到后等待3秒再点击
-    pos = wait_for_appearance(tpl_pujingjieshu, "pujingjieshu", 0.8)
+    outcome_tpl, _outcome_name, outcome_pos = outcome
+    if outcome_tpl == tpl_tiaoguo:
+        send_coord(outcome_pos[0], outcome_pos[1])
+        random_sleep()
+        pos = wait_for_appearance(tpl_pujingjieshu, "pujingjieshu", 0.8)
+    else:
+        pos = outcome_pos
     if pos is None:
         print("未识别到 pujingjieshu，普晶流程结束。")
         return False

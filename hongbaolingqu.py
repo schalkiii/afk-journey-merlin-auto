@@ -29,6 +29,7 @@ from common import (
     click_blank_to_exit,
     click_position,
     crops_differ,
+    dismiss_popup_away_from,
     find_center_silent,
     game_client_region,
     get_cached_screenshot,
@@ -42,6 +43,17 @@ from common import (
 )
 
 tpl_caidan = get_template_path("caidan.png")
+tpl_wanfamulu = get_template_path("wanfamulu.png")
+tpl_gonghuiwanfaactive = get_template_path("gonghuiwanfaactive.png")
+tpl_gonghuizhengfa = get_template_path("gonghuizhengfa.png")
+tpl_huodejiangli = get_template_path("huodejiangli.png")
+tpl_exitck = get_template_path("exitck.png")
+
+# 公会征伐（公会玩法页左上卡片 → 战备阶段）固定点位（客户区 1600×900 实测）
+GUILD_WAR_TAB_POS = (797, 786)
+GUILD_WAR_CARD_POS = (594, 214)
+GUILD_WAR_MILESTONE_POS = ((555, 148), (711, 148), (867, 148), (1008, 148), (1156, 148))
+GUILD_WAR_CHOOSE_POS = (1164, 203)
 tpl_renwu = get_template_path("renwu.png")
 # 任务面板下方 HUD 快捷栏的「日常任务」入口（客户区固定 1600×900 实测图标中心）。
 # 不能靠「日常任务」文字模板定位：底栏几个图标文字灰度相近，实测会误匹配到「赛季任务」。
@@ -136,6 +148,7 @@ CLAIM_SUB_KEYS = (
     "claim_season_book",
     "claim_laurel",
     "claim_idle",
+    "claim_guild_war",
 )
 # 需要先进入「菜单 → 任务」面板才生效的开关
 TASK_PANEL_KEYS = (
@@ -636,6 +649,48 @@ def _sweep_progress_milestones():
     return claimed
 
 
+def _claim_guild_war():
+    """公会玩法 → 公会征伐：领取战备阶段的里程碑奖励。
+
+    实测入口：玩法目录 → 公会玩法页 → 左上「公会征伐」卡片。面板顶部有一排
+    里程碑宝箱（40/80/120/160/200），当前档右侧还有「选择」按钮，点一下即入账
+    （无需二次确认，直接弹「获得奖励」）。每次只在弹出奖励时计数。
+    """
+    recover_to_main_interface()
+    if not wait_and_click(tpl_wanfamulu, "wanfamulu(公会征伐)", 0.7,
+                          client_region=BOTTOM_BAR_CLIENT_REGION, timeout=8):
+        log("未能进入玩法目录，跳过公会征伐奖励。")
+        return 0
+    time.sleep(1.2)
+    x0, y0, _w, _h = game_client_region()
+    click_position((x0 + GUILD_WAR_TAB_POS[0], y0 + GUILD_WAR_TAB_POS[1]),
+                   wait=1.5, twice=False)
+    if not find_center_silent(tpl_gonghuiwanfaactive, 0.9, timeout=2.0):
+        log("未能切到公会玩法页，跳过公会征伐奖励。")
+        recover_to_main_interface()
+        return 0
+
+    click_position((x0 + GUILD_WAR_CARD_POS[0], y0 + GUILD_WAR_CARD_POS[1]),
+                   wait=2.0, twice=False)
+    if not find_center_silent(tpl_gonghuizhengfa, 0.8, timeout=3.0):
+        log("未打开公会征伐面板，跳过。")
+        recover_to_main_interface()
+        return 0
+
+    claimed = 0
+    for point in GUILD_WAR_MILESTONE_POS + (GUILD_WAR_CHOOSE_POS,):
+        check_stop()
+        x0, y0, _w, _h = game_client_region()
+        click_position((x0 + point[0], y0 + point[1]), wait=1.2, twice=False)
+        if find_center_silent(tpl_huodejiangli, 0.8, timeout=1.0):
+            dismiss_popup_away_from()
+            claimed += 1
+    log(f"公会征伐：领取里程碑奖励 {claimed} 项。")
+    wait_and_click(tpl_exitck, "exitck(公会征伐)", 0.8, timeout=3.0)
+    recover_to_main_interface()
+    return claimed
+
+
 def main(params=None):
     """执行红点奖励领取。返回 True=至少进入过其中一个领取界面，False=入口都不在。
 
@@ -692,6 +747,12 @@ def main(params=None):
         total += _sweep_progress_milestones()
     else:
         log("赛季挂机关卡子项关闭，跳过。")
+
+    if _enabled(params, "claim_guild_war"):
+        check_stop()
+        total += _claim_guild_war()
+    else:
+        log("公会征伐子项关闭，跳过。")
 
     # 收尾必须把游戏带回主界面：中途任一入口失败都可能停在子页面，
     # 交给下一个任务时就会从错误界面开始（实测盲点卡片曾停在「纷战争锋」内）。

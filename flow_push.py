@@ -14,7 +14,8 @@ DEBUG_MODE = False
 LAST_STOP_REASON = ""
 
 
-def flow_push_mode1(skip_manual=True, retry_count=3, max_consecutive_failures=10):
+def flow_push_mode1(skip_manual=True, retry_count=3, max_consecutive_failures=10,
+                    claim_first_clear=True):
     global LAST_STOP_REASON
     # 若 push 侧提前抛异常，保持空值，避免调用方读到上一次的 fail_limit
     LAST_STOP_REASON = ""
@@ -23,12 +24,14 @@ def flow_push_mode1(skip_manual=True, retry_count=3, max_consecutive_failures=10
         skip_manual=skip_manual,
         retry_count=retry_count,
         max_consecutive_failures=max_consecutive_failures,
+        claim_first_clear=claim_first_clear,
     )
     LAST_STOP_REASON = push_module.LAST_STOP_REASON
     return result
 
 
-def main(skip_manual=True, retry_count=3, max_consecutive_failures=10):
+def main(skip_manual=True, retry_count=3, max_consecutive_failures=10,
+         claim_first_clear=True):
     global LAST_STOP_REASON
     if DEBUG_MODE:
         debug_lineup_recognition()
@@ -39,4 +42,5 @@ def main(skip_manual=True, retry_count=3, max_consecutive_failures=10):
             skip_manual=skip_manual,
             retry_count=retry_count,
             max_consecutive_failures=max_consecutive_failures,
+            claim_first_clear=claim_first_clear,
         )

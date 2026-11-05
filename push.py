@@ -1,6 +1,9 @@
 from common import (
     BOTTOM_BAR_CLIENT_REGION,
+    click_position,
+    dismiss_popup_away_from,
     find_center_silent,
+    game_client_region,
     get_template_path,
     get_work_path,
     is_lineup_acceptable as _is_lineup_acceptable_impl,
@@ -41,6 +44,13 @@ tpl_querengoumaimenpiao = get_template_path("querengoumaimenpiao.png")
 
 tpl_huidaoguaji   = get_template_path("huidaoguaji.png")
 tpl_tuichulibao   = get_template_path("tuichulibao.png")
+
+# 推图入口界面右上角「赛季阶段排名 → 首通奖励」领取链路
+tpl_rank_title    = get_template_path("saijijieduanpaiming.png")
+tpl_first_clear   = get_template_path("shoutongjiangli.png")
+tpl_claim_all     = get_template_path("yijianlingqu.png")
+tpl_reward_popup  = get_template_path("huodejiangli.png")
+tpl_exitck        = get_template_path("exitck.png")
 
 # 推图模式配置：不同模式使用不同的入口模板
 MODE_CONFIG = {
@@ -448,12 +458,54 @@ MAX_TRANSITIONS = 500
 LAST_STOP_REASON = ""
 
 
+def claim_first_clear_reward():
+    """在推图入口界面领取「赛季阶段排名 → 首通」奖励。
+
+    实测入口：推图界面右上角奖杯打开「赛季阶段排名」，右侧「首通」图标带礼包角标；
+    面板内「一键领取」是绿色可点按钮，弹出「获得奖励」才算领到。全部用固定点位，
+    每一步都先用标题模板确认界面，确认不到就按原路返回，不盲点。
+    """
+    x0, y0, _w, _h = game_client_region()
+    # 右上角奖杯；窗口刚激活时第一次点击可能被吞，确认不到排名面板就补点一次
+    for attempt in range(1, 3):
+        click_position((x0 + 1565, y0 + 45), wait=1.5, twice=False)
+        if find_center_silent(tpl_rank_title, 0.8, timeout=3.0):
+            break
+        print(f"第 {attempt} 次点击奖杯未打开赛季阶段排名，重试。")
+    else:
+        print("未打开赛季阶段排名，跳过首通奖励。")
+        return False
+
+    click_position((x0 + 1200, y0 + 145), wait=1.2, twice=False)  # 右侧「首通」
+    if not find_center_silent(tpl_first_clear, 0.8, timeout=3.0):
+        print("未打开首通奖励面板，跳过。")
+        wait_and_click(tpl_exitck, "exitck(rank)", 0.8, timeout=3.0)
+        return False
+
+    claimed = False
+    if wait_and_click(tpl_claim_all, "shoutongyijianlingqu", 0.8, timeout=2.0):
+        if find_center_silent(tpl_reward_popup, 0.8, timeout=2.0):
+            dismiss_popup_away_from()
+            print("已领取赛季首通奖励。")
+            claimed = True
+        else:
+            print("已点一键领取，但未出现获得奖励弹窗。")
+    else:
+        print("首通奖励没有可领项。")
+
+    # 原路返回：首通面板 → 赛季阶段排名 → 推图
+    wait_and_click(tpl_exit, "exit(shoutong)", 0.8, timeout=3.0)
+    wait_and_click(tpl_exitck, "exitck(rank)", 0.8, timeout=3.0)
+    return claimed
+
+
 class PushFlow:
     """推图流程状态机。run() 返回 True=正常跑完（阵容用尽退出），False=中途失败或触发安全阀。"""
 
     def __init__(self, mode="normal", skip_manual=True, retry_count=3,
-                 max_consecutive_failures=10):
+                 max_consecutive_failures=10, claim_first_clear=True):
         self.mode = mode
+        self.claim_first_clear = claim_first_clear
         self.entry_templates = MODE_CONFIG[mode]["entry_templates"]
         self.mode_label = "幻灵推图" if mode == "huanling" else "推图"
         self.skip_manual = skip_manual
@@ -632,6 +684,8 @@ class PushFlow:
             return self._done(False)
 
         print(f"进入 {self.mode_label} 成功")
+        if self.claim_first_clear:
+            claim_first_clear_reward()
         return STATE_LIMIT if next_path == tpl_guajijixian else STATE_START_BATTLE
 
     def _st_limit(self):
@@ -900,7 +954,7 @@ class PushFlow:
 
 
 def flow_push_mode1(mode="normal", skip_manual=True, retry_count=3,
-                    max_consecutive_failures=10):
+                    max_consecutive_failures=10, claim_first_clear=True):
     """
     推图主流程（状态机实现）。
 
@@ -908,6 +962,7 @@ def flow_push_mode1(mode="normal", skip_manual=True, retry_count=3,
     skip_manual: 是否跳过含手动战斗标志的阵容
     retry_count: 同一阵容连续失败多少次后换阵容（1-3）
     max_consecutive_failures: 连续失败达到该次数后结束本轮推图（1-99）
+    claim_first_clear: 进入推图界面后是否先领取赛季阶段排名的首通奖励
     """
     global LAST_STOP_REASON
     # 先清空：若初始化/运行提前抛异常，调用方不会读到上一次运行的停止原因
@@ -918,13 +973,15 @@ def flow_push_mode1(mode="normal", skip_manual=True, retry_count=3,
         skip_manual=skip_manual,
         retry_count=retry_count,
         max_consecutive_failures=max_consecutive_failures,
+        claim_first_clear=claim_first_clear,
     )
     ok = flow.run()
     LAST_STOP_REASON = flow.stop_reason
     return ok
 
 
-def main(skip_manual=True, retry_count=3, max_consecutive_failures=10):
+def main(skip_manual=True, retry_count=3, max_consecutive_failures=10,
+         claim_first_clear=True):
     """主函数，供其他脚本调用"""
     global LAST_STOP_REASON
     if DEBUG_MODE:
@@ -937,6 +994,7 @@ def main(skip_manual=True, retry_count=3, max_consecutive_failures=10):
             skip_manual=skip_manual,
             retry_count=retry_count,
             max_consecutive_failures=max_consecutive_failures,
+            claim_first_clear=claim_first_clear,
         )
 
 if __name__ == "__main__":

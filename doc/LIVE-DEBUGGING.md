@@ -11,6 +11,11 @@
   PrintWindow ok=0、PostMessage=0）。点击走文件 IPC：Python 写
   `shared/target_coord.txt`（**整屏绝对坐标**）→ 提权的 `click_from_file.exe` 消费并注入。
   点击器自己退出后所有点击静默落空，表现是「界面连续多轮无变化」——先查它，再查逻辑。
+- **后台点击做不了，别在这上面浪费时间**：实测对本作 Unity 客户端，`PostMessage` /
+  `SendMessage`（含 `WM_ACTIVATE` / `WM_SETFOCUS` 预热）都返回成功但界面毫无变化；
+  给窗口加 `WS_EX_NOACTIVATE` 后在非前台状态发真实点击也不生效。它只接受真实前台输入，
+  所以「完全不抢鼠标」不可实现；能做的只有每次点击后把光标放回原处
+  （`common.send_coord` 的默认行为），窗口激活瞬间无法避免。
 - **截图通路**：默认 Windows Graphics Capture（`windows-capture`），能截被遮挡/提权窗口；
   不可用时回退普通屏幕截图。截图坐标系始终是**全屏**，`find_center*` 返回值也是全屏坐标。
 - **客户区必须 1600×900**：`game_client_region()` 每次调用都重新校验；不是这个尺寸
@@ -74,6 +79,11 @@
   不要拿单个页签当唯一锚点，也不要拿半透明 HUD 文字标签当锚点。
 - 领取类动作只认**结果信号**：弹出「获得奖励」/「点击空白处关闭」才算领到。
   点了没弹奖励就记入 dead_ends 不再重复点，否则会原地打转。
+- **竞技场的多步跳转要按界面走，别按普竞的状态机硬套**：巅峰竞技场在「继续挑战」之后还有
+  选择对手（三张卡，取最左最弱）→「挑战他!」→ 阵容页（默认第 1 队，底部按钮是「编辑下一场」，
+  连点两次切到第 3 队后才变成「战斗」）→ 整场观战（**没有跳过**）→ 失败页 → 挑战界面。
+  每一步都用对应标题模板自证（`dianfengxuanzeduishou` / `dianfengtiaozhan` /
+  `dianfengbianji` / `dianfengzhandou`），不要拿普竞的 `zhandou` / `tiaoguo` 去等。
 
 ## 5. 检测器要用正样本验证，不能只看「0 命中」
 

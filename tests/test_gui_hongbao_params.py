@@ -1,6 +1,6 @@
 """红点领取子项开关（GUI 侧）的回归测试。
 
-真实构造 GUI，验证 8 个 claim_* 复选框默认全开，且点击后立即写回
+真实构造 GUI，验证 9 个 claim_* 复选框默认全开，且点击后立即写回
 script.params 并持久化到配置文件；不执行任何领取逻辑。
 """
 import json
@@ -26,6 +26,7 @@ CLAIM_KEYS = (
     "claim_season_book",
     "claim_laurel",
     "claim_idle",
+    "claim_guild_war",
 )
 
 
@@ -53,7 +54,7 @@ def _select_hongbao(app):
     return index
 
 
-def test_hongbao_panel_has_eight_checkboxes_default_true(app):
+def test_hongbao_panel_has_nine_checkboxes_default_true(app):
     _select_hongbao(app)
 
     assert set(app.hongbao_claim_vars) == set(CLAIM_KEYS)
@@ -63,7 +64,7 @@ def test_hongbao_panel_has_eight_checkboxes_default_true(app):
         widget for widget in app.param_frame.winfo_children()
         if isinstance(widget, ttk.Checkbutton)
     ]
-    assert len(checkbuttons) == 8
+    assert len(checkbuttons) == 9
 
 
 def test_toggling_claim_guild_writes_back_and_persists(app):

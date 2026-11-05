@@ -148,6 +148,12 @@ class GameBotGUI:
         common.set_background_capture(self.remote_desktop_compat)
         common.set_auto_activate(self.remote_desktop_compat)
 
+        # 点击后归还鼠标位置：click_from_file 会把光标留在目标点，开着就每次点击后立即归位。
+        # 窗口消息注入实测被本游戏忽略，无法做到完全后台点击，这是能做到的最小打扰。
+        self.restore_cursor_after_click = self.config.get("restore_cursor_after_click", True)
+        self.restore_cursor_var = tk.BooleanVar(value=self.restore_cursor_after_click)
+        common.set_restore_cursor(self.restore_cursor_after_click)
+
         # 定时开始（每天循环）：存储为 "HH:MM" 或 None
         self.schedule_time = self.config.get("schedule_time", None)
         self.schedule_hour_var = tk.IntVar(value=8)
@@ -164,6 +170,8 @@ class GameBotGUI:
             ScriptConfig("邮件", enabled=False),
             ScriptConfig("好友奖励", enabled=False),
             ScriptConfig("普竞", enabled=False),
+            # 巅峰竞技场：每场消耗一次挑战次数，默认最多打 3 场
+            ScriptConfig("巅峰竞技场", enabled=False, params={"challenge_count": 3}),
             ScriptConfig("迷梦之域", enabled=False, params={"challenge_count": 5}),
             ScriptConfig("女神塔", enabled=False),
             ScriptConfig("挂机奖励", enabled=False, params={"paid_times": 0}),
@@ -171,7 +179,7 @@ class GameBotGUI:
             ScriptConfig("日常任务", enabled=False),
             # 红点领取覆盖任务面板各页签、赛季手册里程碑、月桂之旅与当前进度，
             # 与「日常任务」互补：日常任务只点每日/公会的一键领取。
-            # 8 个子项默认全开，用户可在右侧面板逐项关闭（键名即 hongbaolingqu 读取的参数）。
+            # 9 个子项默认全开，用户可在右侧面板逐项关闭（键名即 hongbaolingqu 读取的参数）。
             ScriptConfig("红点领取", enabled=False, params={
                 "claim_daily": True,
                 "claim_guild": True,
@@ -181,6 +189,7 @@ class GameBotGUI:
                 "claim_season_book": True,
                 "claim_laurel": True,
                 "claim_idle": True,
+                "claim_guild_war": True,
             }),
             # 英雄厅堂：点「快速升级」提升赛季共鸣等级（每级吃共鸣资源，故给次数上限）
             ScriptConfig("英雄厅堂", enabled=False, params={"quick_upgrade_times": 10}),
@@ -355,6 +364,14 @@ class GameBotGUI:
             command=self.on_remote_desktop_changed
         )
         self.remote_desktop_check.pack(side=tk.LEFT, padx=5)
+
+        self.restore_cursor_check = ttk.Checkbutton(
+            opt_frame,
+            text="点击后归还鼠标位置",
+            variable=self.restore_cursor_var,
+            command=self.on_restore_cursor_changed
+        )
+        self.restore_cursor_check.pack(side=tk.LEFT, padx=5)
 
         ttk.Label(opt_frame, text="游戏等待(s)").pack(side=tk.LEFT, padx=(10, 0))
         self.game_wait_spin = ttk.Spinbox(
@@ -692,6 +709,8 @@ class GameBotGUI:
 
         if script.name == "迷梦之域":
             self.create_mimengzhiyu_params(script, 0)
+        elif script.name == "巅峰竞技场":
+            self.create_dianfeng_params(script, 0)
         elif script.name == "挂机奖励":
             self.create_shouquguajijiangli_params(script, 0)
         elif script.name == "英雄厅堂":
@@ -728,7 +747,35 @@ class GameBotGUI:
             
         challenge_spinbox.bind("<FocusOut>", lambda e: on_param_change())
         challenge_spinbox.bind("<Return>", lambda e: on_param_change())
-        
+
+        # 进入迷梦后领取排行榜礼包（实测角标挂在右侧「排行榜」图标上）
+        self.mimeng_claim_var = tk.BooleanVar(value=script.params.get("claim_reward", True))
+        ttk.Checkbutton(
+            self.param_frame,
+            text="领取排行榜礼包",
+            variable=self.mimeng_claim_var,
+            command=lambda: (script.params.__setitem__("claim_reward", self.mimeng_claim_var.get()),
+                             self.save_config())
+        ).grid(row=row + 1, column=0, columnspan=2, sticky=tk.W, pady=2)
+
+    def create_dianfeng_params(self, script, row=0):
+        """巅峰竞技场参数：单次运行最多挑战几场。"""
+        ttk.Label(self.param_frame, text="挑战场数 (1-10):").grid(
+            row=row, column=0, sticky=tk.W, pady=2)
+        self.dianfeng_count_var = tk.IntVar(value=script.params.get("challenge_count", 3))
+        spinbox = ttk.Spinbox(
+            self.param_frame, from_=1, to=10,
+            textvariable=self.dianfeng_count_var, width=10
+        )
+        spinbox.grid(row=row, column=1, sticky=tk.W, pady=2)
+
+        def on_param_change():
+            script.params["challenge_count"] = self.dianfeng_count_var.get()
+            self.save_config()
+
+        spinbox.bind("<FocusOut>", lambda e: on_param_change())
+        spinbox.bind("<Return>", lambda e: on_param_change())
+
     def create_yingxiong_params(self, script, row=0):
         """英雄厅堂参数：每次运行最多点几次「快速升级」。"""
         ttk.Label(self.param_frame, text="快速升级次数 (1-99):").grid(row=row, column=0, sticky=tk.W, pady=2)
@@ -784,6 +831,7 @@ class GameBotGUI:
             ("claim_season_book", "赛季手册"),
             ("claim_laurel", "月桂之旅"),
             ("claim_idle", "赛季挂机关卡"),
+            ("claim_guild_war", "公会征伐"),
         )
         self.hongbao_claim_vars = {}
         for index, (key, label) in enumerate(options):
@@ -808,6 +856,17 @@ class GameBotGUI:
             self.param_frame,
             text="跳过手动战斗阵容",
             variable=self.skip_manual_var,
+            command=self.on_push_param_change
+        ).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=2)
+        row += 1
+
+        # 进入推图界面后领取「赛季阶段排名 → 首通」奖励（固定点位，带界面自证）
+        claim_first_clear = push_settings.get("claim_first_clear", True)
+        self.claim_first_clear_var = tk.BooleanVar(value=claim_first_clear)
+        ttk.Checkbutton(
+            self.param_frame,
+            text="进入后领取赛季首通奖励",
+            variable=self.claim_first_clear_var,
             command=self.on_push_param_change
         ).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=2)
         row += 1
@@ -862,6 +921,7 @@ class GameBotGUI:
     def on_push_param_change(self):
         self.config["push_settings"] = {
             "skip_manual": self.skip_manual_var.get(),
+            "claim_first_clear": self.claim_first_clear_var.get(),
             "retry_count": self._clamp_int_var(self.retry_count_var, 3, 1, 3),
             "max_consecutive_failures": self._clamp_int_var(self.max_failures_var, 10, 1, 99),
         }
@@ -1165,6 +1225,14 @@ class GameBotGUI:
         self.save_config()
         state = "开启" if self.remote_desktop_compat else "关闭"
         self.log(f"远程桌面兼容模式已{state}")
+
+    def on_restore_cursor_changed(self):
+        """切换「点击后归还鼠标位置」。"""
+        self.restore_cursor_after_click = self.restore_cursor_var.get()
+        common.set_restore_cursor(self.restore_cursor_after_click)
+        self.save_config()
+        state = "开启" if self.restore_cursor_after_click else "关闭"
+        self.log(f"点击后归还鼠标位置已{state}")
 
     def on_game_wait_changed(self):
         try:
@@ -1495,6 +1563,13 @@ class GameBotGUI:
         return flow_mimengzhiyu(
             challenge_count=challenge_count,
             auto_configure_lineup=self.auto_configure_lineup,
+            claim_reward=script.params.get("claim_reward", True),
+        )
+
+    def _run_dianfeng(self, script):
+        import dianfengjingjichang
+        return dianfengjingjichang.flow_dianfeng(
+            challenge_count=script.params.get("challenge_count", 3)
         )
 
     def _run_nvshenta(self, script):
@@ -1550,6 +1625,7 @@ class GameBotGUI:
             skip_manual=ps.get("skip_manual", True),
             retry_count=ps.get("retry_count", 3),
             max_consecutive_failures=ps.get("max_consecutive_failures", 10),
+            claim_first_clear=ps.get("claim_first_clear", True),
         )
         return True
 
@@ -1561,6 +1637,7 @@ class GameBotGUI:
             skip_manual=ps.get("skip_manual", True),
             retry_count=ps.get("retry_count", 3),
             max_consecutive_failures=ps.get("max_consecutive_failures", 10),
+            claim_first_clear=ps.get("claim_first_clear", True),
         ))
 
     def _ensure_loop_ready(self):
@@ -1576,6 +1653,7 @@ class GameBotGUI:
         import push
         ps = self.config.get("push_settings", {})
         skip_manual = ps.get("skip_manual", True)
+        claim_first_clear = ps.get("claim_first_clear", True)
         retry_count = ps.get("retry_count", 3)
         max_failures = ps.get("max_consecutive_failures", 10)
         loop_count = 0
@@ -1593,6 +1671,7 @@ class GameBotGUI:
                     skip_manual=skip_manual,
                     retry_count=retry_count,
                     max_consecutive_failures=max_failures,
+                    claim_first_clear=claim_first_clear,
                 )
                 if flow_push.LAST_STOP_REASON == "fail_limit":
                     self.log(f"幻灵推图连续失败达到 {max_failures} 次，停止循环推图。")
@@ -1618,6 +1697,7 @@ class GameBotGUI:
                     skip_manual=skip_manual,
                     retry_count=retry_count,
                     max_consecutive_failures=max_failures,
+                    claim_first_clear=claim_first_clear,
                 )
                 if push.LAST_STOP_REASON == "fail_limit":
                     self.log(f"推图连续失败达到 {max_failures} 次，停止循环推图。")
@@ -1671,6 +1751,7 @@ class GameBotGUI:
             "邮件": self._run_youjian,
             "好友奖励": self._run_haoyou,
             "普竞": self._run_pujing,
+            "巅峰竞技场": self._run_dianfeng,
             "迷梦之域": self._run_mimeng,
             "女神塔": self._run_nvshenta,
             "挂机奖励": self._run_guajijiangli,
@@ -1919,6 +2000,7 @@ class GameBotGUI:
         self.config["schedule_time"] = self.schedule_time
         self.config["auto_configure_lineup"] = self.auto_configure_lineup
         self.config["remote_desktop_compat"] = self.remote_desktop_compat
+        self.config["restore_cursor_after_click"] = self.restore_cursor_after_click
         
         # 保存到文件
         if save_config(self.config):
