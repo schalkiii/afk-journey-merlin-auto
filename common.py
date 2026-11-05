@@ -20,7 +20,7 @@ import shutil
 import sys
 import threading
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from ctypes import wintypes
 
 
@@ -383,6 +383,31 @@ _screenshot_cache = {"img": None, "ts": 0.0}
 SCREENSHOT_CACHE_TTL = 0.05  # 秒；同一帧在极短时间内复用，降低重复截屏开销
 
 
+# ===== 失败现场逐帧留存 =====
+# 任务失败/超时后最需要看的是「当时屏幕上是什么」，而日志往往只剩一行
+# 「未识别到 xxx」。这里把最近几帧画面留在环形缓冲里，失败时一次性落盘。
+# 缓冲里存的是 numpy 数组引用（不复制大图），只保留最后 DEBUG_FRAME_RING 帧。
+DEBUG_CAPTURE_ENABLED = True
+DEBUG_CAPTURE_KEEP = 5     # 只保留最近 N 个失败现场目录
+DEBUG_FRAME_RING = 5       # 环形缓冲保留的帧数
+_frame_ring = deque(maxlen=DEBUG_FRAME_RING)
+_frame_ring_lock = threading.Lock()
+
+
+def _remember_frame(image):
+    """把最新一帧放入环形缓冲；缓存命中时是同一个对象，不重复入环。
+
+    缓存命中也必须保证该帧在环里：失败现场要保存的正是「最后一次看到的画面」，
+    若只在缓存未命中时记录，连续命中缓存的场景下环里可能是更早的旧帧。
+    """
+    if not DEBUG_CAPTURE_ENABLED:
+        return
+    with _frame_ring_lock:
+        if _frame_ring and _frame_ring[-1][1] is image:
+            return
+        _frame_ring.append((time.time(), image))
+
+
 def screenshot_bgr():
     """截取游戏画面并返回 BGR 格式 numpy 数组（OpenCV 标准色彩顺序）；短 TTL 内复用缓存帧。
 
@@ -395,6 +420,7 @@ def screenshot_bgr():
     check_stop()
     now = time.time()
     if _screenshot_cache["img"] is not None and (now - _screenshot_cache["ts"]) < SCREENSHOT_CACHE_TTL:
+        _remember_frame(_screenshot_cache["img"])
         return _screenshot_cache["img"]
     img = _background_screenshot()
     if img is None:
@@ -405,6 +431,7 @@ def screenshot_bgr():
         img = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
     _screenshot_cache["img"] = img
     _screenshot_cache["ts"] = now
+    _remember_frame(img)
     return img
 
 
@@ -417,6 +444,93 @@ def invalidate_screenshot_cache():
     """在点击导致界面变化后调用，使下一次截屏拿到最新帧而非缓存旧帧。"""
     _screenshot_cache["img"] = None
     _screenshot_cache["ts"] = 0.0
+
+
+def _safe_debug_name(task_name):
+    """任务名 → 可用作目录名的片段：Windows 路径非法字符与空白统一换成下划线。"""
+    safe = "".join(ch if ch.isalnum() or ch in "_-" else "_" for ch in str(task_name))
+    return safe.strip("_") or "task"
+
+
+def _write_jpeg(path, image):
+    """以 JPEG 质量 80 写盘；用编码后二进制写入，兼容含中文任务名的目录。
+
+    cv2.imwrite 在 Windows 遇到非 ASCII 路径会静默返回 False，失败现场目录名带
+    中文任务名时帧会「看起来保存了但实际没有」，因此先 imencode 再写文件。
+    """
+    ok, encoded = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 80])
+    if not ok:
+        return False
+    with open(path, "wb") as stream:
+        stream.write(encoded.tobytes())
+    return True
+
+
+def _prune_failure_dirs(failures_dir):
+    """只保留最近 DEBUG_CAPTURE_KEEP 个现场目录；目录名以时间戳开头，按名排序即按时间。"""
+    try:
+        entries = [
+            os.path.join(failures_dir, name)
+            for name in os.listdir(failures_dir)
+            if os.path.isdir(os.path.join(failures_dir, name))
+        ]
+    except OSError:
+        return
+    entries.sort()
+    for stale in entries[:-DEBUG_CAPTURE_KEEP]:
+        with contextlib.suppress(OSError):
+            shutil.rmtree(stale)
+
+
+def capture_failure_context(task_name, reason, extra=None):
+    """把环形缓冲里的最近几帧与失败信息落盘，返回目录；关闭或失败时返回 None。
+
+    目录为 debug/failures/<YYYYMMDD-HHMMSS>_<任务名>/（debug/ 已被 .gitignore 忽略）。
+    写入 frame_00.jpg…（JPEG 质量 80，避免 5 张全屏 PNG 占几百 MB）、client.jpg
+    （按游戏客户区裁剪的最后一帧）与 meta.txt（时间 / 任务 / 原因 / 客户区 / 附加信息 / 帧时间戳）。
+    只保留最近 DEBUG_CAPTURE_KEEP 个现场。任何写入失败都只记日志、绝不上抛：
+    留存现场是排查辅助，不能反过来把任务本身搞崩。
+    """
+    if not DEBUG_CAPTURE_ENABLED:
+        return None
+    try:
+        dest = get_work_path(os.path.join(
+            "debug", "failures",
+            f"{time.strftime('%Y%m%d-%H%M%S')}_{_safe_debug_name(task_name)}",
+        ))
+        os.makedirs(dest, exist_ok=True)
+        with _frame_ring_lock:
+            frames = list(_frame_ring)
+        region = game_client_region()
+        frame_stamps = []
+        for index, (stamp, image) in enumerate(frames):
+            frame_stamps.append(
+                time.strftime("%H:%M:%S", time.localtime(stamp))
+                + f".{int(stamp * 1000) % 1000:03d}"
+            )
+            if image is not None:
+                _write_jpeg(os.path.join(dest, f"frame_{index:02d}.jpg"), image)
+        if frames and frames[-1][1] is not None:
+            client = _clip_to_region(frames[-1][1], region)
+            if client is not None:
+                _write_jpeg(os.path.join(dest, "client.jpg"), client)
+        meta_lines = [
+            f"时间: {time.strftime('%Y-%m-%d %H:%M:%S')}",
+            f"任务: {task_name}",
+            f"原因: {reason}",
+            f"客户区: {region if region else '未取到游戏窗口'}",
+            f"附加信息: {extra if extra else '无'}",
+            f"帧时间戳: {', '.join(frame_stamps) if frame_stamps else '无'}",
+        ]
+        with open(os.path.join(dest, "meta.txt"), "w", encoding="utf-8") as stream:
+            stream.write("\n".join(meta_lines) + "\n")
+        _prune_failure_dirs(os.path.dirname(dest))
+        log(f"已保存失败现场: {dest}")
+        return dest
+    except (OSError, ValueError, TypeError, RuntimeError, AttributeError, KeyError,
+            cv2.error, ctypes.ArgumentError) as exc:
+        log(f"保存失败现场失败（已忽略）: {exc}")
+        return None
 
 
 # ===== 模板匹配搜索区域限定（性能）=====

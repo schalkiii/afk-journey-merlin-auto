@@ -171,7 +171,17 @@ class GameBotGUI:
             ScriptConfig("日常任务", enabled=False),
             # 红点领取覆盖任务面板各页签、赛季手册里程碑、月桂之旅与当前进度，
             # 与「日常任务」互补：日常任务只点每日/公会的一键领取。
-            ScriptConfig("红点领取", enabled=False),
+            # 8 个子项默认全开，用户可在右侧面板逐项关闭（键名即 hongbaolingqu 读取的参数）。
+            ScriptConfig("红点领取", enabled=False, params={
+                "claim_daily": True,
+                "claim_guild": True,
+                "claim_growth": True,
+                "claim_season": True,
+                "claim_homestead": True,
+                "claim_season_book": True,
+                "claim_laurel": True,
+                "claim_idle": True,
+            }),
             # 英雄厅堂：点「快速升级」提升赛季共鸣等级（每级吃共鸣资源，故给次数上限）
             ScriptConfig("英雄厅堂", enabled=False, params={"quick_upgrade_times": 10}),
             # 翻翻乐：一次点击会连抽到本轮 100 满，故给轮数上限（每轮最多烧 100 把钥匙）
@@ -694,6 +704,8 @@ class GameBotGUI:
             self.create_push_params(0)
         elif script.name == "仓库管理":
             self.create_warehouse_params(0)
+        elif script.name == "红点领取":
+            self.create_hongbao_params(script, 0)
             
     def create_mimengzhiyu_params(self, script, row=0):
         ttk.Label(self.param_frame, text="挑战次数:").grid(row=row, column=0, sticky=tk.W, pady=2)
@@ -760,6 +772,31 @@ class GameBotGUI:
 
         spinbox.bind("<FocusOut>", lambda e: on_param_change())
         spinbox.bind("<Return>", lambda e: on_param_change())
+
+    def create_hongbao_params(self, script, row=0):
+        """红点领取的子项开关：勾选后运行时才去对应页签 / 里程碑领取，默认全开。"""
+        options = (
+            ("claim_daily", "每日任务"),
+            ("claim_guild", "公会任务"),
+            ("claim_growth", "成长挑战"),
+            ("claim_season", "赛季任务"),
+            ("claim_homestead", "家园目标"),
+            ("claim_season_book", "赛季手册"),
+            ("claim_laurel", "月桂之旅"),
+            ("claim_idle", "赛季挂机关卡"),
+        )
+        self.hongbao_claim_vars = {}
+        for index, (key, label) in enumerate(options):
+            var = tk.BooleanVar(value=bool(script.params.get(key, True)))
+            self.hongbao_claim_vars[key] = var
+
+            def on_toggle(k=key, v=var):
+                script.params[k] = bool(v.get())
+                self.save_config()
+
+            ttk.Checkbutton(
+                self.param_frame, text=label, variable=var, command=on_toggle
+            ).grid(row=row + index // 2, column=index % 2, sticky=tk.W, pady=2)
 
     def create_push_params(self, row=0):
         push_settings = self.config.get("push_settings", {})
@@ -1188,14 +1225,35 @@ class GameBotGUI:
         self._begin_run([script], respect_enabled=False)
         self.log(f"单独运行: {script.name}")
 
+    def _prepare_run_statuses(self, scripts_to_run, respect_enabled=True):
+        """按本轮实际执行范围复位左侧状态：不跑的脚本回「就绪」，只给要跑的标「等待中」。
+
+        旧实现把 self.scripts 全部置「等待中」，未勾选的邮件/仓库管理也跟着排队，
+        用户无法一眼看出本轮到底跑哪些。respect_enabled=False 用于「只运行当前功能」：
+        忽略勾选，只把传入的那一个标为等待。
+        """
+        for script in self.scripts:
+            script.status = "就绪"
+        if respect_enabled:
+            targets = [s for s in scripts_to_run if s.enabled]
+        else:
+            targets = list(scripts_to_run)
+        for script in targets:
+            script.status = "等待中"
+
+    def _clear_pending_statuses(self):
+        """运行循环提前结束时，把还没轮到执行的「等待中」收回「就绪」。"""
+        for script in self.scripts:
+            if script.status == "等待中":
+                script.status = "就绪"
+
     def _begin_run(self, scripts_to_run, respect_enabled=True):
         """启动运行线程的公共入口：置运行态、复位状态标记、拉起工作线程。"""
         self.is_running = True
         self.stop_event.clear()
         self.update_master_button()
 
-        for script in self.scripts:
-            script.status = "等待中"
+        self._prepare_run_statuses(scripts_to_run, respect_enabled)
         self.update_script_panel()
 
         thread = threading.Thread(
@@ -1214,6 +1272,9 @@ class GameBotGUI:
         for script in self.scripts:
             if script.status == "运行中":
                 script.status = "已停止"
+            elif script.status == "等待中":
+                # 没轮到的任务别继续留在「排队」，停止后应回到未执行的中性状态
+                script.status = "就绪"
         self.update_script_panel()
         
         self.log("所有脚本已停止")
@@ -1230,7 +1291,11 @@ class GameBotGUI:
             self.root.destroy()
         
     def launch_game_then_start(self, launch_game=True):
-        """启动游戏（可选），等待指定秒数后开始运行脚本流程。"""
+        """按需启动游戏，等游戏就绪后开始脚本流程。
+
+        「立即开始」与「启动游戏」解耦：游戏已在运行时不再按快捷方式重复拉起
+        （会多开客户端/弹启动器），直接 0 延迟开始脚本；launch_game=False 同理。
+        """
         if self.is_running:
             self.log("脚本已在运行中，忽略本次启动请求")
             return
@@ -1238,12 +1303,16 @@ class GameBotGUI:
         if not enabled:
             messagebox.showwarning("警告", "没有启用任何脚本！")
             return
-        if launch_game:
+        if launch_game and not is_game_running():
             self.launch_game_from_shortcut()
             delay = self.game_launch_delay
+            self.log(f"{delay} 秒后将开始运行脚本流程")
+        elif launch_game:
+            delay = 0
+            self.log("游戏已在运行，跳过启动，立即开始脚本")
         else:
             delay = 0
-        self.log(f"{delay} 秒后将开始运行脚本流程")
+            self.log("不启动游戏，立即开始脚本")
         # 等待后先确保游戏窗口在前台，再开始脚本（避免因游戏不在前台导致模板匹配失效）
         self.root.after(max(0, int(delay)) * 1000, self._start_after_focus)
 
@@ -1455,7 +1524,8 @@ class GameBotGUI:
 
     def _run_hongbaolingqu(self, script):
         import hongbaolingqu
-        return hongbaolingqu.main()
+        # 子项开关随 params 透传，运行时由 hongbaolingqu 按 claim_* 逐项决定是否领取
+        return hongbaolingqu.main(params=script.params)
 
     def _run_yuanwangdan(self, script):
         import yuanwangdan
@@ -1733,6 +1803,10 @@ class GameBotGUI:
                 else:
                     script.status = "失败"
                     self.log(log_format.task_end_line(False, index, total, script.name, duration))
+                    # 失败/超时留存最近几帧画面，便于事后定位「当时卡在哪一屏」；
+                    # F9 主动停止不算失败现场，不落盘。
+                    if not self.stop_event.is_set():
+                        common.capture_failure_context(script.name, "任务失败或超时")
                     
             except common.StopRequested:
                 script.status = "已停止"
@@ -1743,6 +1817,8 @@ class GameBotGUI:
                 script.status = "错误"
                 self.log(log_format.task_end_line(False, index, total, script.name,
                                                   time.time() - task_started) + f" 出错: {e!s}")
+                # 异常同样留存现场，原因带上异常文本，方便与日志首行对应
+                common.capture_failure_context(script.name, f"任务执行异常: {e!s}")
                 # 完整堆栈写入日志文件便于定位；逐行加时间戳并归到当前任务下，
                 # 面板仍只显示上面那条首行，避免刷屏
                 for stack_line in log_format.format_multiline(traceback.format_exc()):
@@ -1762,6 +1838,7 @@ class GameBotGUI:
         # 运行结束后保存（使 last_run_time 等状态持久化；勾选状态只反映用户自己的设置）
         # 保持 tee 接管（窗口模式下 sys.__stdout__ 为 None，直接重置会令后续 print 崩溃）
         sys.stdout = _StdoutTee(self._enqueue_log)
+        self._clear_pending_statuses()
         self.root.after(0, self._set_current_task, "无")
         self.save_config()
         self.root.after(0, self.stop_all)

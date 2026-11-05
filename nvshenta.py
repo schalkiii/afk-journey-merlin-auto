@@ -145,6 +145,31 @@ def do_saodang_and_exit():
     return True
 
 
+def _back_to_tower_page(max_attempts=3):
+    """登顶后回退到女神塔页面（该页面才有一键扫荡按钮）。
+
+    挑战到顶后没有下一层，只会出现「再次挑战」，直接找扫荡按钮必然失败。
+    先确认当前是否已在女神塔页面；否则逐层点 exit / exitck 退出，每层退出后
+    重新确认扫荡按钮是否出现。全部尝试后仍看不到则返回 False。
+    """
+    if find_center_silent(tpl_nvshentasaodang, 0.8):
+        return True
+
+    for attempt in range(1, max_attempts + 1):
+        wait_and_click(tpl_exit, "exit", 0.8, timeout=2.0)
+        time.sleep(1.0)
+        if find_center_silent(tpl_nvshentasaodang, 0.8):
+            return True
+
+        wait_and_click(tpl_exitck, "exitck", 0.8, timeout=2.0)
+        time.sleep(1.0)
+        if find_center_silent(tpl_nvshentasaodang, 0.8):
+            return True
+
+    print(f"回退 {max_attempts} 次后仍未确认女神塔页面（未看到扫荡按钮）")
+    return False
+
+
 def flow_nvshenta(auto_configure_lineup=False):
     """
     功能：女神塔挑战
@@ -159,7 +184,7 @@ def flow_nvshenta(auto_configure_lineup=False):
        - 点击 zhandou 战斗
        - 如果识别到 nvshentaxiayiceng，点击进入下一层，继续挑战
        - 如果识别不到 nvshentaxiayiceng，挑战结束
-    4. 点击 exit 退出到女神塔界面
+    4. 回退到女神塔页面（登顶后无下一层，逐层点 exit/exitck 退出）
     5. 点击 nvshentasaodang 扫荡
     6. 点击 nvshentasaodangmax 选择最大扫荡次数
     7. 点击 nvshentasaodang 确认扫荡
@@ -346,9 +371,9 @@ def flow_nvshenta(auto_configure_lineup=False):
     
     print(f"总共挑战了 {challenge_count} 层")
     
-    # 4. 点击 exit 退出到女神塔界面
-    if not wait_and_click(tpl_exit, "exit", 0.8):
-        print("点击 exit 失败")
+    # 4. 回退到女神塔页面（登顶后只有「再次挑战」，需先回退再执行扫荡）
+    if not _back_to_tower_page():
+        print("登顶后未能回到女神塔页面，无法执行扫荡")
         return False
     random_sleep()
     

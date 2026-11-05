@@ -81,5 +81,5 @@ Don't checklist all four every time — pick the one most relevant to the change
 
 - 提交前必须跑 `pwsh -NoProfile -File build.ps1 check`（compileall + pytest + ruff 基线比对，退出码 0 才算通过）。
 - lint 基线见 `.ruff_baseline`（逐文件 `文件=条数`），任何文件告警数不得高于基线；下降视为改善。
-- 测试基线以 `python -m pytest -q` 实际结果为准（当前 163 条）。
+- 测试基线以 `python -m pytest -q` 实际结果为准（当前 212 条）。
 - 新增用例必须做负验证：故意改坏被测逻辑，用例必须失败。

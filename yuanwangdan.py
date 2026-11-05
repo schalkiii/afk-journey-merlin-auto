@@ -7,9 +7,10 @@
    (xinyuandanwancheng)，逐单交付，直到资源不足；
 3. 资源不足时游戏弹出「当前资源不足，可从以下途径获取」(xinyuandanbuzu)，
    点击首条途径的箭头(tujingjiantou)即自动寻路到对应生产建筑（厨房 / 锻造工坊 / 炼金工坊）；
-4. 自动寻路只把角色送到建筑旁：再点角色脚下的交互提示（F）打开生产选择页，
-   点「愿望单需求」卡片的「选择」进入制作界面；
-5. 把数量档点到「x10」（x1 → x5 → x10，进建筑固定是 x1，故点两下）后点「开始烹饪/开始锻造」
+4. 自动寻路只把角色送到建筑旁：再点角色脚下的交互提示（F）打开生产界面，
+   检测到「愿望单需求」标签后直接等制作按钮，不再点产品卡片（该点击会误开制作配方）；
+5. 把数量档点到「x10」（x1 → x5 → x10，进建筑固定是 x1，故固定点两下，QTY_CLICK_TIMES=2）
+   后点「开始烹饪/开始锻造」
    制作 10 份，完成后逐层返回家园、重新进入愿望单继续交付；
 6. 交付批数达到上限、制作次数达到上限、连续多轮界面无变化或界面无法识别时结束，并回主界面。
 
@@ -93,7 +94,6 @@ CRAFT_START_TIMEOUT = 10  # 点「开始烹饪」后等待按钮消失（确认�
 CRAFT_DONE_TIMEOUT = 600  # 一次批量制作的完成等待上限；x10 档一批 10 份实测已超过 180 秒
 QTY_CLICK_TIMES = 2       # 数量档 x1 → x5 → x10 循环，进建筑固定是 x1，故点两下即 x10
 QTY_BUTTON_OFFSET = (110, -10)   # 数量按钮相对「开始」按钮中心的偏移（1600×900 实测：烹饪 2896,859 / 数量 3006,849）
-WISH_SELECT_OFFSET_Y = 157       # 「愿望单需求」标签中心 → 同一卡片「选择」按钮中心（1600×900 实测）
 PATH_PROMPT_OFFSET_Y = 103       # 自动寻路后屏幕中心 → 建筑交互提示（F）的纵向偏移
 # 三种生产建筑共用同一套制作界面布局，但「开始」按钮文字/图标不同；
 # 炼金模板未采集时自动跳过，只匹配厨房/锻造。
@@ -289,8 +289,9 @@ def _craft_from_lack():
     log("【家园愿望单】资源不足，点击途径入口自动寻路至生产建筑")
     _click_once(arrow_pos, 1.0)
 
-    # 自动寻路只把角色送到建筑旁，不会自动打开制作界面：还需点击角色脚下的交互提示（F），
-    # 再在生产选择页点「愿望单需求」卡片的「选择」，才会进入制作界面。
+    # 自动寻路只把角色送到建筑旁，不会自动打开制作界面：还需点击角色脚下的交互提示（F）。
+    # 打开生产界面后直接选次数并开始制作，不再点「愿望单需求」产品卡片——那次点击会
+    # 打开制作配方，而愿望单补货并不需要。
     region = game_client_region()
     prompt_pos = None
     if region:
@@ -299,6 +300,7 @@ def _craft_from_lack():
     start_template = None
     cook_pos = None
     prompt_clicks = 0
+    wish_label_logged = False
     next_prompt_at = time.time() + 4.0   # 先给寻路留出时间，避免过早点击空地
     deadline = time.time() + CRAFT_ENTRY_TIMEOUT
     while time.time() < deadline:
@@ -309,8 +311,13 @@ def _craft_from_lack():
         # 0.85 是等待秒数（_find 的第二个位置参数是 timeout，写成裸值容易被误读成阈值）
         label_pos = _find(tpl_wish_label, timeout=0.85)
         if label_pos is not None:
-            log("【家园愿望单】进入生产选择界面，选择愿望单需求产品")
-            _click_once((label_pos[0], label_pos[1] + WISH_SELECT_OFFSET_Y), SETTLE_DELAY)
+            # 该标签只用来确认已进入生产界面；点产品卡片会打开制作配方，补货不需要
+            if not wish_label_logged:
+                log("【家园愿望单】已进入生产选择界面，直接等待制作按钮（不再点产品卡片）")
+                wish_label_logged = True
+            # 标签还在说明制作按钮尚未渲染出来；必须留出轮询间隔，
+            # 否则会在这个分支里空转刷满 CPU。
+            time.sleep(0.3)
             continue
         if prompt_pos is not None and prompt_clicks < 3 and time.time() >= next_prompt_at:
             # 交互提示是打开界面的跳转入口，连点会落到刚打开的界面里误触

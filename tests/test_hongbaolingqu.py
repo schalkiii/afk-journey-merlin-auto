@@ -45,9 +45,18 @@ def test_claim_loop_uses_both_buttons_and_closes_popup(monkeypatch):
 
 
 def test_claim_loop_stops_at_cap(monkeypatch):
-    """领取后界面不刷新时靠上限退出，不能死循环点同一个按钮。"""
+    """领取后界面不刷新时靠上限退出，不能死循环点同一个按钮。
+
+    首轮走 wait_and_click，后续轮次走静默匹配；所以 fake 必须让静默匹配也
+    持续命中，才能把循环推到上限（否则第二轮就因「没有可领项」正常退出）。
+    """
     monkeypatch.setattr(hb, "wait_and_click", lambda *args, **kwargs: True)
-    monkeypatch.setattr(hb, "find_center_silent", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        hb, "find_center_silent",
+        lambda template_path, *args, **kwargs: (1100, 400)
+        if template_path == hb.tpl_yijianlingqu else None,
+    )
+    monkeypatch.setattr(hb, "click_position", lambda pos, **kwargs: None)
     monkeypatch.setattr(hb, "click_blank_to_exit", lambda *args, **kwargs: None)
     assert hb.claim_current_view() == hb.MAX_CLAIM_PER_VIEW
 
@@ -221,7 +230,7 @@ def test_panel_open_short_circuits_on_first_hit(monkeypatch):
 
 
 def test_claim_first_round_waits_for_yijian_then_zero(monkeypatch):
-    """只有单个「领取」的界面：一键领取首轮 1s 宽限、后续零等待；单个领取始终 0.5s。"""
+    """只有单个「领取」的界面：一键领取首轮 1s 宽限，后续改静默匹配；单个领取始终 0.5s。"""
     yijian_timeouts = []
     lingqu_timeouts = []
     lingqu_results = iter([(1100, 400), (1100, 400), (1100, 400), None])
@@ -244,6 +253,180 @@ def test_claim_first_round_waits_for_yijian_then_zero(monkeypatch):
 
     assert hb.claim_current_view() == 3
     assert clicks == [(1100, 400)] * 3
-    assert yijian_timeouts[0] == 1.0
-    assert yijian_timeouts[1:] == [0, 0, 0]
+    assert yijian_timeouts == [hb.YIJIAN_FIRST_TIMEOUT], (
+        "首轮之后不再调用 wait_and_click（避免每轮打印「放弃 yijianlingqu」）"
+    )
     assert lingqu_timeouts == [0.5, 0.5, 0.5, 0.5]
+
+
+def test_claim_later_rounds_use_silent_find_for_yijian(monkeypatch):
+    """首轮一键领取走 wait_and_click(1s)；后续轮次改静默匹配 + click_position，不再打「放弃」。"""
+    wait_timeouts = []
+    yijian_find_timeouts = []
+    lingqu_results = iter([(1100, 400), (1100, 400), (1100, 400), None])
+    clicks = []
+
+    def fake_wait_and_click(template_path, *args, **kwargs):
+        if template_path == hb.tpl_yijianlingqu:
+            wait_timeouts.append(kwargs.get("timeout"))
+        return False
+
+    def fake_find(template_path, *args, **kwargs):
+        if template_path == hb.tpl_yijianlingqu:
+            yijian_find_timeouts.append(kwargs.get("timeout"))
+            return None
+        if template_path == hb.tpl_lingqu:
+            return next(lingqu_results)
+        return None
+
+    monkeypatch.setattr(hb, "wait_and_click", fake_wait_and_click)
+    monkeypatch.setattr(hb, "find_center_silent", fake_find)
+    monkeypatch.setattr(hb, "click_position", lambda pos, **kwargs: clicks.append(pos))
+
+    assert hb.claim_current_view() == 3
+    assert wait_timeouts == [hb.YIJIAN_FIRST_TIMEOUT], "后续轮次不得再调用 wait_and_click"
+    assert yijian_find_timeouts == [0, 0, 0]
+    assert clicks == [(1100, 400)] * 3
+
+
+def _stub_task_panel(monkeypatch):
+    """桩掉任务面板扫描的外部依赖，记录实际扫过的页签名。"""
+    swept = []
+    monkeypatch.setattr(hb, "check_stop", lambda: None)
+    monkeypatch.setattr(hb, "log", lambda *args, **kwargs: None)
+    monkeypatch.setattr(hb, "time", types.SimpleNamespace(sleep=lambda *args: None))
+    monkeypatch.setattr(hb, "wait_and_click", lambda *args, **kwargs: True)
+    monkeypatch.setattr(hb, "_sweep_view", lambda name: swept.append(name) or 1)
+    monkeypatch.setattr(hb, "_sweep_season_task_tab",
+                        lambda: swept.append("赛季任务-二级") or 1)
+    return swept
+
+
+def test_task_panel_skips_daily_when_disabled(monkeypatch):
+    swept = _stub_task_panel(monkeypatch)
+    hb._claim_task_panel({"claim_daily": False})
+    assert "每日任务" not in swept
+    assert "公会任务" in swept
+
+
+def test_task_panel_skips_guild_when_disabled(monkeypatch):
+    swept = _stub_task_panel(monkeypatch)
+    hb._claim_task_panel({"claim_guild": False})
+    assert "公会任务" not in swept
+    assert "每日任务" in swept
+
+
+def test_task_panel_skips_growth_when_disabled(monkeypatch):
+    swept = _stub_task_panel(monkeypatch)
+    hb._claim_task_panel({"claim_growth": False})
+    assert "成长挑战" not in swept
+    assert "家园目标" in swept
+
+
+def test_task_panel_skips_season_when_disabled(monkeypatch):
+    swept = _stub_task_panel(monkeypatch)
+    hb._claim_task_panel({"claim_season": False})
+    assert "赛季任务-二级" not in swept
+    assert "成长挑战" in swept
+
+
+def test_task_panel_skips_homestead_when_disabled(monkeypatch):
+    swept = _stub_task_panel(monkeypatch)
+    hb._claim_task_panel({"claim_homestead": False})
+    assert "家园目标" not in swept
+    assert "成长挑战" in swept
+
+
+def _stub_main(monkeypatch):
+    """桩掉 main 的全部入口，记录实际执行过的子项。"""
+    calls = []
+    monkeypatch.setattr(hb, "check_stop", lambda: None)
+    monkeypatch.setattr(hb, "log", lambda *args, **kwargs: None)
+    monkeypatch.setattr(hb, "time", types.SimpleNamespace(sleep=lambda *args: None))
+    monkeypatch.setattr(hb, "recover_to_main_interface", lambda: True)
+    monkeypatch.setattr(hb, "find_center_silent", lambda *args, **kwargs: (100, 100))
+    monkeypatch.setattr(hb, "_open_task_panel", lambda: True)
+    monkeypatch.setattr(hb, "_click_panel_back", lambda name: True)
+    monkeypatch.setattr(hb, "_claim_task_panel",
+                        lambda params=None: calls.append("task_panel") or 1)
+    monkeypatch.setattr(hb, "_claim_season_book",
+                        lambda pos: calls.append("season_book") or 1)
+    monkeypatch.setattr(hb, "_sweep_laurel_journey",
+                        lambda: calls.append("laurel") or 1)
+    monkeypatch.setattr(hb, "_sweep_progress_milestones",
+                        lambda: calls.append("idle") or 1)
+    return calls
+
+
+def test_main_skips_season_book_when_disabled(monkeypatch):
+    calls = _stub_main(monkeypatch)
+    assert hb.main({"claim_season_book": False}) is True
+    assert calls == ["task_panel", "laurel", "idle"]
+
+
+def test_main_skips_laurel_and_idle_when_disabled(monkeypatch):
+    calls = _stub_main(monkeypatch)
+    assert hb.main({"claim_laurel": False, "claim_idle": False}) is True
+    assert calls == ["task_panel", "season_book"]
+
+
+def test_main_skips_task_panel_when_all_its_switches_off(monkeypatch):
+    calls = _stub_main(monkeypatch)
+    opened = []
+    monkeypatch.setattr(hb, "_open_task_panel", lambda: opened.append(True) or True)
+
+    params = {key: False for key in hb.TASK_PANEL_KEYS}
+    assert hb.main(params) is True
+    assert opened == [], "任务面板相关开关全关时不应再去打开面板"
+    assert calls == ["season_book", "laurel", "idle"]
+
+
+def test_main_all_switches_off_returns_true_and_logs_once(monkeypatch):
+    calls = _stub_main(monkeypatch)
+    logs = []
+    monkeypatch.setattr(hb, "log", lambda msg: logs.append(msg))
+
+    params = {key: False for key in hb.CLAIM_SUB_KEYS}
+    assert hb.main(params) is True
+    assert calls == []
+    assert logs.count("红点领取子项全部关闭，本次跳过") == 1
+
+
+def _stub_season_task_tab(monkeypatch, anchor):
+    """桩掉赛季任务页扫描，返回实际点击的整屏坐标与扫过的视图名。"""
+    clicks = []
+    swept = []
+    monkeypatch.setattr(hb, "check_stop", lambda: None)
+    monkeypatch.setattr(hb, "log", lambda *args, **kwargs: None)
+    monkeypatch.setattr(hb, "game_client_region", lambda: (2000, 100, 1600, 900))
+    monkeypatch.setattr(hb, "click_position", lambda pos, **kwargs: clicks.append(pos))
+    monkeypatch.setattr(hb, "wait_and_click", lambda *args, **kwargs: False)
+    monkeypatch.setattr(hb, "find_center_silent", lambda *args, **kwargs: anchor)
+    monkeypatch.setattr(hb, "_sweep_view", lambda name: swept.append(name) or 0)
+    return clicks, swept
+
+
+def test_season_tab_falls_back_to_fixed_points_when_anchor_missing(monkeypatch):
+    """「玩法」锚点识别不到时必须按固定点位把 5 个页签都扫一遍，而不是整段跳过。"""
+    clicks, swept = _stub_season_task_tab(monkeypatch, None)
+
+    hb._sweep_season_task_tab()
+
+    base_x, base_y = hb.SEASON_SUB_TAB_FALLBACK_ORIGIN
+    expected = [(2000 + base_x + offset, 100 + base_y)
+                for offset in hb.SEASON_SUB_TAB_OFFSET_X]
+    assert clicks == expected
+    assert [name for name in swept if name.startswith("赛季任务-固定页")] == [
+        f"赛季任务-固定页(偏移 {offset})" for offset in hb.SEASON_SUB_TAB_OFFSET_X]
+
+
+def test_season_tab_keeps_anchor_offsets_when_found(monkeypatch):
+    """锚点命中时仍以锚点为基准做横向偏移，保持原逻辑不变。"""
+    clicks, swept = _stub_season_task_tab(monkeypatch, (960, 300))
+
+    hb._sweep_season_task_tab()
+
+    assert clicks == [(960 + offset, 300) for offset in hb.SEASON_SUB_TAB_OFFSET_X]
+    assert [name for name in swept if name.startswith("赛季任务-二级页")] == [
+        f"赛季任务-二级页(偏移 {offset})" for offset in hb.SEASON_SUB_TAB_OFFSET_X]
+    assert not any(name.startswith("赛季任务-固定页") for name in swept)

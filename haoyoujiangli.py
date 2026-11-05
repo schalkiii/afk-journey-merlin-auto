@@ -31,6 +31,16 @@ CLOSE_POPUP = os.path.join(templates_dir, "dianjikongbaichuguanbi.png")
 YIJIANZENGLI = os.path.join(templates_dir, "yijianzengli.png")
 NOTYIJIANZENGLI = os.path.join(templates_dir, "notyijianzengli.png")
 
+# 好友面板里除「一键赠礼并收取」之外的额外奖励：单独的「领取」按钮、满箱宝箱，
+# 以及宝箱点开后弹出的「收获奖励」
+LINGQU = os.path.join(templates_dir, "lingqu.png")
+BAOXIANG_FULL = os.path.join(templates_dir, "baoxiang_full.png")
+SHOUHUOJIANGJI = os.path.join(templates_dir, "shouhuojiangli.png")
+
+# 额外奖励最多扫描多少次：找不到即停，上限只防界面不刷新时死循环
+MAX_FRIEND_REWARD_SCANS = 5
+
+
 # 一键赠礼并收取最多点几次：实测一次就够，留点余量防它分「发送 / 收取」两段
 MAX_GIFT_CLICKS = 3
 
@@ -107,6 +117,37 @@ def _collect_gifts():
     return clicks
 
 
+def _claim_friend_rewards():
+    """好友面板里除「一键赠礼并收取」之外的单点奖励。
+
+    一键赠礼只处理每日赠礼/收礼进度，面板里还可能残留单独的「领取」按钮与满箱宝箱；
+    命中就点并清理弹窗，找不到即停。宝箱点开后若弹「收获奖励」再补点一次。
+    返回本次领取的奖励项数。
+    """
+    claimed = 0
+    for _ in range(MAX_FRIEND_REWARD_SCANS):
+        pos = None
+        for template in (LINGQU, BAOXIANG_FULL):
+            pos = find_center(template, threshold=0.8)
+            if pos:
+                break
+        if not pos:
+            break
+        print(f"【好友奖励】检测到好友面板额外奖励，第 {claimed + 1} 次点击")
+        send_coord(pos[0], pos[1])
+        claimed += 1
+        time.sleep(2)
+        _close_popups()
+        shouhuo = find_center(SHOUHUOJIANGJI, threshold=0.8)
+        if shouhuo:
+            print("【好友奖励】检测到「收获奖励」，点击并清理弹窗")
+            send_coord(shouhuo[0], shouhuo[1])
+            time.sleep(1)
+            _close_popups()
+    print(f"【好友奖励】好友面板额外奖励领取 {claimed} 项")
+    return claimed
+
+
 def main():
     print("【好友奖励】开始执行好友奖励任务...")
 
@@ -147,6 +188,9 @@ def main():
     else:
         print("【好友奖励】未检测到 yijianzengli 或 notyijianzengli，任务终止")
         return False
+
+    # 一键赠礼只处理每日赠礼/收礼进度，面板里还可能残留单独的「领取」与满箱宝箱
+    _claim_friend_rewards()
 
     # 退出好友列表
     print("【好友奖励】点击 exitck 退出好友列表")

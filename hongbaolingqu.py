@@ -113,6 +113,31 @@ MAX_MILESTONE_CLICKS = 16
 # 以「玩法」命中位置为基准横向偏移，避免为每个页签单独存一份模板。
 SEASON_SUB_TAB_OFFSET_X = [0, 132, 264, 397, 532]
 
+# 「玩法」页签模板识别不到时的兜底基准点（客户区相对坐标）：实测 tpl_wanfa
+# 常因背景透光匹配失败，导致上方 5 个页签整段被跳过，这里直接按固定栅格盲点。
+# 数值按 1600×900 客户区布局估算，实机截图后校准。
+SEASON_SUB_TAB_FALLBACK_ORIGIN = (480, 180)
+
+# 红点领取子项的运行时开关键（GUI 面板写入 script.params，缺省一律视为开启）。
+CLAIM_SUB_KEYS = (
+    "claim_daily",
+    "claim_guild",
+    "claim_growth",
+    "claim_season",
+    "claim_homestead",
+    "claim_season_book",
+    "claim_laurel",
+    "claim_idle",
+)
+# 需要先进入「菜单 → 任务」面板才生效的开关
+TASK_PANEL_KEYS = (
+    "claim_daily",
+    "claim_guild",
+    "claim_growth",
+    "claim_season",
+    "claim_homestead",
+)
+
 # 单个界面最多点击多少次领取（防止领取后界面不刷新导致死循环）
 MAX_CLAIM_PER_VIEW = 30
 
@@ -126,6 +151,11 @@ PANEL_POLL_INTERVAL = 0.3
 
 # 进入任务面板的重试次数
 ENTRY_RETRY = 2
+
+
+def _enabled(params, key):
+    """读取子项开关：params 未提供该键时默认开启，兼容不传参数的旧调用。"""
+    return bool((params or {}).get(key, True))
 
 
 def _click_panel_back(name):
@@ -151,16 +181,24 @@ def claim_current_view():
 
     先点一键领取：单个「领取」模板带勾选圆标，与一键领取按钮外观不同，
     两者互不误命中，因此顺序只影响次数，不影响正确性。
+    首轮给一键领取 1s 宽限（页面刚打开按钮可能还在加载）；此后若再走
+    wait_and_click(timeout=0)，每轮都会打印「放弃等待」把日志刷满，所以后续轮次
+    改用静默匹配 + click_position：按钮还在就继续点，不在则直接落到单个「领取」。
     """
     clicked = 0
     round_index = 0
     while clicked < MAX_CLAIM_PER_VIEW:
         check_stop()
-        # 首轮留宽限等页面加载；一键领取要么一直在、要么本轮已确认不在，
-        # 单点「领取」不会让它新出现，后续轮次不再白等
-        yijian_timeout = YIJIAN_FIRST_TIMEOUT if round_index == 0 else 0
+        if round_index == 0:
+            hit_yijian = wait_and_click(tpl_yijianlingqu, "yijianlingqu", 0.8,
+                                        timeout=YIJIAN_FIRST_TIMEOUT)
+        else:
+            pos = find_center_silent(tpl_yijianlingqu, threshold=0.8, timeout=0)
+            hit_yijian = bool(pos)
+            if pos:
+                click_position(pos, wait=1.0, twice=False)
         round_index += 1
-        if wait_and_click(tpl_yijianlingqu, "yijianlingqu", 0.8, timeout=yijian_timeout):
+        if hit_yijian:
             clicked += 1
             _close_reward_popup()
             continue
@@ -270,7 +308,15 @@ def _sweep_season_task_tab():
             click_position((anchor[0] + offset_x, anchor[1]), wait=1.0, twice=False)
             total += _sweep_view(f"赛季任务-二级页(偏移 {offset_x})")
     else:
-        log("赛季任务未识别到「玩法」二级页签，跳过二级页遍历。")
+        # 「玩法」页签模板识别不到时不能整段跳过：用户实测「养成」页仍有奖励可领，
+        # 这里按固定栅格把 5 个页签一并扫一遍。
+        log("未识别到玩法页签，使用固定点位兜底（养成/剧情等页签会一并扫描）")
+        win_x, win_y, _w, _h = game_client_region()
+        base_x, base_y = SEASON_SUB_TAB_FALLBACK_ORIGIN
+        for offset_x in SEASON_SUB_TAB_OFFSET_X:
+            check_stop()
+            click_position((win_x + base_x + offset_x, win_y + base_y), wait=1.0, twice=False)
+            total += _sweep_view(f"赛季任务-固定页(偏移 {offset_x})")
 
     for template, stage_name in (
         (tpl_jieduaimubiao, "阶段目标"),
@@ -286,26 +332,38 @@ def _sweep_season_task_tab():
     return total
 
 
-def _claim_task_panel():
-    """任务面板各页签依次领取。返回领取总数。"""
+def _claim_task_panel(params=None):
+    """任务面板各页签依次领取。返回领取总数。
+
+    params 里子项开关关闭时对应页签直接跳过，其余页签仍照常扫描。
+    """
+    params = params or {}
     total = 0
     # 面板会停在上次浏览的页签，先显式点回每日任务，避免漏扫
-    if wait_and_click(tpl_richangrenwu_tab, "richangrenwutab", 0.8, timeout=3.0,
-                      client_region=BOTTOM_BAR_CLIENT_REGION):
-        time.sleep(0.8)
-    total += _sweep_view("每日任务")
+    if _enabled(params, "claim_daily"):
+        if wait_and_click(tpl_richangrenwu_tab, "richangrenwutab", 0.8, timeout=3.0,
+                          client_region=BOTTOM_BAR_CLIENT_REGION):
+            time.sleep(0.8)
+        total += _sweep_view("每日任务")
+    else:
+        log("每日任务子项关闭，跳过。")
 
-    if wait_and_click(tpl_gonghuirenwu, "gonghuirenwu", 0.8, timeout=2.0,
-                      client_region=BOTTOM_BAR_CLIENT_REGION):
+    if not _enabled(params, "claim_guild"):
+        log("公会任务子项关闭，跳过。")
+    elif wait_and_click(tpl_gonghuirenwu, "gonghuirenwu", 0.8, timeout=2.0,
+                        client_region=BOTTOM_BAR_CLIENT_REGION):
         total += _sweep_view("公会任务")
     else:
         log("未找到公会任务页签，跳过。")
 
-    for template, tab_name in (
-        (tpl_chengzhang, "成长挑战"),
-        (tpl_saijirenwu, "赛季任务"),
-        (tpl_jiayuan, "家园目标"),
+    for template, tab_name, key in (
+        (tpl_chengzhang, "成长挑战", "claim_growth"),
+        (tpl_saijirenwu, "赛季任务", "claim_season"),
+        (tpl_jiayuan, "家园目标", "claim_homestead"),
     ):
+        if not _enabled(params, key):
+            log(f"任务面板页签「{tab_name}」子项关闭，跳过。")
+            continue
         check_stop()
         if not wait_and_click(template, f"页签 {tab_name}", 0.8, timeout=3.0,
                               client_region=BOTTOM_BAR_CLIENT_REGION):
@@ -535,39 +593,62 @@ def _sweep_progress_milestones():
     return claimed
 
 
-def main():
-    """执行红点奖励领取。返回 True=至少进入过其中一个领取界面，False=入口都不在。"""
+def main(params=None):
+    """执行红点奖励领取。返回 True=至少进入过其中一个领取界面，False=入口都不在。
+
+    params 为 GUI 面板写入的子项开关（缺省全部开启）；八个子项全关时直接跳过，
+    按「无活可干」而非失败处理。
+    """
+    params = params or {}
+    if not any(_enabled(params, key) for key in CLAIM_SUB_KEYS):
+        log("红点领取子项全部关闭，本次跳过")
+        return True
+
     log("开始执行红点奖励领取...")
     total = 0
     entered = False
 
-    if _open_task_panel():
-        entered = True
-        total += _claim_task_panel()
-        _click_panel_back("任务面板")
-        time.sleep(1.0)
+    if any(_enabled(params, key) for key in TASK_PANEL_KEYS):
+        if _open_task_panel():
+            entered = True
+            total += _claim_task_panel(params)
+            _click_panel_back("任务面板")
+            time.sleep(1.0)
+        else:
+            log("未能进入任务面板，跳过任务面板领取。")
     else:
-        log("未能进入任务面板，跳过任务面板领取。")
+        log("任务面板子项全部关闭，跳过任务面板。")
 
-    check_stop()
-    label = find_center_silent(tpl_saijishouchuo, threshold=SEASON_BOOK_THRESHOLD, timeout=1.5)
-    if not label:
-        # 面板领取可能停在菜单/子页里，HUD 上的赛季手册标签看不到；先回主界面再判一次
+    if _enabled(params, "claim_season_book"):
+        check_stop()
+        label = find_center_silent(tpl_saijishouchuo, threshold=SEASON_BOOK_THRESHOLD,
+                                   timeout=1.5)
+        if not label:
+            # 面板领取可能停在菜单/子页里，HUD 上的赛季手册标签看不到；先回主界面再判一次
+            recover_to_main_interface()
+            label = find_center_silent(tpl_saijishouchuo, threshold=SEASON_BOOK_THRESHOLD,
+                                       timeout=1.5)
+        if label:
+            entered = True
+            total += _claim_season_book(label)
+        else:
+            log("主界面未找到「赛季手册」入口，跳过。")
+    else:
+        log("赛季手册子项关闭，跳过。")
+
+    if _enabled(params, "claim_laurel"):
+        check_stop()
         recover_to_main_interface()
-        label = find_center_silent(tpl_saijishouchuo, threshold=SEASON_BOOK_THRESHOLD, timeout=1.5)
-    if label:
-        entered = True
-        total += _claim_season_book(label)
+        total += _sweep_laurel_journey()
     else:
-        log("主界面未找到「赛季手册」入口，跳过。")
+        log("赛季月桂之旅子项关闭，跳过。")
 
-    check_stop()
-    recover_to_main_interface()
-    total += _sweep_laurel_journey()
-
-    check_stop()
-    recover_to_main_interface()
-    total += _sweep_progress_milestones()
+    if _enabled(params, "claim_idle"):
+        check_stop()
+        recover_to_main_interface()
+        total += _sweep_progress_milestones()
+    else:
+        log("赛季挂机关卡子项关闭，跳过。")
 
     # 收尾必须把游戏带回主界面：中途任一入口失败都可能停在子页面，
     # 交给下一个任务时就会从错误界面开始（实测盲点卡片曾停在「纷战争锋」内）。

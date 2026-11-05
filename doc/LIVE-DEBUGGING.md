@@ -120,6 +120,9 @@
 
 - 每轮改动：`pwsh -NoProfile -File build.ps1 check`，一次跑完
   `compileall` → `pytest -q` → `ruff check .` 并按基线比对。
+- **失败现场**：任务返回失败/超时或抛异常时，程序自动把最近 5 帧截图写到
+  `debug/failures/<时间>_<任务名>/`（`frame_00.jpg…`、`client.jpg`、`meta.txt`），只保留最近 5 个现场；
+  F9 主动停止不保存。排查「卡在哪一屏」时先看这里，再对照日志。
 - lint 基线登记在仓库根的机器可读文件 `.ruff_baseline`（每行 `文件=条数`，全仓合计 64 条）。
   `build.ps1 check` 逐文件比对：**任何文件高于基线即失败并指名文件与新增条数**，低于基线视为改善。
   要判断某文件的告警是否出自本轮改动，仍逐文件与 HEAD 比：

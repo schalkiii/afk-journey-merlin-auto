@@ -2,10 +2,15 @@ import time
 
 from common import (
     BOTTOM_BAR_CLIENT_REGION,
+    at_main_interface,
     click_blank_to_exit,
+    click_position,
+    dismiss_popup_away_from,
     find_center_silent,
     get_template_path,
+    log,
     random_sleep,
+    recover_to_main_interface,
     send_coord,
     try_auto_configure_lineup,
     wait_and_click,
@@ -26,6 +31,13 @@ tpl_cishubugou        = get_template_path("cishubugou.png")
 tpl_exit              = get_template_path("exit.png")
 tpl_exitck            = get_template_path("exitck.png")
 tpl_dianjikongbaichuguanbi = get_template_path("dianjikongbaichuguanbi.png")
+tpl_baoxiang_full     = get_template_path("baoxiang_full.png")
+tpl_shouhuojiangli    = get_template_path("shouhuojiangli.png")
+tpl_lingqu            = get_template_path("lingqu.png")
+tpl_yijianlingqu      = get_template_path("yijianlingqu.png")
+
+# 迷梦之域界面右上角的奖励入口（客户区相对坐标，按 1600×900 给出；实机截图后可校准）
+MIMENG_TOP_RIGHT_REGION = (1200, 0, 400, 300)
 
 # 一场战斗最长等待多久（秒）
 MAX_BATTLE_TIME = 180
@@ -97,6 +109,61 @@ def close_result_popups(timeout=10.0):
     return ok
 
 
+def _claim_top_right_reward():
+    """点击迷梦之域界面右上角的可领奖励，返回是否领到。
+
+    右上角在不同轮次可能是宝箱或「领取 / 一键领取」，按这几种模板依次探测；
+    命中后若弹出「收获奖励」也点掉，最后关闭弹窗。找不到就静默跳过，不影响挑战流程。
+    区域按固定 1600×900 客户区给出，实机截图后可校准。
+    """
+    for template_path, name in (
+        (tpl_baoxiang_full, "宝箱"),
+        (tpl_lingqu, "领取"),
+        (tpl_yijianlingqu, "一键领取"),
+    ):
+        pos = find_center_silent(
+            template_path, 0.8, client_region=MIMENG_TOP_RIGHT_REGION, timeout=0
+        )
+        if not pos:
+            continue
+        click_position(pos, wait=1.5, twice=False)
+        if wait_and_click(tpl_shouhuojiangli, "shouhuojiangli(右上角)", 0.8, timeout=2.0):
+            log(f"【迷梦之域】右上角已点「{name}」并收获奖励。")
+        else:
+            log(f"【迷梦之域】右上角已点「{name}」。")
+        # 只关闭确实存在的奖励弹窗，避免无弹窗时点到页面空白处误触返回
+        dismiss_popup_away_from()
+        return True
+    log("【迷梦之域】右上角未发现可领奖励，跳过。")
+    return False
+
+
+def _recover_to_main():
+    """确认已回到主界面；否则调用 recover_to_main_interface 兜底并记录日志。
+
+    结算清理失败时 ensure_back_to_challenge 会打印「未能确认回到挑战界面」，
+    之后界面状态不可信；这里只补兜底路径与日志，不改变调用方原有的成败语义。
+    """
+    if at_main_interface():
+        return True
+    recovered = recover_to_main_interface()
+    if recovered:
+        log("【迷梦之域】已兜底恢复到主界面。")
+    else:
+        log("【迷梦之域】兜底恢复主界面失败，请留意下一个任务的起始界面。")
+    return recovered
+
+
+def _exit_to_main():
+    """flow_return_main 之后再确认一次主界面，未回到则兜底恢复。
+
+    抽成小函数便于单测：先 flow_return_main、后 recover_to_main_interface，
+    顺序本身就是被测契约。
+    """
+    flow_return_main()
+    return _recover_to_main()
+
+
 # 处理战斗界面逻辑
 def handle_battle():
     """处理战斗界面：优先 tiaoguozhandou(跳过战斗)；否则点 zhandou 开战，
@@ -137,7 +204,11 @@ def handle_battle():
     random_sleep()
 
     # 清理结算弹窗并确认回到挑战界面；失败时上报，避免带着战绩页进入下一个任务
-    return close_result_popups()
+    ok = close_result_popups()
+    if not ok:
+        log("【迷梦之域】结算清理后未能确认回到挑战界面，尝试兜底恢复主界面。")
+        _recover_to_main()
+    return ok
 
 def flow_mimengzhiyu(challenge_count=None, auto_configure_lineup=False):
     """
@@ -176,6 +247,9 @@ def flow_mimengzhiyu(challenge_count=None, auto_configure_lineup=False):
         return False
     random_sleep()
 
+    # 进入迷梦之域界面后先领右上角奖励；找不到不影响后面的挑战流程
+    _claim_top_right_reward()
+
     # 主循环：一直执行，直到无法继续
     completed_count = 0
     while True:
@@ -191,7 +265,7 @@ def flow_mimengzhiyu(challenge_count=None, auto_configure_lineup=False):
             print("礼包弹窗检测完成")
             # 清理结算弹窗并回到主界面，避免卡在结算/玩法界面
             close_result_popups()
-            flow_return_main()
+            _exit_to_main()
             print("迷梦之域流程结束。")
             return True
 
@@ -219,7 +293,7 @@ def flow_mimengzhiyu(challenge_count=None, auto_configure_lineup=False):
             print("礼包弹窗检测完成")
             # 清理结算弹窗并回到主界面，避免卡在结算/玩法界面
             close_result_popups()
-            flow_return_main()
+            _exit_to_main()
             print("次数用完，迷梦之域流程结束。")
             return True
 

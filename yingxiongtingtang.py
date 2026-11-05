@@ -14,6 +14,8 @@ import time
 
 from common import (
     check_stop,
+    click_position,
+    dismiss_popup_away_from,
     find_center_silent,
     game_client_region,
     get_template_path,
@@ -27,6 +29,22 @@ from common import (
 
 tpl_hero_hall_tab = get_template_path("yingxiongtingtang_tab.png")
 tpl_quick_upgrade = get_template_path("kuaisushengji.png")
+tpl_baoxiang_full = get_template_path("baoxiang_full.png")
+tpl_shouhuojiangli = get_template_path("shouhuojiangli.png")
+tpl_lingqu = get_template_path("lingqu.png")
+tpl_yijianlingqu = get_template_path("yijianlingqu.png")
+
+# 挂机奖励领取的两个区域（客户区相对坐标，按 1600×900 给出；实机截图后可校准）。
+# 中央附近是挂机产出宝箱，右上角是「领取 / 一键领取」类奖励入口。
+HERO_CENTER_CHEST_REGION = (550, 250, 500, 400)
+HERO_TOP_RIGHT_REGION = (1200, 0, 400, 300)
+
+# 区域内可能的领奖入口，按「宝箱 → 单个领取 → 一键领取」依次探测；命中一个即够。
+HERO_CLAIM_TEMPLATES = (
+    (tpl_baoxiang_full, "宝箱"),
+    (tpl_lingqu, "领取"),
+    (tpl_yijianlingqu, "一键领取"),
+)
 
 # 「赛季共鸣等级：NNN」里数字区域在客户区的位置，用于点击前后的变化比对
 LEVEL_REGION = (862, 283, 56, 30)
@@ -57,6 +75,31 @@ def _enter_hero_hall():
         return False
     time.sleep(0.8)
     return True
+
+
+def _claim_chest_and_reward(client_region, label):
+    """在客户区指定区域内找一处可领奖励并点掉，返回是否领到。
+
+    区域按固定 1600×900 客户区给出，实机截图后可校准。找不到就静默跳过，
+    不能影响后面的快速升级流程。
+    """
+    for template_path, name in HERO_CLAIM_TEMPLATES:
+        pos = find_center_silent(
+            template_path, 0.8, client_region=client_region, timeout=0
+        )
+        if not pos:
+            continue
+        click_position(pos, wait=1.5, twice=False)
+        if wait_and_click(tpl_shouhuojiangli, f"shouhuojiangli({label})", 0.8, timeout=2.0):
+            log(f"英雄厅堂：{label} 已点「{name}」并收获奖励。")
+        else:
+            log(f"英雄厅堂：{label} 已点「{name}」。")
+        # 只关闭确实存在的奖励弹窗；不要用 dismiss_popup 的「点空白兜底」，
+        # 那会在没有弹窗时点到厅堂左下角，可能误触返回。
+        dismiss_popup_away_from()
+        return True
+    log(f"英雄厅堂：{label} 未发现可领奖励，跳过。")
+    return False
 
 
 def _wait_level_change(before, timeout=3.0):
@@ -90,6 +133,10 @@ def main(quick_upgrade_times=DEFAULT_QUICK_UPGRADE_TIMES):
     recover_to_main_interface()
     if not _enter_hero_hall():
         return False
+
+    # 挂机奖励：中央宝箱与右上角领取各扫一次，未命中不影响后面的升级
+    _claim_chest_and_reward(HERO_CENTER_CHEST_REGION, "中央宝箱")
+    _claim_chest_and_reward(HERO_TOP_RIGHT_REGION, "右上角奖励")
 
     times = max(1, min(int(quick_upgrade_times), MAX_QUICK_UPGRADE_TIMES))
     upgraded = quick_upgrade(times)

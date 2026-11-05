@@ -233,3 +233,71 @@ def test_claim_reward_reports_failure_without_claim_popup(monkeypatch):
     assert ywd._claim_reward(LABEL_POS) is False
     assert clicks == [((2486, 156), 1.5)]
     assert closes == []
+
+
+# 旧版「愿望单需求」标签中心 → 同一卡片「选择」按钮中心的偏移。改动后常量与点击都已删除，
+# 这里刻意写死旧值，用来证明流程不会再点开制作配方。
+OLD_WISH_SELECT_OFFSET_Y = 157
+ARROW_POS = (2000, 500)
+WISH_LABEL_POS = (2400, 300)
+COOK_POS = (2896, 859)
+
+
+def test_craft_from_lack_skips_product_card_and_starts_quantity(monkeypatch):
+    """补货流程只确认生产界面并选次数，不再点「愿望单需求」产品卡片打开配方。"""
+    clicks = []
+    find_calls = []
+    start_button_calls = []
+
+    def fake_find(template_path, *args, **kwargs):
+        find_calls.append((template_path, args, dict(kwargs)))
+        if template_path == ywd.tpl_path_arrow:
+            return ARROW_POS
+        if template_path == ywd.tpl_wish_label:
+            return WISH_LABEL_POS
+        if template_path == ywd.tpl_lack:
+            return None
+        # 制作完成后「开始」按钮重新出现
+        return COOK_POS
+
+    def fake_find_start_button(timeout=0):
+        start_button_calls.append(timeout)
+        if len(start_button_calls) == 1:
+            return None, None
+        return ywd.tpl_cook, COOK_POS
+
+    def fake_click_position(pos, wait=None, twice=True):
+        clicks.append((pos, wait, twice))
+
+    fake_clock = _FakeTime()
+
+    monkeypatch.setattr(ywd, "_find", fake_find)
+    monkeypatch.setattr(ywd, "_find_start_button", fake_find_start_button)
+    monkeypatch.setattr(ywd, "click_position", fake_click_position)
+    monkeypatch.setattr(ywd, "_wait_gone", lambda template_path, timeout: True)
+    monkeypatch.setattr(ywd, "_back_to_homestead", lambda: True)
+    monkeypatch.setattr(ywd, "_ensure_panel", lambda: True)
+    monkeypatch.setattr(ywd, "game_client_region", lambda refresh=False: None)
+    monkeypatch.setattr(ywd, "check_stop", lambda: None)
+    monkeypatch.setattr(ywd, "log", lambda *args, **kwargs: None)
+    monkeypatch.setattr(ywd, "time",
+                        types.SimpleNamespace(time=fake_clock.time, sleep=fake_clock.sleep))
+
+    assert ywd._craft_from_lack() is True
+
+    # 第一次循环未见到开始按钮、愿望单需求标签命中；第二次才拿到开始按钮
+    assert len(start_button_calls) == 2
+    assert any(template_path == ywd.tpl_wish_label and kwargs == {"timeout": 0.85}
+               for template_path, _args, kwargs in find_calls), "标签仍须保留用于确认生产界面"
+
+    qty_pos = (COOK_POS[0] + ywd.QTY_BUTTON_OFFSET[0],
+               COOK_POS[1] + ywd.QTY_BUTTON_OFFSET[1])
+    old_card_select_pos = (WISH_LABEL_POS[0], WISH_LABEL_POS[1] + OLD_WISH_SELECT_OFFSET_Y)
+    assert clicks == [
+        (ARROW_POS, 1.0, False),
+        (qty_pos, 1.0, False),
+        (qty_pos, 1.0, False),
+        (COOK_POS, 1.0, False),
+    ]
+    assert old_card_select_pos not in [pos for pos, _wait, _twice in clicks], \
+        "点产品卡片会打开制作配方，补货流程不应出现该点击"

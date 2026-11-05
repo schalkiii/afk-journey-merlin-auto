@@ -5,6 +5,7 @@ from common import (
     find_center_silent,
     get_template_path,
     random_sleep,
+    recover_to_main_interface,
     send_coord,
     wait_and_click,
 )
@@ -41,6 +42,14 @@ def flow_pata():
     8. 调用 jiance.py 检测礼包
     9. 结束脚本
     """
+    # 0. 先回到主界面：任务可能从上个任务的子页面开始，子页底部同样有 wanfamulu 图标，
+    # 直接点击会被误判成功，随后在子页里找不到 pata。
+    # 恢复失败不改变原有失败语义，仍按原流程继续尝试进入玩法目录。
+    if recover_to_main_interface():
+        print("已回到主界面，开始进入玩法目录。")
+    else:
+        print("恢复主界面失败，继续尝试进入玩法目录。")
+
     # 1. 点击 wanfamulu 进入玩法目录界面
     if not wait_and_click(tpl_wanfamulu, "wanfamulu", 0.7, recover_threshold=20,
                           client_region=BOTTOM_BAR_CLIENT_REGION):
