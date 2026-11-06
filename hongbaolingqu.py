@@ -45,15 +45,23 @@ from common import (
 tpl_caidan = get_template_path("caidan.png")
 tpl_wanfamulu = get_template_path("wanfamulu.png")
 tpl_gonghuiwanfaactive = get_template_path("gonghuiwanfaactive.png")
+tpl_jieshezhanxian = get_template_path("jieshezhanxian.png")
 tpl_gonghuizhengfa = get_template_path("gonghuizhengfa.png")
 tpl_huodejiangli = get_template_path("huodejiangli.png")
 tpl_exitck = get_template_path("exitck.png")
 
 # 公会征伐（公会玩法页左上卡片 → 战备阶段）固定点位（客户区 1600×900 实测）
-GUILD_WAR_TAB_POS = (797, 786)
-GUILD_WAR_CARD_POS = (594, 214)
-GUILD_WAR_MILESTONE_POS = ((555, 148), (711, 148), (867, 148), (1008, 148), (1156, 148))
+# 页签必须点「公会玩法」的标签本体 (844,786)，点 797 会落在常规玩法的边缘；
+# 页签与卡片点击后分别用「结社战线」卡片和「战备阶段」标题自证。
+GUILD_WAR_TAB_POS = (844, 786)
+GUILD_WAR_CARD_POS = (639, 300)
+GUILD_WAR_DAILY_TAB = (844, 883)
+# 里程碑一行 5 个节点（40/80/120/160/200）。2026-11-06 在「每日军令」页按 1600×900
+# 截图重测：节点中心 x≈528/670/810/950/1120、y≈138；旧值整体偏右 25–55px，点 160/200
+# 档时压在节点边缘。已领节点只显示绿色对勾，点它无副作用，所以全部逐点最稳。
+GUILD_WAR_MILESTONE_POS = ((528, 138), (670, 138), (810, 138), (950, 138), (1120, 138))
 GUILD_WAR_CHOOSE_POS = (1164, 203)
+GUILD_WAR_DAILY_ROW_POS = ((406, 305), (406, 430), (406, 555), (406, 695))
 tpl_renwu = get_template_path("renwu.png")
 # 任务面板下方 HUD 快捷栏的「日常任务」入口（客户区固定 1600×900 实测图标中心）。
 # 不能靠「日常任务」文字模板定位：底栏几个图标文字灰度相近，实测会误匹配到「赛季任务」。
@@ -663,19 +671,24 @@ def _claim_guild_war():
         return 0
     time.sleep(1.2)
     x0, y0, _w, _h = game_client_region()
+    # 页签标签单击可能被吞，点两下并用「结社战线」卡片确认确实在公会玩法页
     click_position((x0 + GUILD_WAR_TAB_POS[0], y0 + GUILD_WAR_TAB_POS[1]),
-                   wait=1.5, twice=False)
-    if not find_center_silent(tpl_gonghuiwanfaactive, 0.9, timeout=2.0):
+                   wait=1.5, twice=True)
+    if not find_center_silent(tpl_jieshezhanxian, 0.8, timeout=2.0):
         log("未能切到公会玩法页，跳过公会征伐奖励。")
         recover_to_main_interface()
         return 0
 
-    click_position((x0 + GUILD_WAR_CARD_POS[0], y0 + GUILD_WAR_CARD_POS[1]),
-                   wait=2.0, twice=False)
-    if not find_center_silent(tpl_gonghuizhengfa, 0.8, timeout=3.0):
-        log("未打开公会征伐面板，跳过。")
-        recover_to_main_interface()
-        return 0
+    for attempt in range(1, 3):
+        x0, y0, _w, _h = game_client_region()
+        click_position((x0 + GUILD_WAR_CARD_POS[0], y0 + GUILD_WAR_CARD_POS[1]),
+                       wait=2.0, twice=False)
+        if find_center_silent(tpl_gonghuizhengfa, 0.8, timeout=3.0):
+            break
+        if attempt == 2:
+            log("未打开公会征伐面板，跳过。")
+            recover_to_main_interface()
+            return 0
 
     claimed = 0
     for point in GUILD_WAR_MILESTONE_POS + (GUILD_WAR_CHOOSE_POS,):
@@ -685,7 +698,21 @@ def _claim_guild_war():
         if find_center_silent(tpl_huodejiangli, 0.8, timeout=1.0):
             dismiss_popup_away_from()
             claimed += 1
-    log(f"公会征伐：领取里程碑奖励 {claimed} 项。")
+
+    # 每日军令：完成的任务行左侧有奖励宝箱，点一下即入账；未完成的点左
+    # 不会触发「前往」，所以可以安全逐行试点。
+    x0, y0, _w, _h = game_client_region()
+    click_position((x0 + GUILD_WAR_DAILY_TAB[0], y0 + GUILD_WAR_DAILY_TAB[1]),
+                   wait=1.5, twice=True)
+    for point in GUILD_WAR_DAILY_ROW_POS:
+        check_stop()
+        x0, y0, _w, _h = game_client_region()
+        click_position((x0 + point[0], y0 + point[1]), wait=1.0, twice=False)
+        if find_center_silent(tpl_huodejiangli, 0.8, timeout=1.0):
+            dismiss_popup_away_from()
+            claimed += 1
+
+    log(f"公会征伐：领取战备里程碑/每日军令奖励 {claimed} 项。")
     wait_and_click(tpl_exitck, "exitck(公会征伐)", 0.8, timeout=3.0)
     recover_to_main_interface()
     return claimed

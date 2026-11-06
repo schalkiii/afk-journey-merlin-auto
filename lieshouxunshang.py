@@ -2,9 +2,10 @@
 """狩猎悬赏每日流程：用掉自己的「搜寻精怪」次数，再用「加入」参加队友的悬赏。
 
 流程（自主界面起）：
-1. flow_enter_guild_play 点「狩猎悬赏」卡片——该卡片只做一件事：把角色传送进公会大厅；
-2. 大厅里再点「狩猎悬赏」招牌才进悬赏面板（招牌是 2D 贴字，传送后镜头未停稳时会漂移，
-   故先轮询等它出现，点一次没进面板就重找再点一次）；
+1. flow_enter_guild_play 点「狩猎悬赏」卡片：新版入口直接打开悬赏面板；旧入口会先
+   传送进公会大厅，需再点大厅里的「狩猎悬赏」招牌进入面板——两种落地都兼容；
+2. 进面板时可能先弹「狩猎成功」结算/「获得奖励」：在「点击空白处关闭」提示中心连点
+   （第一次领奖、第二次关闭），回到可交互的悬赏面板；
 3. 悬赏面板：循环点「搜寻精怪」直到按钮变灰（自己次数用尽），每次抽完关掉「发现悬赏目标」结算；
 4. 循环在卡片网格里找「加入」按钮并点击，直到找不到（参加次数用尽或已无可参加的悬赏）；
 5. 退出到主界面。
@@ -62,43 +63,70 @@ def _find(template, threshold=MATCH_THRESHOLD, timeout=0):
 
 
 def _enter_panel():
-    """点卡片传送进公会大厅 → 点大厅招牌 → 进入悬赏面板，成功返回 True。"""
+    """点卡片进入悬赏面板，成功返回 True。
+
+    2026-11-06 实测有两种落地：新版入口点卡片后直接进面板（公会大厅的狩猎悬赏招牌
+    不再出现），旧路径才是先传送到大厅再点招牌。只等招牌会白等 20 秒后误报「公会
+    大厅内未找到狩猎悬赏招牌」，故两种都接受。
+    """
     if not flow_enter_guild_play(tpl_card, "狩猎悬赏"):
         return False
+
+    # 先给面板标题 3 秒：直接落地的入口在这一步就能确认，不用白等招牌。
+    if _find(tpl_title, timeout=3.0) is not None:
+        _close_settlements()
+        return _wait_panel_ready()
 
     for _ in range(2):
         check_stop()
         hall_pos = find_center_silent(tpl_hall, MATCH_THRESHOLD, timeout=HALL_TIMEOUT)
         if hall_pos is None:
-            log("【狩猎悬赏】公会大厅内未找到狩猎悬赏招牌")
-            return False
+            break
         click_position(hall_pos, SETTLE_DELAY, twice=False)
         if _find(tpl_title, timeout=PANEL_TIMEOUT) is not None:
-            # 标题比卡片/按钮先渲染：等内容按钮就绪再返回，否则后面 timeout=0 的检测
-            # 会在面板还没加载完时直接判空（实测导致「搜寻 0 次、加入 0 次」）。
-            deadline = time.time() + 6.0
-            while time.time() < deadline:
-                if _find(tpl_search) is not None or _find(tpl_join, JOIN_THRESHOLD) is not None:
-                    return True
-                time.sleep(0.5)
-            log("【狩猎悬赏】面板内容加载较慢，按已进入处理")
-            return True
-    log("【狩猎悬赏】点招牌后未进入悬赏面板")
+            _close_settlements()
+            return _wait_panel_ready()
+    log("【狩猎悬赏】公会大厅内未找到狩猎悬赏招牌")
     return False
 
 
+def _wait_panel_ready():
+    """面板标题已出现后，等内容按钮就绪，避免后面 timeout=0 的检测在加载中直接判空。"""
+    deadline = time.time() + 6.0
+    while time.time() < deadline:
+        if _find(tpl_search) is not None or _find(tpl_join, JOIN_THRESHOLD) is not None:
+            return True
+        time.sleep(0.5)
+    log("【狩猎悬赏】面板内容加载较慢，按已进入处理")
+    return True
+
+
 def _close_settlements():
-    """关掉抽取结算弹窗（可能连弹两层），直到面板标题重新可见。"""
+    """关掉结算弹窗（可能连弹两层），直到「点击空白处关闭」提示消失且面板标题可见。
+
+    提示中心与「搜寻精怪」按钮热区只差 2 像素，直接点中心可能多抽一次，故优先点提示
+    左上方的空白。但入口的「狩猎成功」结算与「获得奖励」弹窗点空白无效——必须在提示
+    中心连点：第一次领奖（弹出获得奖励）、第二次关闭（2026-11-06 实机确认）。
+    """
+    tpl_hint = get_template_path("dianjikongbaichuguanbi.png")
+    hint_center_tried = False
     for _ in range(MAX_POPUP_CLOSES):
         check_stop()
-        if _find(tpl_title) is not None:
-            # 点击后弹窗有短暂延迟：标题仍可见时再确认一次，避免提前返回把弹窗留在界面上
-            time.sleep(0.4)
-            if _find(tpl_title) is not None:
-                return True
-        if not dismiss_popup_away_from():
-            time.sleep(1.0)
-    return _find(tpl_title) is not None
+        if _find(tpl_hint) is None and _find(tpl_title) is not None:
+            return True
+        if not hint_center_tried and dismiss_popup_away_from():
+            time.sleep(0.8)
+            if _find(tpl_hint) is None:
+                return _find(tpl_title) is not None
+            hint_center_tried = True
+            continue
+        hint_pos = _find(tpl_hint)
+        if hint_pos is None:
+            time.sleep(0.5)
+            continue
+        click_position(hint_pos, SETTLE_DELAY, twice=False)
+        time.sleep(0.8)
+    return _find(tpl_hint) is None
 
 
 def _use_own_searches():

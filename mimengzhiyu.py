@@ -112,6 +112,24 @@ def close_result_popups(timeout=10.0):
     return ok
 
 
+def _ensure_mimeng_main(timeout=12.0):
+    """从排行榜 / 奖励面板 / 结算页回到可点「挑战」的迷梦主界面。
+
+    实测领完排行榜礼包后，只点一次空白并不能回到主界面：要先关掉奖励弹窗，
+    再点返回按钮，挑战按钮才会重新出现。这里循环「空白 → 返回」，直到挑战可见。
+    """
+    start = time.time()
+    while time.time() - start < timeout:
+        if find_center_silent(tpl_tiaozhan, 0.8, timeout=0.5):
+            return True
+        if wait_and_click(tpl_exitck, "exitck(迷梦返回)", 0.8, timeout=1.5):
+            time.sleep(0.5)
+            continue
+        dismiss_popup_away_from()
+        time.sleep(0.5)
+    return bool(find_center_silent(tpl_tiaozhan, 0.8, timeout=0.5))
+
+
 def _claim_rank_gift():
     """领取迷梦排行榜右上角的礼包奖励。
 
@@ -137,7 +155,7 @@ def _claim_rank_gift():
                     dismiss_popup_away_from()
                     claimed = True
                 break
-    wait_and_click(tpl_exitck, "exitck(ranking)", 0.8, timeout=3.0)
+    _ensure_mimeng_main()
     log("【迷梦之域】已领取排行榜礼包。" if claimed else "【迷梦之域】排行榜里没有可领礼包。")
     return claimed
 
@@ -313,6 +331,9 @@ def flow_mimengzhiyu(challenge_count=None, auto_configure_lineup=False,
                 print("【迷梦之域】已自动采用通关阵容。")
             else:
                 print("【迷梦之域】未检测到通关阵容入口，跳过自动配置。")
+        if not _ensure_mimeng_main():
+            print("无法回到迷梦主界面（挑战按钮未出现），流程结束。")
+            return False
         if not wait_and_click(tpl_tiaozhan, "tiaozhan", 0.8):
             print("点击 tiaozhan 失败，迷梦之域流程结束。")
             return False

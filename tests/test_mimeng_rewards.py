@@ -21,6 +21,9 @@ def _stub_claim_seams(monkeypatch, hits, rank_panel=False, rank_reward=False):
             return (100, 100) if rank_panel else None
         if template_path == mm.tpl_huodejiangli:
             return (200, 200) if rank_reward else None
+        # 挑战按钮可见 = 已回到迷梦主界面，让新增的 _ensure_mimeng_main 立即收敛
+        if template_path == mm.tpl_tiaozhan:
+            return (300, 300)
         hit = hits.get(client_region)
         if hit and hit[0] == template_path:
             return hit[1]
@@ -74,7 +77,9 @@ def test_claim_rank_gift_clicks_popup_and_returns(monkeypatch):
     assert clicks[0] == ((2216, 590), 1.5, False)   # 排行榜入口
     assert clicks[1] == ((2163, 562), 1.2, False)   # 右上角礼包
     assert closes == ["close"]
-    assert waits == [(mm.tpl_exitck, "exitck(ranking)", 3.0)]
+    # 领完后统一走 _ensure_mimeng_main：挑战按钮已可见即收敛，不再单独发 exitck
+    assert waits == []
+    assert (mm.tpl_tiaozhan, None) in finds
     # 领到之后不再走旧的右上角区域探测
     assert all(region is None for _tpl, region in finds)
 

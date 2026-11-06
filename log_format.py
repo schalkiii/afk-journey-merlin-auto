@@ -50,6 +50,45 @@ def current_task():
     return _task
 
 
+# 日志里的模板/动作拼音名统一标注成「中文(拼音)」：模板文件名保持拼音不动，
+# 日志既可读，又能对应回模板文件。只在出口做一次，各流程模块的 print 措辞不用逐个改。
+# 已由 common.display_name 转过的「中文(拼音)」前邻 "("、后邻 ")"，此处跳过避免嵌套；
+# 紧邻 "/" 或后接 "." 的是文件路径/文件名（如 templates/pujing.png），也保持原样。
+_PINYIN_PATTERN = None
+_PINYIN_MAP = None
+
+
+def _pinyin_rule():
+    """懒加载拼音名替换正则：避免 log_format 在导入阶段就拉起 common 的重依赖。"""
+    global _PINYIN_PATTERN, _PINYIN_MAP
+    if _PINYIN_PATTERN is None:
+        from common import TEMPLATE_CN
+
+        _PINYIN_MAP = TEMPLATE_CN
+        names = sorted(TEMPLATE_CN, key=len, reverse=True)
+        _PINYIN_PATTERN = re.compile(
+            r"(?<![A-Za-z0-9_])(?:" + "|".join(re.escape(name) for name in names)
+            + r")(?![A-Za-z0-9_])"
+        )
+    return _PINYIN_PATTERN, _PINYIN_MAP
+
+
+def _translate_names(body):
+    """把正文里的模板/动作拼音名改成「中文(拼音)」，其它字符原样保留。"""
+    pattern, name_map = _pinyin_rule()
+
+    def render(match):
+        start, end = match.span()
+        name = match.group(0)
+        prev_ch = body[start - 1] if start > 0 else ""
+        next_ch = body[end] if end < len(body) else ""
+        if (prev_ch and prev_ch in "(/\\") or (next_ch and next_ch in ".)"):
+            return name
+        return f"{name_map[name]}({name})"
+
+    return pattern.sub(render, body)
+
+
 def _compress(body):
     """命中高频行规则就改写，否则原样返回。"""
     for pattern, render in _RULES:
@@ -72,6 +111,7 @@ def format_body(text):
             body = f"{tagged['tag']} {rest}"
     else:
         body = _compress(body)
+    body = _translate_names(body)
     if body.startswith(BOUNDARY_MARKS):
         return body
     return f"{DETAIL_MARK}{body}" if _task else body

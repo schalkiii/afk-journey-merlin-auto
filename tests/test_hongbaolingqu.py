@@ -357,19 +357,21 @@ def _stub_main(monkeypatch):
                         lambda: calls.append("laurel") or 1)
     monkeypatch.setattr(hb, "_sweep_progress_milestones",
                         lambda: calls.append("idle") or 1)
+    monkeypatch.setattr(hb, "_claim_guild_war",
+                        lambda: calls.append("guild_war") or 0)
     return calls
 
 
 def test_main_skips_season_book_when_disabled(monkeypatch):
     calls = _stub_main(monkeypatch)
     assert hb.main({"claim_season_book": False}) is True
-    assert calls == ["task_panel", "laurel", "idle"]
+    assert calls == ["task_panel", "laurel", "idle", "guild_war"]
 
 
 def test_main_skips_laurel_and_idle_when_disabled(monkeypatch):
     calls = _stub_main(monkeypatch)
     assert hb.main({"claim_laurel": False, "claim_idle": False}) is True
-    assert calls == ["task_panel", "season_book"]
+    assert calls == ["task_panel", "season_book", "guild_war"]
 
 
 def test_main_skips_task_panel_when_all_its_switches_off(monkeypatch):
@@ -380,7 +382,7 @@ def test_main_skips_task_panel_when_all_its_switches_off(monkeypatch):
     params = {key: False for key in hb.TASK_PANEL_KEYS}
     assert hb.main(params) is True
     assert opened == [], "任务面板相关开关全关时不应再去打开面板"
-    assert calls == ["season_book", "laurel", "idle"]
+    assert calls == ["season_book", "laurel", "idle", "guild_war"]
 
 
 def test_main_all_switches_off_returns_true_and_logs_once(monkeypatch):

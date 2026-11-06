@@ -1277,6 +1277,10 @@ class GameBotGUI:
 
     def start_all(self):
         """按功能列表当前顺序运行全部已勾选的功能。"""
+        self._reset_stale_run_state()
+        if self.is_running:
+            messagebox.showwarning("提示", "已有任务在运行中，请先停止 (F9)。")
+            return
         enabled_scripts = [s for s in self.scripts if s.enabled]
         if not enabled_scripts:
             messagebox.showwarning("警告", "没有启用任何脚本！")
@@ -1286,6 +1290,7 @@ class GameBotGUI:
 
     def run_single_script(self):
         """只运行当前选中的这一个功能，忽略其它勾选：便于逐项验证或补跑漏掉的一天。"""
+        self._reset_stale_run_state()
         if self.is_running:
             messagebox.showwarning("提示", "已有任务在运行中，请先停止 (F9)。")
             return
@@ -1329,7 +1334,22 @@ class GameBotGUI:
             args=(scripts_to_run, respect_enabled),
         )
         thread.daemon = True
+        self._run_thread = thread
         thread.start()
+
+    def _reset_stale_run_state(self):
+        """上次运行线程已结束但 is_running 未复位时，自动清理，避免误报「请先按 F9」。
+
+        历史 bug：任务切换兜底（关闭礼包/回主界面）在 try 之外抛出异常时，
+        工作线程直接退出，末尾的 stop_all 没执行，is_running 永远停在 True。
+        """
+        thread = getattr(self, "_run_thread", None)
+        if self.is_running and (thread is None or not thread.is_alive()):
+            self.log("检测到上次运行线程已结束但运行状态未复位，已自动清理")
+            self.is_running = False
+            self.update_master_button()
+            self._clear_pending_statuses()
+            self._set_current_task("无")
         
     def stop_all(self):
         self.stop_event.set()
@@ -1857,11 +1877,11 @@ class GameBotGUI:
             # 1) 先关闭上一任务残留的礼包广告 / 结算 / 战斗失败弹窗；
             # 2) 再确保已回到主界面（wanfamulu 可见）。若上一任务卡在子界面未退出，
             #    逐层退出回到主界面，避免本次 wanfamulu 检测失败、连锁卡死后续所有任务。
-            common.dismiss_popup()
-            if script.name != "登录":
-                common.ensure_main_interface()
-
             try:
+                common.dismiss_popup()
+                if script.name != "登录":
+                    common.ensure_main_interface()
+
                 # 检查是否需要停止
                 if self.stop_event.is_set():
                     script.status = "已停止"

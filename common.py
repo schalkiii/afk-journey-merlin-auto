@@ -1048,11 +1048,19 @@ def at_main_interface(threshold=0.8):
     return True
 
 
+# 「巅峰联赛」活动介绍页遮挡主界面时的兜底点位（客户区相对坐标）。
+# 该页没有关闭按钮，只能先点卡片外的模糊背景尝试退出；仍不消失就点「进入巅峰联赛」
+# 进活动页，再由 recover_to_main_interface 的 exitck/exit 逐层退回。
+# 卡片横跨 x≈340–1270，故左侧 150 一定落在卡片外。
+PROMO_OUTSIDE_POS = (150, 450)
+
+
 def recover_to_main_interface(max_tries=8):
     """兜底回主界面：任务卡在某界面（弹窗 / 子界面）反复检测不到目标时使用。
 
     依次尝试点击「点击空白处关闭」(dianjikongbaichuguanbi)、tuichulibao（退出礼包）、
     exitck、exit（返回上一层），逐层从卡住处退出，直到 `at_main_interface()` 成立。
+    「巅峰联赛」活动介绍页没有关闭按钮，单独用「点卡片外空白 → 点进入按钮」处理。
     无任何退出按钮时点击屏幕空白处兜底。供 wait_and_click 的兜底恢复与
     任务切换前的 ensure_main_interface 复用，避免把游戏停在中间界面导致后续任务卡死。
     """
@@ -1060,13 +1068,31 @@ def recover_to_main_interface(max_tries=8):
     tpl_close = get_template_path("dianjikongbaichuguanbi.png")
     tpl_tuichulibao = get_template_path("tuichulibao.png")
     tpl_exitck = get_template_path("exitck.png")
+    tpl_promo = get_template_path("dianfengliansai.png")
     # 退出按钮尝试顺序：先关弹窗（空白关闭 / 退出礼包 / exitck），再返回上一层
     exit_templates = [tpl_close, tpl_tuichulibao, tpl_exitck, tpl_exit]
+    promo_outside_tried = False
 
     for _ in range(max_tries):
         check_stop()
         if at_main_interface():
             return True
+        # 2026-11-06 失败现场：活动介绍页盖住主界面时模板全被遮挡，逐层退出点不到任何按钮。
+        # 该页无关闭按钮，先试「点卡片外空白关闭」；仍在则点「进入巅峰联赛」进活动页，
+        # 由后续轮次用 exitck/exit 退出活动页，避免停在介绍页让整个任务失败。
+        promo_pos = find_center_silent(tpl_promo, 0.8)
+        if promo_pos:
+            if promo_outside_tried:
+                click_position(promo_pos, wait=2.0, twice=False)
+            else:
+                promo_outside_tried = True
+                region = game_client_region()
+                origin_x, origin_y = (region[0], region[1]) if region else (0, 0)
+                click_position(
+                    (origin_x + PROMO_OUTSIDE_POS[0], origin_y + PROMO_OUTSIDE_POS[1]),
+                    wait=1.5, twice=False,
+                )
+            continue
         clicked = False
         for tpl in exit_templates:
             pos = find_center_silent(tpl, 0.8)
@@ -1149,6 +1175,88 @@ def try_auto_configure_lineup(threshold=0.8, retries=3):
 
 class ClickerNotRunning(RuntimeError):
     """click_from_file.exe 已退出，坐标不再被消费——点击全部落空。"""
+
+
+# 日志里给人看的模板中文名：键是模板/动作的拼音名，值是中文。
+# 模板文件名保持拼音不动，日志输出成「中文(拼音)」，排查时仍能一眼对上文件名。
+TEMPLATE_CN = {
+    "wanfamulu": "玩法目录", "caidan": "菜单", "renwu": "任务",
+    "pujing": "竞技场", "pujingzhandou": "竞技场战斗",
+    "pujingjixutiaozhan": "竞技场继续挑战", "pujingjieshu": "竞技场结算",
+    "kaishitiaozhan": "开始挑战", "mianfeimenpiao": "免费门票",
+    "fufeimenpiao": "付费门票", "querengoumaimenpiao": "确认购买门票",
+    "bumaifufeimenpiao": "不买付费门票",
+    "zhandou": "战斗", "tiaoguo": "跳过", "tiaoguozhandou": "跳过战斗",
+    "guajiguanqia": "挂机关卡", "advance": "挂机关卡", "huanlingcha": "幻灵挑战",
+    "guajijixian": "挂机极限", "huidaoguaji": "回到挂机", "tuichulibao": "退出礼包",
+    "exit": "返回", "exitck": "返回按钮", "fanhui": "返回",
+    "dianjikongbaichuguanbi": "点击空白处关闭", "libao": "礼包",
+    "huodejiangli": "获得奖励", "lingqu": "领取", "yijianlingqu": "一键领取",
+    "baoxiang_full": "宝箱", "shouhuojiangli": "收获奖励",
+    "mimengzhiyu": "迷梦之域", "mimengpaiming": "迷梦排行榜",
+    "tiaozhan": "挑战", "cishubugou": "次数不足", "goumaimimeng": "购买迷梦次数",
+    "pata": "爬塔", "towerjixian": "爬塔极限", "tower": "爬塔",
+    "yaoguangzhita": "光辉之塔", "ziranzhita": "自然之塔",
+    "manxuezhita": "不朽之塔", "wanglingzhita": "意志之塔",
+    "nvshenta": "女神塔", "mimeng": "迷梦",
+    "jieshezhanxian": "结社战线", "lieshouxunshang": "狩猎悬赏",
+    "gonghuiwanfa": "公会玩法", "gonghuiwanfaactive": "公会玩法(选中)",
+    "gonghuizhengfa": "公会征伐", "saijijieduanpaiming": "赛季阶段排名",
+    "shoutongjiangli": "首通奖励", "dianfengjingjichang": "巅峰竞技场",
+    "dianfengliansai": "巅峰联赛",
+    "dianfengjixutiaozhan": "巅峰竞技场继续挑战",
+    "dianfengxuanzeduishou": "选择对手", "dianfengtiaozhan": "挑战他",
+    "dianfengbianji": "编辑下一场", "dianfengzhandou": "巅峰竞技场战斗",
+    "fail": "战斗失败", "repeat": "再次挑战",
+    "yuanwangdan": "愿望单", "xinyuandanbiaoti": "愿望单标题",
+    "yijianxuanze": "一键选择", "jiaofu": "交付",
+    "fanfanle": "翻翻乐", "zengjiajindu": "增加进度",
+    "yingxiongtingtang": "英雄厅堂", "yingxiongtingtang_tab": "英雄厅堂页签",
+    "kuaisushengji": "快速升级",
+    "shangcheng": "商城", "youyishangcheng": "友谊商城",
+    "youjian": "邮件", "haoyou": "好友", "yijianzengli": "一键赠礼",
+    "shouqu": "收曲", "migong": "迷宫", "warehouse": "仓库",
+    # 今日日志中仍以拼音出现的其余模板/动作名（模板文件名保持不变）
+    "yueduquanbu": "阅读全部", "notyueduquanbu": "未读全部",
+    "notyijianzengli": "未赠礼",
+    "tiaozhanonly": "仅挑战", "jixutiaozhan": "继续挑战",
+    "exit_final": "最终返回", "shoutongyijianlingqu": "首通一键领取",
+    "guajijiangli": "挂机奖励", "guajituoguan": "挂机托管",
+    "shalou1": "沙漏·可买3次", "shalou2": "沙漏·可买2次", "shalou3": "沙漏·可买1次",
+    "shalou4": "沙漏·免费结束", "shalou5": "沙漏·已付费1次", "shalou6": "沙漏·已付费2次",
+    "nvshentasaodang": "女神塔扫荡", "nvshentasaodangmax": "女神塔最大扫荡",
+    "nvshentasaodang_confirm": "女神塔扫荡确认", "nvshentasaodangwancheng": "女神塔扫荡完成",
+    "nvshentaxiayiceng": "女神塔下一层", "nvshentazhandoubiaoji": "女神塔战斗标记",
+    "nvshentiaozhan": "女神塔挑战", "nvshentahuiji": "女神塔回击",
+    "jieshesaodang": "结社扫荡", "jieshesaodangmax": "结社最大扫荡",
+    "jieshesaodang_confirm": "结社扫荡确认", "jieshesaodangbtn": "结社扫荡按钮",
+    "jieshesaodangguanqia": "结社扫荡关卡", "jieshesaodangwancheng": "结社扫荡完成",
+    "jieshetiaozhan": "结社挑战", "jieshejixutiaozhan": "结社继续挑战",
+    "jiesheshibai": "结社失败", "jieshengli": "结社胜利",
+    "kaishipengren": "开始烹饪", "kaishiduanzao": "开始锻造", "kaishilianjin": "开始炼金",
+    "goumai50": "购买50", "goumai100": "购买100",
+    "saijishouchuo": "赛季手册", "saijilichengbei": "赛季里程碑",
+    "yuekajiangli": "月卡奖励", "meirirenwujiangli": "每日任务奖励", "richangrenwu": "日常任务",
+    "tongguanzhenrong": "通关阵容", "yijiancaiyong": "一键采用",
+    "zidongtiaozhanzhong": "自动挑战中",
+    "xinyuandanbuzu": "愿望单资源不足", "xinyuandanwancheng": "愿望单完成",
+    "xinyuandanxuqiu": "愿望单需求", "yuanwangdanjindu": "愿望单进度",
+    "tujingjiantou": "途径箭头",
+}
+
+
+def display_name(name):
+    """把日志里的拼音模板名转成「中文(拼音)」，未收录的原样返回。
+
+    调用方传入的 name 可能带后缀（如 ``kuaisushengji(2)``），只翻译括号前的基名，
+    后缀原样保留，避免破坏重试序号等信息。
+    """
+    text = str(name)
+    base = text.split("(")[0]
+    cn = TEMPLATE_CN.get(base)
+    if not cn:
+        return text
+    return f"{cn}({base}){text[len(base):]}"
 
 
 # 连续多少次坐标未被消费才判定点击器已退出：偶发的一次超时（窗口卡顿、系统繁忙）不算故障
@@ -1427,7 +1535,7 @@ def wait_and_click(template_path, name, threshold=0.8, timeout=None,
         pos = find_center(template_path, threshold=threshold,
                           region=region, client_region=client_region)
         if pos:
-            print(f"{name} 识别成功，第 {attempt} 次，坐标: {pos}，发送给 AHK 点击")
+            print(f"{display_name(name)} 识别成功，第 {attempt} 次，坐标: {pos}，发送给 AHK 点击")
             send_coord(*pos)
             invalidate_screenshot_cache()
             return True
@@ -1438,7 +1546,7 @@ def wait_and_click(template_path, name, threshold=0.8, timeout=None,
         if recover_threshold and miss_count >= recover_threshold and recover_count < max_recoveries:
             miss_count = 0
             recover_count += 1
-            log(f"{name} 连续 {recover_threshold} 次未检测到，触发兜底回主界面（第 {recover_count} 次）")
+            log(f"{display_name(name)} 连续 {recover_threshold} 次未检测到，触发兜底回主界面（第 {recover_count} 次）")
             if recover_func is not None:
                 recover_func()
             else:
@@ -1447,10 +1555,10 @@ def wait_and_click(template_path, name, threshold=0.8, timeout=None,
 
         elapsed = time.time() - start_time
         if elapsed > wait_time:
-            print(f"{name} 在 {wait_time} 秒内未出现，放弃等待。")
+            print(f"{display_name(name)} 在 {wait_time} 秒内未出现，放弃等待。")
             return False
 
-        print(f"{name} 第 {attempt} 次未找到，{INTERVAL} 秒后重试（已等待 {elapsed:.1f} 秒）...")
+        print(f"{display_name(name)} 第 {attempt} 次未找到，{INTERVAL} 秒后重试（已等待 {elapsed:.1f} 秒）...")
         time.sleep(INTERVAL)
 
 

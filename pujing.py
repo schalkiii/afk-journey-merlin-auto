@@ -2,6 +2,7 @@ import time
 
 from common import (
     BOTTOM_BAR_CLIENT_REGION,
+    display_name,
     find_center_silent,
     get_template_path,
     random_sleep,
@@ -66,12 +67,12 @@ def wait_for_any(templates, threshold=0.8, timeout=MAX_BATTLE_TIME, interval=0.5
         for template_path, name in templates:
             pos = find_center_silent(template_path, threshold)
             if pos:
-                print(f"{name} 出现，第 {attempt} 次检测，坐标: {pos}")
+                print(f"{display_name(name)} 出现，第 {attempt} 次检测，坐标: {pos}")
                 return template_path, name, pos
 
         elapsed = time.time() - start
         if elapsed > timeout:
-            names = " / ".join([n for _, n in templates])
+            names = " / ".join([display_name(n) for _, n in templates])
             print(f"{names} 在 {timeout} 秒内未出现，放弃等待。")
             return None
 
@@ -108,7 +109,7 @@ def find_leftmost(templates, threshold=0.8):
     }
     name = name_map.get(template_path, "unknown")
     
-    print(f"找到最左边且最下面的战斗按钮: {name}, 坐标: {pos}")
+    print(f"找到最左边且最下面的战斗按钮: {display_name(name)}, 坐标: {pos}")
     return template_path, name, pos
 
 def flow_pujing():
@@ -166,11 +167,11 @@ def flow_pujing():
         )
 
         if hit is None:
-            print("未找到挑战按钮，普晶流程结束。")
-            return False
+            print("未找到挑战按钮，按次数用尽结束。")
+            return True
 
         hit_tpl, hit_name, hit_pos = hit
-        print(f"点击 {hit_name}")
+        print(f"点击 {display_name(hit_name)}")
         send_coord(hit_pos[0], hit_pos[1])
         random_sleep()
 
@@ -233,7 +234,7 @@ def flow_pujing():
                     return False
 
                 hit_tpl, hit_name, hit_pos = hit
-                print(f"点击 {hit_name}")
+                print(f"点击 {display_name(hit_name)}")
                 send_coord(hit_pos[0], hit_pos[1])
                 random_sleep()
 
@@ -315,7 +316,20 @@ def execute_battle_flow(battle_tpl, battle_name, battle_pos):
     send_coord(pos[0], pos[1])
     random_sleep()
 
-    # 回到挑战界面，继续循环
+    # 结算点击可能被窗口激活/动画吞掉：最多补点两次，并确认真的回到挑战界面。
+    # 找不到挑战按钮但已经不在结算页时，往往只是次数用尽，交给主循环按正常结束处理。
+    for attempt in range(1, 3):
+        if find_center_silent(tpl_kaishitiaozhan, 0.8, timeout=8) or \
+                find_center_silent(tpl_pujingjixutiaozhan, 0.8, timeout=0):
+            return True
+        if find_center_silent(tpl_pujingjieshu, 0.8, timeout=0):
+            print(f"结算页仍在，补点 pujingjieshu（第 {attempt} 次）。")
+            send_coord(pos[0], pos[1])
+            random_sleep()
+        else:
+            # 可能弹了段位/奖励弹窗，先清掉再看
+            check_and_handle_libao()
+            random_sleep()
     return True
 
 if __name__ == "__main__":

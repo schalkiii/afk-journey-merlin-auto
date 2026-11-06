@@ -215,23 +215,23 @@ def test_claim_reward_clicks_gift_template_when_it_hits(monkeypatch):
 def test_claim_reward_falls_back_to_label_offset(monkeypatch):
     """其它档位（青色宝石）模板跨不了档：退回「标题锚点 + GIFT_CLICK_OFFSET」。
 
-    坐标按 2026-11-04 重量结果写死（礼盒 486,56 / 标题 418,31）；原值 (120, 40) 落在礼盒
-    右侧约 55px 空白处，进度奖励一直没被领到，故这里刻意不复用常量做断言。
+    坐标按 2026-11-06 实机重测结果写死（礼盒 480,66 / 标题 418,31，偏移 (62,35)）；
+    旧偏移 (68,25) 落在礼盒上缘，进度奖励一直没被领到，故这里刻意不复用常量做断言。
     """
     clicks, closes, lookups = _stub_claim(monkeypatch, None, (3200, 700))
 
     assert ywd._claim_reward(LABEL_POS) is True
-    assert clicks == [((2486, 156), 1.5)]
+    assert clicks == [((2480, 166), 1.5)]
     assert lookups[0][0] == ywd.tpl_gift
     assert closes == ["close"]
 
 
 def test_claim_reward_reports_failure_without_claim_popup(monkeypatch):
-    """点了礼盒但「获得奖励」弹窗没出现（无可领档位）：判未领取且不去关弹窗。"""
+    """点了礼盒但「获得奖励」弹窗没出现（无可领档位）：补点一次后判未领取且不关弹窗。"""
     clicks, closes, _lookups = _stub_claim(monkeypatch, None, None)
 
     assert ywd._claim_reward(LABEL_POS) is False
-    assert clicks == [((2486, 156), 1.5)]
+    assert clicks == [((2480, 166), 1.5), ((2480, 166), 1.5)]
     assert closes == []
 
 

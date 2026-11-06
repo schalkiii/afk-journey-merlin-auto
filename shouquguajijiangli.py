@@ -5,6 +5,7 @@ from common import (
     BOTTOM_BAR_CLIENT_REGION,
     find_center,
     get_templates_dir,
+    recover_to_main_interface,
     wait_and_click,
 )
 
@@ -138,6 +139,12 @@ def main(paid_times=0):
     # 4. 状态机处理shalou
     print("开始处理shalou状态...")
     paid_count = 0
+    # 刚点进挂机关卡页时界面仍在切换，shalou 图标可能一拍都没渲染出来；
+    # 直接判状态会在切换动画中误判「没有任何状态」并立刻结束任务（2026-11-06 日志）。
+    # 先轮询等到页面稳定再进状态机。
+    ready_deadline = time.time() + 8.0
+    while time.time() < ready_deadline and check_current_state() is None:
+        time.sleep(0.8)
     
     while True:
         current_state = check_current_state()
@@ -213,12 +220,13 @@ def main(paid_times=0):
         # 等待状态变化
         time.sleep(2)
     
-    # 点击exit退出
-    exit_path = os.path.join(templates_dir, "exit.png")
-    if not wait_and_click(exit_path, "exit"):
-        print("未找到exit，退出失败")
+    # 退出回主界面：挂机关卡页的返回是左下角箭头（exit），但不同入口落地页可能是
+    # exitck / fanhui；只等 exit 会在没有该模板的页面上白等 15 秒（2026-11-06 日志），
+    # 统一交给兜底恢复逐层退出。
+    if recover_to_main_interface():
+        print("已退出到主界面")
     else:
-        print("点击exit退出成功")
+        print("退出到主界面失败")
     
     print("收取挂机奖励任务执行完成！")
     return True

@@ -32,8 +32,12 @@ TOWER_ORDER = [
 # 「天穹试炼」卡片位于玩法目录第三行，卡片名称被底部页签栏遮住，
 # pata.png 的文本模板匹配不到（实测 15 秒超时）。这时按客户区固定点位点击
 # 卡片可见区域，再用任意一座塔的「出发」按钮确认已进入选择界面。
-# 数值取自实机 1600x900 截图（第三行首张卡片可见区域中心）。
-PATA_CARD_POS = (625, 700)
+# 2026-11-06 实机复测：旧点位 (625,700) 落在卡片下缘点不进去，
+# 改点 (625,650) 可稳定进入「赛季天穹试炼」选择页（四塔列表 + 出发按钮）。
+PATA_CARD_POS = (625, 650)
+
+# 固定点位点击的最多尝试次数：目录刚打开时仍有切换动画/推广弹窗，单次点击会被吞。
+PATA_ENTRY_RETRIES = 3
 
 
 def _pata_panel_open():
@@ -76,10 +80,20 @@ def flow_pata():
 
     # 2. 点击 pata 进入爬塔选择界面
     if not wait_and_click(tpl_pata, "pata", 0.8, timeout=3.0):
-        win_x, win_y, _w, _h = game_client_region()
-        click_position((win_x + PATA_CARD_POS[0], win_y + PATA_CARD_POS[1]),
-                       wait=1.5, twice=False)
-        if not _pata_panel_open():
+        # 卡名被页签栏遮挡时模板匹配不到，改按固定点位点击，并用塔的「出发」按钮自证。
+        # 目录刚打开时界面仍在切换、可能盖着推广弹窗，单次点击会被吞掉，
+        # 因此每轮重新取客户区原点并补点，最多 PATA_ENTRY_RETRIES 次。
+        entered = False
+        for attempt in range(1, PATA_ENTRY_RETRIES + 1):
+            region = game_client_region()
+            origin_x, origin_y = (region[0], region[1]) if region else (0, 0)
+            click_position((origin_x + PATA_CARD_POS[0], origin_y + PATA_CARD_POS[1]),
+                           wait=1.5, twice=False)
+            if _pata_panel_open():
+                entered = True
+                break
+            print(f"第 {attempt} 次点击「天穹试炼」卡片未进入选择界面，补点一次。")
+        if not entered:
             print("点击 pata 进入爬塔选择界面失败。")
             return False
         print("「天穹试炼」卡名被页签栏遮挡，已按固定卡片点位进入。")

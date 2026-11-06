@@ -25,16 +25,18 @@ def setup_function(_func):
 
 def test_hit_line_is_compressed():
     assert lf.format_body(
-        "caidan 识别成功，第 1 次，坐标: (3541, 958)，发送给 AHK 点击") == "命中 caidan (3541, 958) 第1次"
+        "caidan 识别成功，第 1 次，坐标: (3541, 958)，发送给 AHK 点击") == \
+        "命中 菜单(caidan) (3541, 958) 第1次"
 
 
 def test_retry_line_is_compressed():
     assert lf.format_body(
-        "wanfamulu 第 3 次未找到，0.5 秒后重试（已等待 1.3 秒）...") == "未命中 wanfamulu 第3次（已等 1.3s）"
+        "wanfamulu 第 3 次未找到，0.5 秒后重试（已等待 1.3 秒）...") == \
+        "未命中 玩法目录(wanfamulu) 第3次（已等 1.3s）"
 
 
 def test_giveup_line_is_compressed():
-    assert lf.format_body("renwu 在 5.0 秒内未出现，放弃等待。") == "放弃 renwu（5.0s 内未出现）"
+    assert lf.format_body("renwu 在 5.0 秒内未出现，放弃等待。") == "放弃 任务(renwu)（5.0s 内未出现）"
 
 
 def test_state_transition_line_is_compressed():
@@ -66,7 +68,14 @@ def test_blank_input_produces_empty_body():
 def test_module_tag_stays_at_line_start_after_compressing():
     """【模块名】不能被吞进短语中间——「放弃 【普竞】renwu（…）」这种行读不通。"""
     assert lf.format_body("【普竞】renwu 在 5.0 秒内未出现，放弃等待。") == \
-        "【普竞】 放弃 renwu（5.0s 内未出现）"
+        "【普竞】 放弃 任务(renwu)（5.0s 内未出现）"
+
+
+def test_translated_names_and_paths_are_left_alone():
+    """已转过的「中文(拼音)」与文件路径里的拼音名不能再被二次替换。"""
+    assert lf.format_body("命中 玩法目录(wanfamulu) (1080, 940) 第1次") == \
+        "命中 玩法目录(wanfamulu) (1080, 940) 第1次"
+    assert lf.format_body("模板不存在: templates/pujing.png") == "模板不存在: templates/pujing.png"
 
 
 def test_boundary_lines_stay_flush_left_inside_a_task():

@@ -79,9 +79,9 @@ tpl_claim = get_template_path("huodejiangli.png")           # 领奖弹窗「获
 tpl_close_popup = get_template_path("dianjikongbaichuguanbi.png")
 
 MATCH_THRESHOLD = 0.8
-# 礼盒相对「愿望单」标题中心的偏移。原值 (120, 40) 实测落在礼盒右侧约 55px 的空白处，
-# 进度奖励因此一直没被领到；2026-11-04 重新量得礼盒中心 (486,56)、标题中心 (418,31)。
-GIFT_CLICK_OFFSET = (68, 25)
+# 礼盒相对「愿望单」标题中心的偏移。2026-11-06 实机重新量得：
+# 标题中心 (418,31)，进度礼盒中心 (480,66)，偏移应为 (62,35)。
+GIFT_CLICK_OFFSET = (62, 35)
 GIFT_THRESHOLD = 0.85
 MAX_ORDERS = 20           # 单次任务最多交付订单数，防止无限刷单
 MAX_CRAFTS = 5            # 单次任务最多制作次数，防止资源误消耗失控
@@ -185,9 +185,15 @@ def _claim_reward(label_pos):
     gift_pos = _find(tpl_gift, threshold=GIFT_THRESHOLD)
     if gift_pos is None:
         gift_pos = (label_pos[0] + GIFT_CLICK_OFFSET[0], label_pos[1] + GIFT_CLICK_OFFSET[1])
-    _click(gift_pos, 1.5)
-    claim_pos = _find(tpl_claim, timeout=1.5)
+    # 礼盒点一次没弹「获得奖励」时补点一次：进度条动画期间第一次点击可能落在图标边缘。
+    for attempt in range(1, 3):
+        _click(gift_pos, 1.5)
+        claim_pos = _find(tpl_claim, timeout=3.0)
+        if claim_pos is not None:
+            break
+        log(f"【家园愿望单】第 {attempt} 次点进度礼盒未弹奖励，补点一次")
     if claim_pos is None:
+        log("【家园愿望单】未检测到获得奖励弹窗，进度礼盒可能已领取或未达上限")
         return False
     log("【家园愿望单】愿望单进度奖励已领取")
     _close_by_blank_hint()
