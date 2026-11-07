@@ -23,7 +23,7 @@ os.makedirs(os.path.dirname(DRAG_COORD_PATH), exist_ok=True)
 # 通用拖拽函数
 # ============================================================
 
-def send_drag(x1: int, y1: int, x2: int, y2: int, hold_ms: int = None):
+def send_drag(x1: int, y1: int, x2: int, y2: int, hold_ms: int | None = None):
     """
     将一次拖拽指令写入文件，交给 AHK 脚本执行。
     AHK 从 (x1, y1) 按下左键，拖到 (x2, y2) 后松开。

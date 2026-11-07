@@ -103,13 +103,13 @@ LINEUP_FIRST_OFFSET_Y = 200
 
 # 调试用整体偏移（像素）：正数表示向右/向下移动
 # 参考：如果你想"向下 1 个框高"，就填 LINEUP_CARD_HEIGHT；"向右 1.3 个框宽"，就填 round(1.3 * LINEUP_CARD_WIDTH)
-LINEUP_SHIFT_X_PX = int(round(1.6 * LINEUP_CARD_WIDTH))
-LINEUP_SHIFT_Y_PX = int(round(0.75 * LINEUP_CARD_HEIGHT))
+LINEUP_SHIFT_X_PX = round(1.6 * LINEUP_CARD_WIDTH)
+LINEUP_SHIFT_Y_PX = round(0.75 * LINEUP_CARD_HEIGHT)
 
 # 第二套布局：整体在 X 方向再额外平移的比例/像素
 # 默认向左平移半个头像宽度，你可以调下面这两个变量：
 LINEUP_SECOND_LAYOUT_SHIFT_X_FACTOR = -0.5
-LINEUP_SECOND_LAYOUT_SHIFT_X_PX = int(round(LINEUP_SECOND_LAYOUT_SHIFT_X_FACTOR * LINEUP_CARD_WIDTH))
+LINEUP_SECOND_LAYOUT_SHIFT_X_PX = round(LINEUP_SECOND_LAYOUT_SHIFT_X_FACTOR * LINEUP_CARD_WIDTH)
 
 # 阵容界面头像明显比仓库里小，为了匹配稳定，
 # 这里专门为阵容识别准备一套"更偏向缩小"的多尺度列表。
@@ -248,19 +248,15 @@ def _capture_lineup_slots(debug_label="lineup", extra_shift_x_px: int = 0):
     # 估算第一张头像左上角
     x0 = max(
         0,
-        int(
-            round(
+        round(
                 (btn_x - LINEUP_FIRST_OFFSET_X) + LINEUP_SHIFT_X_PX
-            )
-        ),
+            ),
     ) + extra_shift_x_px
     y0 = max(
         0,
-        int(
-            round(
+        round(
                 (btn_y - LINEUP_FIRST_OFFSET_Y) + LINEUP_SHIFT_Y_PX
-            )
-        ),
+            ),
     )
 
     slots = []

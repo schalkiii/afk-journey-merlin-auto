@@ -198,7 +198,7 @@ def ensure_appdata_templates():
             _write_templates_fast_markers(
                 bundled_fast_marker, _templates_fast_marker(APP_TEMPLATES_DIR)
             )
-        except Exception as exc:
+        except (OSError, ValueError, shutil.Error) as exc:
             # 保留内置目录作为备用；不要让残缺的 APPDATA 目录被选中。
             try:
                 if os.path.isdir(staging_dir):
@@ -207,14 +207,13 @@ def ensure_appdata_templates():
                 pass
             print(f"APPDATA 模板缓存不可用，将回退内置模板目录: {exc}")
             _ACTIVE_TEMPLATES_DIR = bundled_dir
-    except Exception as exc:
+    except (OSError, ValueError, shutil.Error) as exc:
         print(f"APPDATA 模板缓存检查失败，将回退内置模板目录: {exc}")
         _ACTIVE_TEMPLATES_DIR = bundled_dir
 
 
 def get_templates_dir():
     """模板目录：打包后优先 %APPDATA% 副本，其次内置目录；开发模式返回项目目录"""
-    global _ACTIVE_TEMPLATES_DIR
     if _ACTIVE_TEMPLATES_DIR and os.path.isdir(_ACTIVE_TEMPLATES_DIR):
         return _ACTIVE_TEMPLATES_DIR
     if getattr(sys, "frozen", False):
@@ -696,7 +695,7 @@ def _start_background_capture(hwnd):
                 "hwnd": hwnd, "session": session, "control": control, "error": None,
             })
         return True
-    except Exception as exc:
+    except (OSError, ValueError, RuntimeError, cv2.error) as exc:
         _bg_session["error"] = str(exc)
         if not _bg_session["warned"]:
             log(f"后台截图初始化失败，将使用普通屏幕截图: {exc}")

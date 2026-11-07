@@ -673,7 +673,7 @@ def flow_tower():
         if hit is None:
             return True
 
-        hit_tpl, hit_name, _ = hit
+        hit_tpl, _hit_name, _ = hit
         if hit_tpl == tpl_end:
             # 图 end：通过一段关卡后失败，不应计入“同一关连续失败”
             current_lineup_fail = 0
@@ -742,7 +742,7 @@ def flow_tower():
             if hit is None:
                 return True
 
-            hit_tpl, hit_name, _ = hit
+            hit_tpl, _hit_name, _ = hit
             if hit_tpl == tpl_end:
                 current_lineup_fail = 0
                 current_lineup_index = -1

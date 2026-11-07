@@ -661,7 +661,7 @@ def run_one_challenge():
 
     # ④ 内层循环
     print("=== 逐层事件 ===")
-    result, pos = handle_floor_events()
+    result, _pos = handle_floor_events()
     if result == "fail":
         return "fail"
 

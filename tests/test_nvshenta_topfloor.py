@@ -71,6 +71,8 @@ def _run_flow(monkeypatch, back_result):
         return True
 
     monkeypatch.setattr(nt, "wait_and_click", fake_wait_and_click)
+    # 进玩法目录已收敛到 common.open_wanfamulu（点后确认目录标题）
+    monkeypatch.setattr(nt, "open_wanfamulu", lambda *args, **kwargs: True)
     monkeypatch.setattr(nt, "find_center_silent", lambda *args, **kwargs: None)
     monkeypatch.setattr(nt, "wait_for_battle_start", lambda *args, **kwargs: ("zhandou", (10, 10)))
     monkeypatch.setattr(nt, "wait_for_appearance", lambda *args, **kwargs: None)

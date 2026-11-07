@@ -198,8 +198,6 @@ def init_templates_from_dir():
     根据 F:\\afkj\\game-bot\\templates 目录下的图片，自动填充：
     - HERO_TEMPLATES：支持皮肤（同一角色的 xxx2、xxx3 等都会归并到同一个 key）
     """
-    global HERO_TEMPLATES
-
     HERO_TEMPLATES.clear()
     HERO_TEMPLATES.update({name: [] for name in ALL_HERO_NAMES})
 

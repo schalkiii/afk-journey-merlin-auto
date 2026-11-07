@@ -213,7 +213,7 @@ def flow_nvshenta(auto_configure_lineup=False):
         # 计算扫荡按钮下方的区域
         # 从扫荡按钮下方0像素开始，宽度为整个屏幕，高度为300像素
         screen_width = screenshot_bgr().shape[1]
-        saodang_x, saodang_y = pos_saodang
+        _saodang_x, saodang_y = pos_saodang
         # 计算下方区域：从扫荡按钮下方0像素开始，宽度为整个屏幕，高度为300像素
         search_region = (0, saodang_y, screen_width, 300)
         print(f"在扫荡按钮下方区域 {search_region} 检测回祭标识...")

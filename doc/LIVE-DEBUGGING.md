@@ -174,12 +174,14 @@
    （本机 GCM 会卡 push，必须非交互）；
 3. `pwsh -NoProfile -File build.ps1 build`；
 4. **解包校验产物**，不要只看构建成功：
+
    ```python
    from PyInstaller.archive.readers import CArchiveReader
    a = CArchiveReader('goldenhandmaidens.exe')
    z = a.open_embedded_archive('PYZ.pyz')          # 模块是否打进去（函数内动态 import 也在）
    png = {n for n in a.toc if n.endswith('.png')}   # 模板路径是反斜杠 templates\xxx.png
    ```
+
 5. 清 `%TEMP%` 会话残留 → `git status` 干净 → 把游戏带回主界面（若用户没关游戏）。
 
 ## 9. 副作用与账号成本（跑之前要意识到）

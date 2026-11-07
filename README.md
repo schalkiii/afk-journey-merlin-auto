@@ -96,7 +96,7 @@
   日志既能读又能对回模板文件（已转过的「中文(拼音)」与 `templates/pujing.png` 这类路径不二次改写）。
   面板与文件写**同一份正文**，时间戳各路由自己的加戳方式补齐，所以不会出现双时间戳：
 
-  ```
+  ```text
   [14:00:30] ▶ [1/2] 邮件
   [14:00:30]   · 命中 菜单(caidan) (3541, 958) 第1次
   [14:00:30]   · 未命中 返回(exit) 第2次（已等 1.1s）
@@ -151,11 +151,13 @@
 - 新增 `launch_game.py`：读取桌面「剑与远征：启程」`.lnk` 快捷方式的目标路径与参数，用同样命令直接拉起游戏
   （绕过启动器，等价于代码代替双击）。
 - 用法：
+
   ```bash
   python launch_game.py                 # 仅启动游戏
   python launch_game.py --bot           # 启动游戏 + 启动本项目脚本(GUI)
   python launch_game.py --bot --delay 5 # 启动游戏，等待 5 秒后启动脚本
   ```
+
 - 若快捷方式指向游戏本体 exe（带 `--env_id` 等参数）则直接进游戏；若只指向启动器则仍打开启动器。
 
 ### 8. 其它清理与去重
@@ -289,7 +291,7 @@
 
 ## 项目结构
 
-```
+```text
 Goldenhandmaidens.py      主程序：tkinter GUI、热键、定时/立即运行、配置持久化、日志汇聚、协作式停止
 bot_runtime.py            从主文件拆出的独立工具：stdout 接管、配置读写、ScriptConfig、桌面快捷方式 / 游戏窗口聚焦
 log_format.py             日志行的统一格式：任务归组缩进、高频行压缩、任务边界行
@@ -369,18 +371,23 @@ tests/                    pytest 用例（只测决策逻辑，真实屏幕全�
 python -m pip install -r requirements.txt -r requirements-dev.txt
 python Goldenhandmaidens.py
 ```
+
 打包、门禁与清理统一走 `build.ps1`（需要 PowerShell 7+）：
+
 ```bash
 pwsh -NoProfile -File build.ps1 build    # 打包为单文件 exe（输出到仓库根，等价于 pyinstaller 命令）
 pwsh -NoProfile -File build.ps1 check    # compileall + pytest + ruff 逐文件基线比对
 pwsh -NoProfile -File build.ps1 clean    # 清理 build/dist/__pycache__/.pytest_cache/.ruff_cache
 ```
+
 `clean` 只删可再生的缓存与中间目录，**不会删除**根目录的 `goldenhandmaidens.exe` / `click_from_file.exe` 与 `templates/`。
 
 跑回归测试（不需要开游戏，全部在模块级接缝打桩）：
+
 ```bash
 python -m pytest -q
 ```
+
 测试只覆盖**决策逻辑**——判定优先级、次数上限、去重排序、跨模块文本格式契约；**不覆盖像素阈值**（0.8 够不够只能实跑判断）。新增用例沿用 `tests/test_push_fail_limit.py`（状态机/失败上限）与 `tests/test_hongbaolingqu.py`（调用序列/匹配分数桩）的范式，且每条都要做负验证：翻转一个判据后该用例必须变红，否则是恒真的假测试。
 
 **失败现场留存**：任务返回失败/超时或抛异常时，程序会把最近 5 帧截图写到
@@ -420,22 +427,27 @@ Q: 女神塔遇到「一键碾压」按钮不会点？
 A: 把该按钮截图保存为 `templates/yijiannianya.png` 即可自动识别；未提供时程序只等待普通「战斗」按钮，会在日志中提示一次。
 
 ### 7.开发相关
+
 已完成家园愿望单、公会玩法日常（结社战线 / 狩猎悬赏）。计划更新荣誉对决。
 
 ### 8.致谢
-- **异界迷宫烙印选择策略来自** B站 若隐寒星/frosty（https://space.bilibili.com/401793216）
 
-- **异界迷宫阵容参考来自** B站 千秋月（https://space.bilibili.com/3546777955338480）
+- **异界迷宫烙印选择策略来自** B站 若隐寒星/frosty（<https://space.bilibili.com/401793216）>
+
+- **异界迷宫阵容参考来自** B站 千秋月（<https://space.bilibili.com/3546777955338480）>
 
 ### 9.赞助
+
 - **如果你觉得这个工具具有帮助，欢迎赞助支持❤️**
 
-<img src="sponsor_qrcode.png" width="300" alt="赞助二维码" />
+![赞助二维码](sponsor_qrcode.png)
 
 ### 10.免责声明
+
 - **本工具仅供学习交流使用，请勿用于任何商业用途。使用本工具产生的任何后果由用户自行承担。**
 
 ### 许可证
+
 MIT License
 
 > 注：`goldenhandmaidens.spec` 已将 `templates/`、`click_from_file.exe`、各 `*.json` 配置及 `flow_enter` 等模块一并打进 exe，新增模板/模块后无需手动修改资源清单。

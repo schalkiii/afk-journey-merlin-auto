@@ -68,6 +68,7 @@ def read_shortcut(lnk_path):
         text=True,
         encoding="utf-8",
         errors="ignore",
+        check=False,
     )
     target, args, workdir = "", "", ""
     for line in proc.stdout.splitlines():
@@ -100,7 +101,7 @@ def launch_game():
         subprocess.Popen(cmd, cwd=workdir or None)
         print("已发送游戏启动命令。")
         return target
-    except Exception as e:
+    except (OSError, ValueError) as e:
         print(f"启动游戏失败: {e}")
         return None
 

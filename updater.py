@@ -42,7 +42,7 @@ def check_update():
 
         has_update = _parse_version(latest_tag) > _parse_version(__version__)
         return has_update, latest_tag, download_url, html_url
-    except Exception as e:
+    except (OSError, ValueError, TypeError) as e:
         return None, str(e)
 
 
@@ -72,7 +72,7 @@ def download_update(download_url, progress_callback=None):
                     progress_callback(downloaded, total)
 
         return new_path
-    except Exception:
+    except (OSError, ValueError, TypeError):
         return None
 
 

@@ -32,31 +32,26 @@ from tkinter import messagebox, ttk
 
 import common
 import log_format
-from version import __version__
-
-
-
 
 # 启动 / 配置 / 窗口聚焦等独立工具抽到 bot_runtime，避免主文件过度膨胀
 from bot_runtime import (
+    LOG_FILE,
     ScriptConfig,
-    _StdoutTee,
     _early_stdout_buffer,
     _early_stdout_sink,
     _ensure_config_files,
+    _notify_file_write_error,
+    _StdoutTee,
     append_log_file,
     focus_game_window,
     is_game_running,
     launch_game_by_shortcut,
     load_config,
-    LOG_FILE,
     save_config,
     set_file_write_error_callback,
-    _notify_file_write_error,
 )
 
 # updater 只在检查更新 / 下载 / 安装重启路径使用，延迟到用到时再导入以缩短启动
-
 # 路径解析统一复用 common 的实现，避免与底层模块重复定义（见 common.get_resource_path / get_work_path）
 from common import get_resource_path, get_work_path
 from hero_metadata import (
@@ -67,6 +62,7 @@ from hero_metadata import (
     PUSH_COMMON_HEROES,
     RACE_NAMES,
 )
+from version import __version__
 from warehouse import ALL_HERO_NAMES, WAREHOUSE_TXT_PATH
 
 # 左侧功能列表的状态色（bg, fg, 短标签）：一眼扫出「正在跑哪个 / 哪个挂了」。
@@ -232,13 +228,12 @@ class GameBotGUI:
 
         # 若配置了定时开始，自动重新设定（按每天循环）
         if self.config.get("schedule_time"):
-            try:
+            # 配置里的定时值可能被手改坏：解析失败时忽略，保证启动不中断
+            with contextlib.suppress(Exception):
                 hh, mm = map(int, str(self.config["schedule_time"]).split(":"))
                 self.schedule_hour_var.set(hh)
                 self.schedule_min_var.set(mm)
                 self.set_schedule()
-            except Exception:
-                pass
 
         # 注册全局热键 F8=开始运行 F9=停止运行。延后到首帧之后：keyboard 的
         # 导入与 add_hotkey 是阻塞启动的主要来源；必须留在主线程（注册依赖
@@ -613,7 +608,7 @@ class GameBotGUI:
                     content = f.read()
             except FileNotFoundError:
                 content = ""
-            except Exception as e:
+            except (OSError, UnicodeDecodeError) as e:
                 content = f"读取日志失败: {e}\n"
             log_text.configure(state=tk.NORMAL)
             log_text.delete("1.0", tk.END)
@@ -638,7 +633,7 @@ class GameBotGUI:
             timestamp = time.strftime("%H:%M:%S")
             self.log_text.insert(tk.END, f"[{timestamp}] 本地日志文件已清空（此提示不会写入文件）\n")
             self.log_text.see(tk.END)
-        except Exception as e:
+        except (OSError, tk.TclError) as e:
             messagebox.showerror("清空失败", str(e))
 
     def show_help_window(self):
@@ -1074,9 +1069,9 @@ class GameBotGUI:
                 for hero_name in ALL_HERO_NAMES:
                     level = hero_levels.get(hero_name, "高")
                     f.write(f"{hero_name},{level}\n")
-        except Exception as e:
+        except (OSError, ValueError) as e:
             _notify_file_write_error(WAREHOUSE_TXT_PATH)
-            self.log(f"写入仓库文件失败: {str(e)}")
+            self.log(f"写入仓库文件失败: {e!s}")
 
     def _schedule_file_write_error(self, path):
         if getattr(self, "_file_write_error_notified", False):
@@ -1120,11 +1115,9 @@ class GameBotGUI:
     def create_yijiemigong_params(self, script, row=0):
         # 加载 formations.json 获取阵容列表（exe 同目录的可编辑副本优先）
         formations = {}
-        try:
-            with open(common.get_config_path("formations.json"), encoding="utf-8") as f:
-                formations = json.load(f)
-        except Exception:
-            pass
+        with contextlib.suppress(OSError, json.JSONDecodeError), \
+                open(common.get_config_path("formations.json"), encoding="utf-8") as f:
+            formations = json.load(f)
         all_forms = list(formations.keys())
 
         # 挑战次数
@@ -1372,10 +1365,10 @@ class GameBotGUI:
         if self.is_running:
             if messagebox.askokcancel("退出", "脚本正在运行中，确定要停止并退出吗？"):
                 self.stop_all()
-                subprocess.run(["taskkill", "/F", "/IM", "click_from_file.exe"], capture_output=True)
+                subprocess.run(["taskkill", "/F", "/IM", "click_from_file.exe"], capture_output=True, check=False)
                 self.root.destroy()
         else:
-            subprocess.run(["taskkill", "/F", "/IM", "click_from_file.exe"], capture_output=True)
+            subprocess.run(["taskkill", "/F", "/IM", "click_from_file.exe"], capture_output=True, check=False)
             self.root.destroy()
         
     def launch_game_then_start(self, launch_game=True):
@@ -1405,7 +1398,7 @@ class GameBotGUI:
         self.root.after(max(0, int(delay)) * 1000, self._start_after_focus)
 
     def _start_after_focus(self):
-        ok, msg = focus_game_window()
+        _ok, msg = focus_game_window()
         self.log(msg)
         self.start_all()
 
@@ -1428,13 +1421,13 @@ class GameBotGUI:
         try:
             hh = int(self.schedule_hour_var.get())
             mm = int(self.schedule_min_var.get())
-        except Exception:
+        except (ValueError, TypeError):
             messagebox.showerror("错误", "请填写有效的小时和分钟")
             return
         if not (0 <= hh <= 23 and 0 <= mm <= 59):
             messagebox.showerror("错误", "时间超出范围 (时 0-23, 分 0-59)")
             return
-        now = datetime.now()
+        now = datetime.now().astimezone()
         target = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
         if target <= now:
             target = target + timedelta(days=1)
@@ -1462,7 +1455,7 @@ class GameBotGUI:
                 return
             if self.scheduled_time is None:
                 return
-            remaining = (self.scheduled_time - datetime.now()).total_seconds()
+            remaining = (self.scheduled_time - datetime.now().astimezone()).total_seconds()
             if remaining <= 0:
                 self.root.after(0, self._fire_schedule)
                 return
@@ -1490,7 +1483,7 @@ class GameBotGUI:
         if not self.schedule_active or self.scheduled_time is None:
             self._set_schedule_status("未设定定时")
             return
-        remaining = int((self.scheduled_time - datetime.now()).total_seconds())
+        remaining = int((self.scheduled_time - datetime.now().astimezone()).total_seconds())
         remaining = max(remaining, 0)
         h = remaining // 3600
         m = (remaining % 3600) // 60
@@ -1516,7 +1509,7 @@ class GameBotGUI:
             self._hk_stop = keyboard.add_hotkey('f9', lambda: self.root.after(0, self._hotkey_stop))
             self._hotkey_lib = keyboard
             self.log("已注册全局热键 F8=开始运行 / F9=停止运行")
-        except Exception as e:
+        except (ImportError, OSError, RuntimeError) as e:
             print(f"全局热键注册失败({e})，回退为窗口聚焦热键")
             self.root.bind_all('<KeyPress-F8>', lambda e: self._hotkey_start())
             self.root.bind_all('<KeyPress-F9>', lambda e: self._hotkey_stop())
@@ -1524,11 +1517,9 @@ class GameBotGUI:
 
     def _unregister_hotkeys(self):
         if self._hotkey_lib is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self._hotkey_lib.remove_hotkey(self._hk_start)
                 self._hotkey_lib.remove_hotkey(self._hk_stop)
-            except Exception:
-                pass
 
     def _hotkey_start(self):
         if not self.is_running:
@@ -1544,10 +1535,10 @@ class GameBotGUI:
         try:
             result = subprocess.run(
                 ["tasklist", "/FI", "IMAGENAME eq click_from_file.exe"],
-                capture_output=True, text=True
+                capture_output=True, text=True, check=False
             )
             return "click_from_file.exe" in result.stdout
-        except Exception:
+        except (OSError, subprocess.SubprocessError):
             return False
 
     # ===== 任务分发（字典映射替代巨型 if/elif，降低维护成本）=====
@@ -1824,11 +1815,10 @@ class GameBotGUI:
         if self.is_click_from_file_running():
             self.log("click_from_file.exe 已在运行，复用现有进程（跳过重启）")
         else:
-            try:
-                subprocess.run(["taskkill", "/F", "/IM", "click_from_file.exe"], capture_output=True)
+            with contextlib.suppress(Exception):
+                subprocess.run(["taskkill", "/F", "/IM", "click_from_file.exe"],
+                               capture_output=True, check=False)
                 time.sleep(0.3)
-            except Exception:
-                pass
             self.log("运行click_from_file.exe...")
             try:
                 ahk_exe_path = get_resource_path("click_from_file.exe")
@@ -1842,7 +1832,7 @@ class GameBotGUI:
                     # CREATE_NO_WINDOW：Windows 下不弹出控制台黑框，消除「启动终端框」的视觉卡顿
                     subprocess.Popen([ahk_exe_path, work_dir], creationflags=subprocess.CREATE_NO_WINDOW)
                     self.log("click_from_file.exe 启动成功")
-            except Exception as e:
+            except (OSError, ValueError) as e:
                 self.log(f"运行click_from_file.exe失败: {e!s}")
                 self.log("警告: click_from_file.exe 未启动，部分功能可能无法正常工作")
             time.sleep(2)
@@ -1900,7 +1890,7 @@ class GameBotGUI:
                     # 更新最后执行时间。这里**不再**改动 script.enabled：
                     # 旧的「每日重置脚本跑完自动关闭」会把用户的勾选写回配置，
                     # 导致第二天该任务被静默跳过，且用户下次打开看到的是被程序改过的设置。
-                    script.last_run_time = datetime.now().isoformat()
+                    script.last_run_time = datetime.now().astimezone().isoformat()
                 else:
                     script.status = "失败"
                     self.log(log_format.task_end_line(False, index, total, script.name, duration))
@@ -1964,7 +1954,7 @@ class GameBotGUI:
         相比「每来一条就 configure/insert/see 三次 Tk 操作」的旧实现，
         批量写入 + 行数封顶显著降低高频日志下的 UI 卡顿。约每 120ms 刷新一次。
         """
-        try:
+        with contextlib.suppress(Exception):
             if not self._log_queue.empty():
                 lines = []
                 while True:
@@ -1988,10 +1978,7 @@ class GameBotGUI:
                         if not hasattr(self, '_log_buffer'):
                             self._log_buffer = []
                         self._log_buffer.extend(f"[{time.strftime('%H:%M:%S')}] {m}\n" for m in lines)
-        except Exception:
-            pass
-        finally:
-            self.root.after(120, self._drain_log_queue)
+        self.root.after(120, self._drain_log_queue)
 
     def log(self, message):
         """兼容旧调用：直接入队（主线程也可调用），由 _drain_log_queue 统一刷新到面板；
@@ -2006,7 +1993,7 @@ class GameBotGUI:
         try:
             timestamp = time.strftime('%H:%M:%S')
             append_log_file(f'[{timestamp}] {body}\n')
-        except Exception:
+        except (OSError, ValueError):
             _notify_file_write_error(LOG_FILE)
     
     # ===== 配置持久化（load_config / save_config） =====

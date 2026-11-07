@@ -1,12 +1,10 @@
-Goldenhandmaidens.py=32
-bot_runtime.py=11
-push.py=6
-common.py=4
-launch_game.py=2
+# ruff 告警基线（逐文件 `文件=条数`，当前值不得高于此处）。
+# 2026-11-07 已清理全部可安全修复的存量：import 排序、无用变量、多余 int 转换、
+# subprocess check 参数、try-except-pass（改 contextlib.suppress）、时区（astimezone）、
+# 以及可窄化异常类型的 catch。以下 5 条为**有意保留**的 catch-all：
+# - Goldenhandmaidens.py=3：循环推图单个模式异常需继续切换、运行循环需隔离单任务异常
+#   （用户要求“失败不要 block 后面的 flow”），不能用更窄的异常类型替代。
+# - pata.py=2：爬塔里可选调用 flow_tower / jiance 失败只能跳过该塔/礼包检测，
+#   不能让整条爬塔任务中断。
+Goldenhandmaidens.py=3
 pata.py=2
-updater.py=2
-drag_utils.py=1
-flow_migong.py=1
-flow_tower.py=1
-nvshenta.py=1
-warehouse.py=1

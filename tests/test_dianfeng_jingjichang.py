@@ -117,6 +117,7 @@ def test_enter_dianfeng_returns_from_right_subpage(monkeypatch):
 def test_enter_dianfeng_closes_settlement_then_reconfirms(monkeypatch):
     """进入后若压着「每日结算」弹窗，要先关掉再确认挑战按钮仍在。"""
     order = []
+    monkeypatch.setattr(df, "open_wanfamulu", lambda *a, **k: True)
     monkeypatch.setattr(df, "wait_and_click", lambda *a, **k: True)
     monkeypatch.setattr(df, "find_center_silent",
                         lambda template_path, *a, **k: (800, 840)

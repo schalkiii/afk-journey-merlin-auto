@@ -133,7 +133,7 @@ def append_log_file(text):
             _rotate_log_if_needed()
             with open(LOG_FILE, "a", encoding="utf-8") as f:
                 f.write(text)
-    except Exception:
+    except OSError:
         _notify_file_write_error(LOG_FILE)
 
 
@@ -152,12 +152,10 @@ class _PersistentStdout:
     def write(self, text):
         if not text:
             return 0
-        try:
+        # 打包后的 GUI 程序可能没有可用控制台，忽略控制台输出失败。
+        with contextlib.suppress(Exception):
             self.stream.write(text)
             self.stream.flush()
-        except Exception:
-            # 打包后的 GUI 程序可能没有可用控制台，忽略控制台输出失败。
-            pass
         self._persist(self._lines.feed(text))
         return len(text)
 
@@ -187,7 +185,7 @@ def load_config():
         try:
             with open(CONFIG_FILE, encoding='utf-8') as f:
                 return json.load(f)
-        except Exception as e:
+        except (OSError, ValueError, TypeError) as e:
             print(f"加载配置文件失败: {e}")
     return {}
 
@@ -197,7 +195,7 @@ def save_config(config):
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             json.dump(config, f, ensure_ascii=False, indent=2)
         return True
-    except Exception as e:
+    except (OSError, ValueError, TypeError) as e:
         print(f"保存配置文件失败: {e}")
         return False
 
@@ -259,7 +257,7 @@ def read_game_shortcut(lnk_path):
     )
     proc = subprocess.run(
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
-        capture_output=True, text=True, encoding="utf-8", errors="ignore",
+        capture_output=True, text=True, encoding="utf-8", errors="ignore", check=False,
     )
     target, args, workdir = "", "", ""
     for line in proc.stdout.splitlines():
@@ -282,17 +280,15 @@ def launch_game_by_shortcut():
     # 优先用快捷方式目标直接启动（普通 exe 快捷方式）
     if target and not target.lower().startswith("shell:appsfolder"):
         cmd = [target] + (shlex.split(args) if args else [])
-        try:
+        # UWP / 微信小游戏等目标无法直接 Popen，回退到下方系统打开
+        with contextlib.suppress(Exception):
             subprocess.Popen(cmd, cwd=workdir or None)
             return True, f"已按快捷方式启动游戏: {target}"
-        except Exception:
-            # UWP / 微信小游戏等目标无法直接 Popen，回退到下方系统打开
-            pass
     # 回退：交给 Windows 外壳解析 .lnk（兼容 UWP / WeGame / 应用商店版本）
     try:
         os.startfile(lnk)
         return True, f"已通过快捷方式启动游戏: {lnk}"
-    except Exception as e:
+    except OSError as e:
         return False, f"启动游戏失败: {e}"
 
 
@@ -323,7 +319,7 @@ def _find_game_window():
 
         user32.EnumWindows(enum_cb, 0)
         return found[0] if found else None
-    except Exception:
+    except (OSError, AttributeError):
         return None
 
 
@@ -344,5 +340,5 @@ def focus_game_window():
         user32.ShowWindow(hwnd, SW_RESTORE)
         user32.SetForegroundWindow(hwnd)
         return True, "已将游戏窗口切换到前台"
-    except Exception as e:
+    except (OSError, AttributeError) as e:
         return False, f"聚焦游戏窗口失败: {e}"
