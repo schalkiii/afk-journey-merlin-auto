@@ -1,23 +1,27 @@
+import os
+import time
+
+import cv2
+
 from common import (
-    BOTTOM_BAR_CLIENT_REGION,
     click_position,
     dismiss_popup_away_from,
     find_center_silent,
     game_client_region,
     get_template_path,
     get_work_path,
-    is_lineup_acceptable as _is_lineup_acceptable_impl,
+    open_wanfamulu,
     screenshot_bgr,
     wait_and_click,
+)
+from common import (
+    is_lineup_acceptable as _is_lineup_acceptable_impl,
 )
 from warehouse import (
     WAREHOUSE_TXT_PATH,
     _match_best_hero,
     init_templates_from_dir,
 )
-import cv2
-import os
-import time
 
 # === 模板路径，对应你的文件名 ===
 tpl_advance       = get_template_path("guajiguanqia.png")
@@ -664,8 +668,7 @@ class PushFlow:
     def _st_enter(self):
         """进入推图玩法：wanfamulu -> advance -> 模式入口。"""
         # 单次推图也可能从战斗失败/结算页启动：连续未命中时兜底退出卡住处再重试
-        if not wait_and_click(tpl_wanfamulu, "wanfamulu", 0.7, recover_threshold=20,
-                              client_region=BOTTOM_BAR_CLIENT_REGION):
+        if not open_wanfamulu(threshold=0.7, timeout=8):
             print("点击 wanfamulu 进入玩法目录失败。")
             return self._done(False)
         if not self._wait_after_action(

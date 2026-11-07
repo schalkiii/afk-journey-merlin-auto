@@ -25,6 +25,10 @@ def _run_flow(monkeypatch, recover_result):
 
     monkeypatch.setattr(pata, "recover_to_main_interface", fake_recover)
     monkeypatch.setattr(pata, "wait_and_click", fake_wait_and_click)
+    # 进玩法目录已收敛到 common.open_wanfamulu（点后确认目录标题）；这里用同名事件记账，
+    # 保持「恢复 → 玩法目录 → 卡片 → 退出」的顺序断言不变。
+    monkeypatch.setattr(pata, "open_wanfamulu",
+                        lambda *args, **kwargs: (events.append("wanfamulu"), True)[1])
     monkeypatch.setattr(pata, "find_center_silent", lambda *args, **kwargs: None)
     monkeypatch.setattr(pata, "random_sleep", lambda: None)
     monkeypatch.setattr(pata, "time", types.SimpleNamespace(time=time.time,

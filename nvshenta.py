@@ -2,9 +2,9 @@ import os
 import time
 
 from common import (
-    BOTTOM_BAR_CLIENT_REGION,
     find_center_silent,
     get_template_path,
+    open_wanfamulu,
     random_sleep,
     screenshot_bgr,
     send_coord,
@@ -194,8 +194,7 @@ def flow_nvshenta(auto_configure_lineup=False):
     """
     
     # 1. 点击 wanfamulu 进入玩法目录
-    if not wait_and_click(tpl_wanfamulu, "wanfamulu", 0.7, recover_threshold=20,
-                          client_region=BOTTOM_BAR_CLIENT_REGION):
+    if not open_wanfamulu(threshold=0.7, timeout=8):
         print("点击 wanfamulu 失败")
         return False
     random_sleep()

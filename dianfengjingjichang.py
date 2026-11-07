@@ -8,25 +8,26 @@
 入场时可能压着「每日结算」大弹窗（遮罩下绿色长条仍能匹配到），需先关掉再操作。
 战斗中有「跳过」按钮（实测坐标约客户区 (1090,712)），点了直接出结算；
 失败页的关闭提示模板匹配不到，改点面板外左上空白关闭。
+竞技场会记住上次浏览的右侧页签（商店/排行榜/战斗记录/巅峰联赛），重新进入可能落在子页：
+看不到「继续挑战」时点左下返回箭头回到挑战主页（实测返回后按钮 0.92）。
 """
 
 import time
 
 from common import (
-    BOTTOM_BAR_CLIENT_REGION,
     click_position,
     dismiss_popup_away_from,
     find_center_silent,
     game_client_region,
     get_template_path,
     log,
+    open_wanfamulu,
     random_sleep,
     recover_to_main_interface,
     wait_and_click,
 )
 from jiance import check_and_handle_libao
 
-tpl_wanfamulu = get_template_path("wanfamulu.png")
 tpl_dianfeng = get_template_path("dianfengjingjichang.png")
 tpl_jixutiaozhan = get_template_path("dianfengjixutiaozhan.png")
 tpl_xuanzeduishou = get_template_path("dianfengxuanzeduishou.png")
@@ -37,6 +38,7 @@ tpl_tiaoguo = get_template_path("tiaoguo.png")
 tpl_fail = get_template_path("fail.png")
 tpl_exitck = get_template_path("exitck.png")
 tpl_meirijiesuan = get_template_path("dianfengmeirijiesuan.png")
+tpl_catalog_title = get_template_path("wanfamulubiaoti.png")
 
 # 「每日结算」大弹窗的关闭点：弹窗覆盖全屏且在左上方留有空白，实测点这里只关弹窗、
 # 不会碰到任何按钮（遮罩下的绿色长条在 y≈846，距离足够远）。
@@ -88,18 +90,45 @@ def _wait_panel(timeout=15.0):
     return find_center_silent(tpl_jixutiaozhan, 0.8, timeout=timeout)
 
 
+def _back_to_challenge_view():
+    """从右侧子页（商店/排行榜/战斗记录/巅峰联赛）退回挑战主页。
+
+    2026-11-07 实测：竞技场会记住上次浏览的右侧页签，重新进入时直接落在该子页，
+    「继续挑战」不可见；此时点左下返回箭头一次即可回到挑战主页（实测返回后按钮 0.92）。
+    """
+    pos = find_center_silent(get_template_path("fanhui.png"), 0.8, timeout=2.0)
+    if pos is None:
+        return False
+    click_position(pos, wait=1.5, twice=False)
+    return _wait_panel(5.0)
+
+
 def _enter_dianfeng():
     """主界面 → 玩法目录 → 巅峰竞技场，并用「继续挑战」按钮确认进入。"""
-    if not wait_and_click(tpl_wanfamulu, "wanfamulu", 0.7,
-                          client_region=BOTTOM_BAR_CLIENT_REGION, timeout=8):
+    if not open_wanfamulu(threshold=0.7, timeout=8):
         log("未找到主界面「玩法目录」入口。")
         return False
     time.sleep(1.2)
-    if not wait_and_click(tpl_dianfeng, "dianfengjingjichang", 0.8, timeout=8):
-        log("玩法目录里未找到「巅峰竞技场」卡片。")
+    entered = False
+    for attempt in range(1, 3):
+        if not wait_and_click(tpl_dianfeng, "dianfengjingjichang", 0.8, timeout=6):
+            log("玩法目录里未找到「巅峰竞技场」卡片。")
+            return False
+        if _wait_panel(10.0):
+            entered = True
+            break
+        if find_center_silent(tpl_catalog_title, 0.8, timeout=0):
+            log(f"点击「巅峰竞技场」后目录仍在（第 {attempt} 次被吞），补点一次。")
+            continue
+        # 已离开目录但看不到挑战按钮：多半落在上次浏览的右侧子页，点返回回到挑战主页。
+        if _back_to_challenge_view():
+            entered = True
+            break
+        log("巅峰竞技场落在未知页面，无法回到挑战主页。")
+        recover_to_main_interface()
         return False
-    if not _wait_panel(15.0):
-        log("点击巅峰竞技场后未看到「继续挑战」按钮，判定没进入。")
+    if not entered:
+        log("多次点击后仍未进入巅峰竞技场挑战界面，结束。")
         recover_to_main_interface()
         return False
     # 入场时可能压着「每日结算」大弹窗：遮罩下绿色长条照样能匹配到，
@@ -133,18 +162,23 @@ def _select_opponent_and_lineup():
         log("选完对手后没有出现「挑战他」按钮，结束。")
         return False
 
-    # 依次编辑第 2、3 队；按钮变成「战斗」即停止
+    # 依次编辑第 2、3 队；按钮变成「战斗」即停止。切换动画期间两种按钮都可能短暂
+    # 不可见，必须「等任一种出现」：2026-11-07 实机先查战斗、再等编辑下一场，结果
+    # 战斗还没渲染出来就去等已消失的编辑按钮，白等 6 秒后误判失败（完成 0 场）。
     for _ in range(3):
-        if find_center_silent(tpl_zhandou, 0.8, timeout=1.0):
-            break
-        if not wait_and_click(tpl_bianji, "编辑下一场", 0.8, timeout=6.0):
-            log("未找到「编辑下一场」按钮，结束。")
+        hit = _wait_for_any(
+            [(tpl_zhandou, "战斗"), (tpl_bianji, "编辑下一场")], timeout=6.0
+        )
+        if hit is None:
+            log("阵容页既没有「战斗」也没有「编辑下一场」，结束。")
             return False
+        hit_tpl, hit_pos = hit
+        click_position(hit_pos, wait=1.5, twice=False)
+        if hit_tpl == tpl_zhandou:
+            return True
         time.sleep(0.8)
-    if not wait_and_click(tpl_zhandou, "战斗", 0.8, timeout=5.0):
-        log("三队确认后没有出现「战斗」按钮，结束。")
-        return False
-    return True
+    log("三队确认后仍未出现「战斗」按钮，结束。")
+    return False
 
 
 def _fight_once(index):
@@ -158,8 +192,8 @@ def _fight_once(index):
         return False
     random_sleep()
 
-    # 巅峰竞技场没有「跳过」：整场观战，结束时直接出结算（胜利回到挑战界面，
-    # 失败停在「战斗失败」页）。三种信号谁先出现就按谁走。
+    # 战斗中有「跳过」按钮（实测点它直接出结算）；结束时可能停在失败页，
+    # 也可能直接回到挑战界面。三种信号谁先出现就按谁走。
     outcome = _wait_for_any(
         [(tpl_tiaoguo, "tiaoguo"), (tpl_fail, "fail"), (tpl_jixutiaozhan, "jixutiaozhan")],
         timeout=MAX_BATTLE_TIME,
@@ -170,10 +204,21 @@ def _fight_once(index):
     outcome_tpl, outcome_pos = outcome
     if outcome_tpl == tpl_tiaoguo:
         click_position(outcome_pos, wait=1.2, twice=False)
-        outcome = _wait_for_any(
-            [(tpl_fail, "fail"), (tpl_jixutiaozhan, "jixutiaozhan")],
-            timeout=MAX_BATTLE_TIME,
-        )
+        # 跳过后的信号可能是失败页 / 挑战界面，也可能停在带「点击空白处关闭」的结算弹窗上：
+        # 2026-11-07 实机有一次两种旧信号 180 秒内都没出现。故每 5 秒补一次弹窗清理再判定，
+        # 让结算弹窗关闭后露出的挑战界面也能被接住。
+        tpl_hint = get_template_path("dianjikongbaichuguanbi.png")
+        outcome = None
+        deadline = time.time() + MAX_BATTLE_TIME
+        while time.time() < deadline:
+            outcome = _wait_for_any(
+                [(tpl_fail, "fail"), (tpl_jixutiaozhan, "jixutiaozhan")], timeout=5.0
+            )
+            if outcome is not None:
+                break
+            if find_center_silent(tpl_hint, 0.8, timeout=0):
+                dismiss_popup_away_from()
+                log("关闭战斗结算弹窗后继续等待结束信号。")
         if outcome is None:
             log("跳过之后未出现结算信号，结束。")
             return False

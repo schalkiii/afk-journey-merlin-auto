@@ -1,10 +1,10 @@
 import time
 
 from common import (
-    BOTTOM_BAR_CLIENT_REGION,
     display_name,
     find_center_silent,
     get_template_path,
+    open_wanfamulu,
     random_sleep,
     send_coord,
     wait_and_click,
@@ -128,8 +128,7 @@ def flow_pujing():
         3. 识别到 fufeimenpiao：点击 bumaifufeimenpiao，然后点击 exit 退到玩法界面，脚本结束
     """
     # 1. 点击 wanfamulu 进入玩法目录界面
-    if not wait_and_click(tpl_wanfamulu, "wanfamulu", 0.7, recover_threshold=20,
-                          client_region=BOTTOM_BAR_CLIENT_REGION):
+    if not open_wanfamulu(threshold=0.7, timeout=8):
         print("点击 wanfamulu 进入玩法目录界面失败。")
         return False
     random_sleep()

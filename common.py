@@ -1055,6 +1055,26 @@ def at_main_interface(threshold=0.8):
 PROMO_OUTSIDE_POS = (150, 450)
 
 
+def open_wanfamulu(threshold=0.7, timeout=8, max_attempts=2):
+    """打开玩法目录并用面板左上角标题自证，返回是否已打开。
+
+    首次点击常被系统用于激活窗口而吞掉：2026-11-07 实测同一坐标点第一次无效、
+    第二次才打开（日志表现为「命中 玩法目录」之后卡片连续 8~15 秒全部匹配不到）。
+    点击后先确认标题（仅目录页出现，主界面/愿望单实测最高 0.58），未打开则补点一次，
+    避免整条流程白等到超时。
+    """
+    for attempt in range(1, max_attempts + 1):
+        if not wait_and_click(get_template_path("wanfamulu.png"), "wanfamulu", threshold,
+                              client_region=BOTTOM_BAR_CLIENT_REGION, timeout=timeout):
+            return False
+        if find_center_silent(get_template_path("wanfamulubiaoti.png"), 0.8, timeout=3.0):
+            return True
+        if attempt < max_attempts:
+            log(f"玩法目录未打开（第 {attempt} 次点击可能被窗口激活吞掉），补点一次")
+    log("玩法目录未打开，无法进入目标玩法")
+    return False
+
+
 def recover_to_main_interface(max_tries=8):
     """兜底回主界面：任务卡在某界面（弹窗 / 子界面）反复检测不到目标时使用。
 

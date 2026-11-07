@@ -37,6 +37,7 @@ from common import (
     invalidate_screenshot_cache,
     load_template,
     log,
+    open_wanfamulu,
     recover_to_main_interface,
     tap_hud_entry,
     wait_and_click,
@@ -665,8 +666,7 @@ def _claim_guild_war():
     （无需二次确认，直接弹「获得奖励」）。每次只在弹出奖励时计数。
     """
     recover_to_main_interface()
-    if not wait_and_click(tpl_wanfamulu, "wanfamulu(公会征伐)", 0.7,
-                          client_region=BOTTOM_BAR_CLIENT_REGION, timeout=8):
+    if not open_wanfamulu(threshold=0.7, timeout=8):
         log("未能进入玩法目录，跳过公会征伐奖励。")
         return 0
     time.sleep(1.2)

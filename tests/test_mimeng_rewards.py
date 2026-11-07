@@ -139,13 +139,19 @@ def test_exit_to_main_skips_recover_when_already_at_main(monkeypatch):
 def test_handle_battle_failure_falls_back_to_main_without_changing_result(monkeypatch):
     """「未能确认回到挑战界面」的战斗失败分支：补兜底恢复，但返回值仍为 False。"""
     calls = []
+    state = {"skipped": False}
 
-    monkeypatch.setattr(
-        mm, "find_center_silent",
-        lambda template_path, threshold=0.8, **kwargs: (
-            (900, 500) if template_path == mm.tpl_tiaoguozhandou else None
-        ),
-    )
+    def fake_find(template_path, threshold=0.8, **kwargs):
+        # 先识别「跳过战斗」并点一次；之后战斗结束回到迷梦主界面（挑战按钮重新可见），
+        # 不弹「竞技场结算」——即 2026-11-07 实机的新结束方式。
+        if template_path == mm.tpl_tiaoguozhandou and not state["skipped"]:
+            state["skipped"] = True
+            return (900, 500)
+        if template_path == mm.tpl_tiaozhan and state["skipped"]:
+            return (700, 900)
+        return None
+
+    monkeypatch.setattr(mm, "find_center_silent", fake_find)
     monkeypatch.setattr(mm, "send_coord", lambda x, y: calls.append("click"))
     monkeypatch.setattr(mm, "random_sleep", lambda: None)
     monkeypatch.setattr(mm, "wait_and_click", lambda *args, **kwargs: True)
@@ -170,6 +176,9 @@ def test_flow_claims_top_right_after_entering_mimeng(monkeypatch):
         return True
 
     monkeypatch.setattr(mm, "wait_and_click", fake_wait_click)
+    # 进玩法目录已收敛到 common.open_wanfamulu（点后确认目录标题）；沿用同名事件记账
+    monkeypatch.setattr(mm, "open_wanfamulu",
+                        lambda *args, **kwargs: (order.append("wanfamulu"), True)[1])
     monkeypatch.setattr(mm, "random_sleep", lambda: None)
     monkeypatch.setattr(mm, "_claim_top_right_reward",
                         lambda: order.append("claim") or True)

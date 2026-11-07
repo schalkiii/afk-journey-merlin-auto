@@ -1908,6 +1908,12 @@ class GameBotGUI:
                     # F9 主动停止不算失败现场，不落盘。
                     if not self.stop_event.is_set():
                         common.capture_failure_context(script.name, "任务失败或超时")
+                    # 失败后立即尝试恢复主界面：任务可能把游戏停在子页/弹窗里，
+                    # 只依赖下一任务开头的 ensure_main_interface 会多空等一轮，且部分
+                    # 界面（如家园生产页）恢复不了。恢复结果只记录，不改变失败结论。
+                    if not self.stop_event.is_set():
+                        self.log("任务失败，尝试恢复到主界面…")
+                        common.ensure_main_interface()
                     
             except common.StopRequested:
                 script.status = "已停止"
@@ -1920,6 +1926,9 @@ class GameBotGUI:
                                                   time.time() - task_started) + f" 出错: {e!s}")
                 # 异常同样留存现场，原因带上异常文本，方便与日志首行对应
                 common.capture_failure_context(script.name, f"任务执行异常: {e!s}")
+                if not self.stop_event.is_set():
+                    self.log("任务异常，尝试恢复到主界面…")
+                    common.ensure_main_interface()
                 # 完整堆栈写入日志文件便于定位；逐行加时间戳并归到当前任务下，
                 # 面板仍只显示上面那条首行，避免刷屏
                 for stack_line in log_format.format_multiline(traceback.format_exc()):

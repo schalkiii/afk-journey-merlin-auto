@@ -79,9 +79,9 @@ tpl_claim = get_template_path("huodejiangli.png")           # 领奖弹窗「获
 tpl_close_popup = get_template_path("dianjikongbaichuguanbi.png")
 
 MATCH_THRESHOLD = 0.8
-# 礼盒相对「愿望单」标题中心的偏移。2026-11-06 实机重新量得：
-# 标题中心 (418,31)，进度礼盒中心 (480,66)，偏移应为 (62,35)。
-GIFT_CLICK_OFFSET = (62, 35)
+# 礼盒相对「愿望单」标题中心的偏移。2026-11-07 实机重新量得：
+# 标题中心 (418,31)，进度礼盒中心 (486,56)，偏移为 (68,25)。
+GIFT_CLICK_OFFSET = (68, 25)
 GIFT_THRESHOLD = 0.85
 MAX_ORDERS = 20           # 单次任务最多交付订单数，防止无限刷单
 MAX_CRAFTS = 5            # 单次任务最多制作次数，防止资源误消耗失控
@@ -185,10 +185,11 @@ def _claim_reward(label_pos):
     gift_pos = _find(tpl_gift, threshold=GIFT_THRESHOLD)
     if gift_pos is None:
         gift_pos = (label_pos[0] + GIFT_CLICK_OFFSET[0], label_pos[1] + GIFT_CLICK_OFFSET[1])
-    # 礼盒点一次没弹「获得奖励」时补点一次：进度条动画期间第一次点击可能落在图标边缘。
-    for attempt in range(1, 3):
-        _click(gift_pos, 1.5)
-        claim_pos = _find(tpl_claim, timeout=3.0)
+    # 礼盒是弹窗类按钮，必须单击：click_position(twice=True) 会在弹窗刚出现时再点一次，
+    # 把「获得奖励」当场关掉，导致永远检测不到领奖（2026-11-07 实机踩过：奖励已发但判未领）。
+    for attempt in range(1, 4):
+        _click_once(gift_pos, 0.6)
+        claim_pos = _find(tpl_claim, timeout=4.0)
         if claim_pos is not None:
             break
         log(f"【家园愿望单】第 {attempt} 次点进度礼盒未弹奖励，补点一次")
@@ -325,7 +326,10 @@ def _craft_from_lack():
             # 否则会在这个分支里空转刷满 CPU。
             time.sleep(0.3)
             continue
-        if prompt_pos is not None and prompt_clicks < 3 and time.time() >= next_prompt_at:
+        # 只有家园视图还可见时才点交互提示：进入生产界面后同一坐标会落在产品卡片上，
+        # 实测会打开「制造工艺」配方页且无返回入口，把后续所有任务卡死。
+        if (_find(tpl_entry) is not None and prompt_pos is not None
+                and prompt_clicks < 3 and time.time() >= next_prompt_at):
             # 交互提示是打开界面的跳转入口，连点会落到刚打开的界面里误触
             _click_once(prompt_pos, 1.5)
             prompt_clicks += 1

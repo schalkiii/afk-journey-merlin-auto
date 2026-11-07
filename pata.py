@@ -1,11 +1,10 @@
 import time
 
 from common import (
-    BOTTOM_BAR_CLIENT_REGION,
-    click_position,
     find_center_silent,
-    game_client_region,
     get_template_path,
+    log,
+    open_wanfamulu,
     random_sleep,
     recover_to_main_interface,
     send_coord,
@@ -13,7 +12,6 @@ from common import (
 )
 
 # 模板路径
-tpl_wanfamulu = get_template_path("wanfamulu.png")
 tpl_pata = get_template_path("pata.png")
 tpl_yaoguangzhita = get_template_path("yaoguangzhita.png")
 tpl_ziranzhita = get_template_path("ziranzhita.png")
@@ -29,23 +27,6 @@ TOWER_ORDER = [
     ("wanglingzhita", tpl_wanglingzhita),
 ]
 
-# 「天穹试炼」卡片位于玩法目录第三行，卡片名称被底部页签栏遮住，
-# pata.png 的文本模板匹配不到（实测 15 秒超时）。这时按客户区固定点位点击
-# 卡片可见区域，再用任意一座塔的「出发」按钮确认已进入选择界面。
-# 2026-11-06 实机复测：旧点位 (625,700) 落在卡片下缘点不进去，
-# 改点 (625,650) 可稳定进入「赛季天穹试炼」选择页（四塔列表 + 出发按钮）。
-PATA_CARD_POS = (625, 650)
-
-# 固定点位点击的最多尝试次数：目录刚打开时仍有切换动画/推广弹窗，单次点击会被吞。
-PATA_ENTRY_RETRIES = 3
-
-
-def _pata_panel_open():
-    """任一塔的「出发」按钮出现即认为已进入爬塔选择界面。"""
-    return any(
-        find_center_silent(tower_tpl, threshold=0.8, timeout=0)
-        for _name, tower_tpl in TOWER_ORDER
-    )
 
 
 def flow_pata():
@@ -71,32 +52,19 @@ def flow_pata():
     else:
         print("恢复主界面失败，继续尝试进入玩法目录。")
 
-    # 1. 点击 wanfamulu 进入玩法目录界面
-    if not wait_and_click(tpl_wanfamulu, "wanfamulu", 0.7, recover_threshold=20,
-                          client_region=BOTTOM_BAR_CLIENT_REGION):
+    # 1. 点击 wanfamulu 进入玩法目录界面（用面板标题自证，首次点击被吞时补点）
+    if not open_wanfamulu(threshold=0.7, timeout=8):
         print("点击 wanfamulu 进入玩法目录界面失败。")
         return False
     random_sleep()
 
     # 2. 点击 pata 进入爬塔选择界面
     if not wait_and_click(tpl_pata, "pata", 0.8, timeout=3.0):
-        # 卡名被页签栏遮挡时模板匹配不到，改按固定点位点击，并用塔的「出发」按钮自证。
-        # 目录刚打开时界面仍在切换、可能盖着推广弹窗，单次点击会被吞掉，
-        # 因此每轮重新取客户区原点并补点，最多 PATA_ENTRY_RETRIES 次。
-        entered = False
-        for attempt in range(1, PATA_ENTRY_RETRIES + 1):
-            region = game_client_region()
-            origin_x, origin_y = (region[0], region[1]) if region else (0, 0)
-            click_position((origin_x + PATA_CARD_POS[0], origin_y + PATA_CARD_POS[1]),
-                           wait=1.5, twice=False)
-            if _pata_panel_open():
-                entered = True
-                break
-            print(f"第 {attempt} 次点击「天穹试炼」卡片未进入选择界面，补点一次。")
-        if not entered:
-            print("点击 pata 进入爬塔选择界面失败。")
-            return False
-        print("「天穹试炼」卡名被页签栏遮挡，已按固定卡片点位进入。")
+        # 2026-11-07 实测：常规玩法页已没有「天穹试炼」卡片（活动结束/入口改版），
+        # 旧的固定点位兜底会点到相邻卡片（女神试炼/巅峰竞技场），把游戏带到别的玩法页。
+        # 宁可失败交给上层恢复，也不要盲点。
+        log("玩法目录里没有「天穹试炼」卡片（活动可能已结束），跳过爬塔。")
+        return False
     random_sleep()
 
     # 3. 按照顺序依次点击各个塔

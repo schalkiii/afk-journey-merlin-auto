@@ -36,10 +36,13 @@ def test_fight_once_full_selection_flow(monkeypatch):
     monkeypatch.setattr(df.time, "sleep", lambda _s: None)
 
     assert df._fight_once(1) is True
-    # 对手卡片用固定点位；失败页用固定空白点关闭（通用提示模板在该页匹配不到）；
-    # 其它按钮都走 wait_and_click
+    # 对手卡片用固定点位；阵容页两次「编辑下一场」+ 一次「战斗」由 _wait_for_any 直接点击；
+    # 失败页用固定空白点关闭（通用提示模板在该页匹配不到）
     assert clicks == [
         (772, 472),
+        (800, 840),
+        (800, 840),
+        (800, 840),
         (100 + df.SETTLEMENT_DISMISS_POS[0], 50 + df.SETTLEMENT_DISMISS_POS[1]),
     ]
 
@@ -80,6 +83,35 @@ def test_close_daily_settlement_clicks_blank_only_when_title_visible(monkeypatch
     monkeypatch.setattr(df, "find_center_silent", lambda *a, **k: None)
     assert df._close_daily_settlement() is False
     assert clicks == []
+
+
+def test_enter_dianfeng_returns_from_right_subpage(monkeypatch):
+    """竞技场落地在右侧子页（商店/排行榜等）时，点左下返回箭头回到挑战主页。"""
+    clicks = []
+    state = {"panel": False}
+
+    def fake_find(template_path, threshold=0.8, timeout=0, **kwargs):
+        if template_path == df.tpl_jixutiaozhan:
+            return (800, 840) if state["panel"] else None
+        if template_path == df.tpl_catalog_title:
+            return None       # 已离开目录，说明不是卡片点击被吞
+        if template_path.endswith("fanhui.png"):
+            return (400, 850)
+        return None
+
+    def fake_click(pos, wait=1.5, twice=True):
+        clicks.append(pos)
+        state["panel"] = True
+
+    monkeypatch.setattr(df, "open_wanfamulu", lambda *a, **k: True)
+    monkeypatch.setattr(df, "wait_and_click", lambda *a, **k: True)
+    monkeypatch.setattr(df, "find_center_silent", fake_find)
+    monkeypatch.setattr(df, "click_position", fake_click)
+    monkeypatch.setattr(df, "log", lambda *a, **k: None)
+    monkeypatch.setattr(df.time, "sleep", lambda _s: None)
+
+    assert df._enter_dianfeng() is True
+    assert clicks == [(400, 850)]
 
 
 def test_enter_dianfeng_closes_settlement_then_reconfirms(monkeypatch):

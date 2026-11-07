@@ -1,7 +1,6 @@
 import time
 
 from common import (
-    BOTTOM_BAR_CLIENT_REGION,
     at_main_interface,
     click_blank_to_exit,
     click_position,
@@ -10,6 +9,7 @@ from common import (
     game_client_region,
     get_template_path,
     log,
+    open_wanfamulu,
     random_sleep,
     recover_to_main_interface,
     send_coord,
@@ -20,7 +20,6 @@ from flow_enter import flow_return_main
 from jiance import check_and_handle_libao
 
 # === 模板路径，对应你的文件名 ===
-tpl_wanfamulu         = get_template_path("wanfamulu.png")
 tpl_mimengzhiyu       = get_template_path("mimengzhiyu.png")
 tpl_tiaozhan          = get_template_path("tiaozhan.png")
 tpl_zhandou           = get_template_path("zhandou.png")
@@ -250,9 +249,25 @@ def handle_battle():
             print("【迷梦之域】未检测到 zhandou 或 tiaoguozhandou，处理战斗界面失败。")
             return False
 
-    # 等待战斗结束，点击 pujingjieshu，超时时间 120 秒
-    if not wait_and_click(tpl_pujingjieshu, "pujingjieshu", 0.8, timeout=120):
-        print("【迷梦之域】点击 pujingjieshu 失败，处理战斗界面失败。")
+    # 等待战斗结束：优先点「竞技场结算」弹窗；2026-11-07 实测战斗结束会直接回到
+    # 迷梦主界面（阵容页「挑战」按钮重新可见），不再弹该结算，故两种信号都算打完。
+    # 只等结算会白等 120 秒后误判失败（失败现场停在本可继续挑战的主界面）。
+    deadline = time.time() + 120
+    ended = False
+    while time.time() < deadline:
+        result_pos = find_center_silent(tpl_pujingjieshu, 0.8)
+        if result_pos is not None:
+            click_position(result_pos, wait=1.5, twice=False)
+            ended = True
+            break
+        if (find_center_silent(tpl_tiaozhan, 0.8)
+                and find_center_silent(tpl_zhandou, 0.8) is None
+                and find_center_silent(tpl_tiaoguozhandou, 0.8) is None):
+            ended = True
+            break
+        time.sleep(1.0)
+    if not ended:
+        print("【迷梦之域】战斗结束信号未出现，处理战斗界面失败。")
         return False
     random_sleep()
 
@@ -288,9 +303,8 @@ def flow_mimengzhiyu(challenge_count=None, auto_configure_lineup=False,
             - 此时和大分支1一样的逻辑：识别 zhandou 和 tiaoguozhandou，优先点击 tiaoguozhandou
             - 之后点击 pujingjieshu
     """
-    # 1. 点击 wanfamulu 进入玩法目录界面
-    if not wait_and_click(tpl_wanfamulu, "wanfamulu", 0.7, recover_threshold=20,
-                          client_region=BOTTOM_BAR_CLIENT_REGION):
+    # 1. 点击 wanfamulu 进入玩法目录界面（用面板标题自证，首次点击被吞时补点）
+    if not open_wanfamulu(threshold=0.7, timeout=8):
         print("点击 wanfamulu 进入玩法目录界面失败。")
         return False
     random_sleep()

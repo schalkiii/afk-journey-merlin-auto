@@ -6,6 +6,10 @@ from common import find_center, get_templates_dir, wait_and_click
 # 模板路径
 templates_dir = get_templates_dir()
 
+# 「点击空白处关闭」模板路径：两次领取分支都要用，必须定义在分支外（否则第二分支会 
+# 触发 UnboundLocalError）。
+CLAIM_POPUP_CLOSE = os.path.join(templates_dir, "dianjikongbaichuguanbi.png")
+
 def main():
     print("开始执行每日任务...")
     
@@ -53,8 +57,7 @@ def main():
                 time.sleep(2)
                 
                 # 6. 点击dianjikongbaichuguanbi
-                dianjikongbaichuguanbi_path = os.path.join(templates_dir, "dianjikongbaichuguanbi.png")
-                if not wait_and_click(dianjikongbaichuguanbi_path, "dianjikongbaichuguanbi"):
+                if not wait_and_click(CLAIM_POPUP_CLOSE, "dianjikongbaichuguanbi"):
                     print("未找到dianjikongbaichuguanbi，跳过")
             break
         time.sleep(0.5)
@@ -86,7 +89,7 @@ def main():
     
     if yijianlingqu_found:
         # 9. 点击dianjikongbaichuguanbi
-        if not wait_and_click(dianjikongbaichuguanbi_path, "dianjikongbaichuguanbi"):
+        if not wait_and_click(CLAIM_POPUP_CLOSE, "dianjikongbaichuguanbi"):
             print("未找到dianjikongbaichuguanbi，跳过")
         time.sleep(2)
     else:

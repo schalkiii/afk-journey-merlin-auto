@@ -17,16 +17,15 @@
 import time
 
 from common import (
-    BOTTOM_BAR_CLIENT_REGION,
     check_stop,
     click_position,
     find_center_silent,
     get_template_path,
     log,
-    wait_and_click,
+    open_wanfamulu,
 )
 
-tpl_wanfamulu = get_template_path("wanfamulu.png")
+tpl_catalog_title = get_template_path("wanfamulubiaoti.png")   # 玩法目录面板标题（判断是否已离开目录）
 tpl_tab = get_template_path("gonghuiwanfa.png")                # 「公会玩法」页签（未激活）
 tpl_tab_active = get_template_path("gonghuiwanfaactive.png")   # 「公会玩法」页签（已激活）
 
@@ -36,8 +35,7 @@ SETTLE_DELAY = 2.0     # 界面切换后的稳定等待
 
 def flow_enter_guild_play(card_template, card_name):
     """从主界面进入公会玩法页并点击目标玩法卡片；点击完成返回 True（落地由调用方校验）。"""
-    if not wait_and_click(tpl_wanfamulu, "wanfamulu", 0.7, recover_threshold=20,
-                          client_region=BOTTOM_BAR_CLIENT_REGION):
+    if not open_wanfamulu(threshold=0.7, timeout=8):
         log(f"【公会玩法】未找到玩法目录入口，无法进入{card_name}")
         return False
     time.sleep(SETTLE_DELAY)
@@ -51,9 +49,15 @@ def flow_enter_guild_play(card_template, card_name):
         click_position(tab_pos, SETTLE_DELAY)
 
     check_stop()
-    card_pos = find_center_silent(card_template, 0.8, timeout=8)
-    if card_pos is None:
-        log(f"【公会玩法】未找到{card_name}入口卡片")
-        return False
-    click_position(card_pos, SETTLE_DELAY, twice=False)
-    return True
+    for attempt in range(1, 3):
+        card_pos = find_center_silent(card_template, 0.8, timeout=8)
+        if card_pos is None:
+            log(f"【公会玩法】未找到{card_name}入口卡片")
+            return False
+        click_position(card_pos, SETTLE_DELAY, twice=False)
+        # 卡片点击可能被窗口激活吞掉（目录仍在原样）：确认已离开目录再交给调用方校验落地。
+        if find_center_silent(tpl_catalog_title, 0.8, timeout=0) is None:
+            return True
+        log(f"【公会玩法】点击{card_name}后目录仍在（第 {attempt} 次被吞），补点一次")
+    log(f"【公会玩法】多次点击{card_name}后仍停在玩法目录")
+    return False

@@ -2,9 +2,9 @@ import os
 import time
 
 from common import (
-    BOTTOM_BAR_CLIENT_REGION,
     find_center,
     get_templates_dir,
+    open_wanfamulu,
     recover_to_main_interface,
     wait_and_click,
 )
@@ -80,9 +80,7 @@ def main(paid_times=0):
     print(f"付费购买次数设置: {MAX_PAID_TIMES}")
     
     # 1. 识别并点击wanfamulu
-    wanfamulu_path = os.path.join(templates_dir, "wanfamulu.png")
-    if not wait_and_click(wanfamulu_path, "wanfamulu", threshold=0.7, recover_threshold=20,
-                          client_region=BOTTOM_BAR_CLIENT_REGION):
+    if not open_wanfamulu(threshold=0.7, timeout=8):
         print("未找到wanfamulu，任务终止")
         return False
     time.sleep(2)

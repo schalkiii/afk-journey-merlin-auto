@@ -5,6 +5,8 @@
   并且只靠「点击空白处关闭」提示兜底；弹窗压住面板时面板按钮只会匹配到 0.43–0.50。
 - 进度礼盒只有第一档（金色心形）能被模板整档命中，其它档位（青色宝石）外观不同跨不了档，
   必须退回「愿望单标题锚点 + GIFT_CLICK_OFFSET」——这条兜底线上线后天天在跑。
+- 领奖礼盒是弹窗类按钮，必须单击：连点的第二次会把刚弹出的「获得奖励」当场关掉，
+  表现为奖励已发但流程判「未领取」（2026-11-07 实机踩过）。
 """
 import types
 
@@ -196,7 +198,7 @@ def _stub_claim(monkeypatch, gift_pos, claim_pos):
         return None
 
     monkeypatch.setattr(ywd, "_find", fake_find)
-    monkeypatch.setattr(ywd, "_click", lambda pos, wait=None: clicks.append((pos, wait)))
+    monkeypatch.setattr(ywd, "_click_once", lambda pos, wait=None: clicks.append((pos, wait)))
     monkeypatch.setattr(ywd, "_close_by_blank_hint", lambda: closes.append("close"))
     monkeypatch.setattr(ywd, "log", lambda *args, **kwargs: None)
     return clicks, closes, lookups
@@ -207,7 +209,7 @@ def test_claim_reward_clicks_gift_template_when_it_hits(monkeypatch):
     clicks, closes, lookups = _stub_claim(monkeypatch, GIFT_HIT_POS, (3200, 700))
 
     assert ywd._claim_reward(LABEL_POS) is True
-    assert clicks == [(GIFT_HIT_POS, 1.5)]
+    assert clicks == [(GIFT_HIT_POS, 0.6)]
     assert lookups[0] == (ywd.tpl_gift, {"threshold": ywd.GIFT_THRESHOLD})
     assert closes == ["close"]
 
@@ -215,23 +217,23 @@ def test_claim_reward_clicks_gift_template_when_it_hits(monkeypatch):
 def test_claim_reward_falls_back_to_label_offset(monkeypatch):
     """其它档位（青色宝石）模板跨不了档：退回「标题锚点 + GIFT_CLICK_OFFSET」。
 
-    坐标按 2026-11-06 实机重测结果写死（礼盒 480,66 / 标题 418,31，偏移 (62,35)）；
-    旧偏移 (68,25) 落在礼盒上缘，进度奖励一直没被领到，故这里刻意不复用常量做断言。
+    坐标按 2026-11-07 实机重测结果写死（礼盒 486,56 / 标题 418,31，偏移 (68,25)）；
+    旧的 (62,35) 落在礼盒边缘，进度奖励一直没被领到，故这里刻意不复用常量做断言。
     """
     clicks, closes, lookups = _stub_claim(monkeypatch, None, (3200, 700))
 
     assert ywd._claim_reward(LABEL_POS) is True
-    assert clicks == [((2480, 166), 1.5)]
+    assert clicks == [((2486, 156), 0.6)]
     assert lookups[0][0] == ywd.tpl_gift
     assert closes == ["close"]
 
 
 def test_claim_reward_reports_failure_without_claim_popup(monkeypatch):
-    """点了礼盒但「获得奖励」弹窗没出现（无可领档位）：补点一次后判未领取且不关弹窗。"""
+    """点了礼盒但「获得奖励」弹窗没出现（无可领档位）：补点两次后判未领取且不关弹窗。"""
     clicks, closes, _lookups = _stub_claim(monkeypatch, None, None)
 
     assert ywd._claim_reward(LABEL_POS) is False
-    assert clicks == [((2480, 166), 1.5), ((2480, 166), 1.5)]
+    assert clicks == [((2486, 156), 0.6)] * 3
     assert closes == []
 
 
