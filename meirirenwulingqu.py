@@ -1,3 +1,8 @@
+"""日常任务奖励领取：进入任务面板执行一键领取并关闭结算弹窗。
+
+被 GUI「日常任务」任务分发，入口 `main()`；依赖 `common` 的模板匹配与 `flow_enter`。
+"""
+
 import os
 import time
 

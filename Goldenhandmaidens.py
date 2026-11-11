@@ -205,8 +205,9 @@ class GameBotGUI:
             # 共用 flow_gonghui 的入口流程，结束后各自兜底回主界面。
             ScriptConfig("结社战线", enabled=False),
             ScriptConfig("狩猎悬赏", enabled=False),
-            # 家园愿望单在「家园」内执行，结束后游戏停留在家园视图，而项目其余流程
-            # 以主界面「玩法目录」为起点判定，故必须排在执行顺序末尾，避免阻断后续任务。
+            # 家园愿望单在「家园」内执行，结束后游戏停留在家园视图，该视图下主界面判据
+            # 「玩法目录」可能不可靠；建议放在执行顺序末尾。若用户拖到中间，调度层会在
+            # 下一任务开始前校验，无法恢复时跳过并留现场（见 _skip_task_when_not_at_main）。
             ScriptConfig("家园愿望单", enabled=False),
         ]
         
@@ -519,6 +520,10 @@ class GameBotGUI:
         if getattr(self, "_drag_moved", False):
             self.save_config()
             self.log("执行顺序已调整为：" + " → ".join(s.name for s in self.scripts))
+            # 家园视图下「玩法目录」判据不可靠，愿望单任务结束后可能留在非主界面；
+            # 调度层会在下一任务开始前检测并跳过无法恢复的任务，这里把风险直接告诉用户。
+            if self.scripts and self.scripts[-1].name != "家园愿望单":
+                self.log("提示：「家园愿望单」建议保持在最后一位，它结束后可能停在家园视图")
             self.root.after(0, self.update_script_panel)
         
     def create_script_panel(self, parent):
@@ -1531,15 +1536,52 @@ class GameBotGUI:
 
     # ===== 运行循环（在线程内依次执行各脚本） =====
     def is_click_from_file_running(self):
-        """检测 click_from_file.exe 是否已在运行，避免重复启动造成卡顿与弹框。"""
-        try:
-            result = subprocess.run(
-                ["tasklist", "/FI", "IMAGENAME eq click_from_file.exe"],
-                capture_output=True, text=True, check=False
+        """检测点击注入器是否已在运行（编译 exe 或 AHK v2 明文脚本），避免重复启动。"""
+        return common.clicker_process_alive()
+
+    @staticmethod
+    def _resolve_clicker_launcher():
+        """返回启动命令：优先 AHK v2 明文脚本，未安装 AHK 或脚本缺失时回退编译 exe。
+
+        AHK v2 明文脚本可维护且修正了点击时序；打包 exe 在无 AHK 环境的机器上仍需可用。
+        """
+        script = get_resource_path("click_from_file.ahk")
+        if os.path.exists(script):
+            program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+            candidates = (
+                os.path.join(program_files, "AutoHotkey", "v2", "AutoHotkey64.exe"),
+                r"C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe",
             )
-            return "click_from_file.exe" in result.stdout
-        except (OSError, subprocess.SubprocessError):
+            for ahk in candidates:
+                if os.path.exists(ahk):
+                    return [ahk, script]
+        exe = get_resource_path("click_from_file.exe")
+        return [exe] if os.path.exists(exe) else None
+
+    def _launch_clicker(self):
+        """（重新）启动点击注入器：先清掉同名旧进程，再按 launcher 启动一个。"""
+        with contextlib.suppress(Exception):
+            subprocess.run(["taskkill", "/F", "/IM", "click_from_file.exe"],
+                           capture_output=True, check=False)
+            time.sleep(0.3)
+        try:
+            work_dir = get_work_path("")
+            launcher = self._resolve_clicker_launcher()
+            if launcher is None:
+                self.log("错误: 未找到点击注入器（click_from_file.ahk / click_from_file.exe）")
+                return False
+            self.log(f"点击注入器: {launcher}")
+            self.log(f"工作目录: {work_dir}")
+            # CREATE_NO_WINDOW：Windows 下不弹出控制台黑框，消除「启动终端框」的视觉卡顿
+            subprocess.Popen(launcher + [work_dir],
+                             creationflags=subprocess.CREATE_NO_WINDOW)
+            self.log("点击注入器启动成功")
+        except (OSError, ValueError) as e:
+            self.log(f"运行点击注入器失败: {e!s}")
+            self.log("警告: 点击注入器未启动，部分功能可能无法正常工作")
             return False
+        time.sleep(2)
+        return True
 
     # ===== 任务分发（字典映射替代巨型 if/elif，降低维护成本）=====
     # 每个 _run_* 方法对应一个任务，返回 True 表示执行成功、False 表示失败；
@@ -1790,6 +1832,23 @@ class GameBotGUI:
             self.log(f"{script.name} 模块导入失败: {e!s}")
             return False
 
+    def _skip_task_when_not_at_main(self, script, index, total, task_started):
+        """任务开始前确认已回到主界面；无法恢复时标记失败并留现场，返回是否应跳过。
+
+        上一任务可能把游戏留在无法恢复的界面（如家园生产页），继续跑只会让本任务
+        白等到超时并连锁拖垮后续任务。`ensure_main_interface()` 的返回值必须被处理，
+        不能像旧实现那样静默忽略。抽成方法便于在不启动运行线程的前提下验证该契约。
+        """
+        if script.name == "登录" or common.ensure_main_interface():
+            return False
+        self.log(f"{script.name} 开始前未回到主界面，跳过本次执行")
+        script.status = "失败"
+        self.log(log_format.task_end_line(False, index, total, script.name,
+                                          time.time() - task_started))
+        common.capture_failure_context(script.name, "任务开始前未回到主界面")
+        self.root.after(0, self.update_script_panel)
+        return True
+
     def run_scripts_thread(self, scripts_to_run, respect_enabled=True):
         # 单运行循环假设：log_format._task 是模块级全局，两个并行循环会互相覆盖任务上下文，
         # 日志归组随之错乱。断言放在任何 set_task 之前，确保同一时刻只有一个循环在跑。
@@ -1803,39 +1862,27 @@ class GameBotGUI:
         activate_mode = "开" if self.remote_desktop_compat else "关"
         self.log(f"截图模式: {capture_mode}；点击前自动激活游戏: {activate_mode}")
         region = common.game_client_region()
-        if region and (region[2], region[3]) != (1600, 900):
+        if region and (region[2], region[3]) != (common.CLIENT_WIDTH, common.CLIENT_HEIGHT):
             self.log(
-                f"警告: 游戏客户区当前为 {region[2]}×{region[3]}，模板按 1600×900 采集，"
+                f"警告: 游戏客户区当前为 {region[2]}×{region[3]}，模板按 "
+                f"{common.CLIENT_WIDTH}×{common.CLIENT_HEIGHT} 采集，"
                 "识别可能失败；请把游戏窗口恢复为 1600×900"
             )
 
-        # click_from_file.exe 是常驻监听程序（与各脚本通过 shared 目录 IPC 通信）。
-        # 若已在运行则直接复用，避免每次点「开始」都重启 + 弹出新终端框造成约 1 秒卡顿；
-        # 仅当未运行时才启动，并用 CREATE_NO_WINDOW 隐藏控制台窗口（性能与体验优化）。
-        if self.is_click_from_file_running():
-            self.log("click_from_file.exe 已在运行，复用现有进程（跳过重启）")
+        # 点击注入器：优先 AHK v2 明文脚本（按下有保持时长、动作完成后才删 IPC 文件，
+        # 2026-11-10 修复「点击过短 / 鼠标来回横跳」）；未安装 AHK v2 时回退编译 exe。
+        #
+        # 2026-11-11 实机回归：旧逻辑只判断「有 AHK 进程在跑」就复用。跨天重启程序时，
+        # 复用的可能是上一天留下的进程——它绑定的工作目录未必是当前仓库（例如已被清理的
+        # _MEI 临时目录），于是坐标无人消费、点击全部落空，表现为「从第一个任务起点击都不准」。
+        # 现在复用前先用一次「点标题栏」自证：能消费本目录坐标才复用，否则重启注入器。
+        if self.is_click_from_file_running() and common._click_title_bar():
+            self.log("点击注入器已在运行且能消费本目录坐标，复用现有进程")
         else:
-            with contextlib.suppress(Exception):
-                subprocess.run(["taskkill", "/F", "/IM", "click_from_file.exe"],
-                               capture_output=True, check=False)
-                time.sleep(0.3)
-            self.log("运行click_from_file.exe...")
-            try:
-                ahk_exe_path = get_resource_path("click_from_file.exe")
-                work_dir = get_work_path("")
-                self.log(f"脚本路径: {ahk_exe_path}")
-                self.log(f"工作目录: {work_dir}")
+            if self.is_click_from_file_running():
+                self.log("现有注入器没有消费坐标（工作目录可能已失效），改为重新启动")
+            self._launch_clicker()
 
-                if not os.path.exists(ahk_exe_path):
-                    self.log(f"错误: click_from_file.exe 文件不存在: {ahk_exe_path}")
-                else:
-                    # CREATE_NO_WINDOW：Windows 下不弹出控制台黑框，消除「启动终端框」的视觉卡顿
-                    subprocess.Popen([ahk_exe_path, work_dir], creationflags=subprocess.CREATE_NO_WINDOW)
-                    self.log("click_from_file.exe 启动成功")
-            except (OSError, ValueError) as e:
-                self.log(f"运行click_from_file.exe失败: {e!s}")
-                self.log("警告: click_from_file.exe 未启动，部分功能可能无法正常工作")
-            time.sleep(2)
         
         # 按调用方给定的脚本列表依次执行。列表由 start_all / run_single_script 从
         # self.scripts 生成，因此顺序就是功能列表里拖出来的顺序——不再维护独立的
@@ -1869,8 +1916,8 @@ class GameBotGUI:
             #    逐层退出回到主界面，避免本次 wanfamulu 检测失败、连锁卡死后续所有任务。
             try:
                 common.dismiss_popup()
-                if script.name != "登录":
-                    common.ensure_main_interface()
+                if self._skip_task_when_not_at_main(script, index, total, task_started):
+                    continue
 
                 # 检查是否需要停止
                 if self.stop_event.is_set():
@@ -2032,26 +2079,24 @@ class GameBotGUI:
             if result[0] is None:
                 return  # 启动时静默失败
             has_update, latest_tag, download_url, _ = result
-            if has_update:
+            if has_update and download_url:
                 self.root.after(0, lambda: self._show_update_dialog(latest_tag, download_url))
         threading.Thread(target=_check, daemon=True).start()
 
     def _check_update_clicked(self):
-        """手动检查更新"""
+        """手动检查更新；`check_update()` 固定返回四元组，失败时第 4 项是错误原因。"""
         self.update_btn.configure(text="检查中...", state=tk.DISABLED)
 
         def _check():
             import updater
-            result = updater.check_update()
-            if result[0] is None:
-                _, err_msg = result
-                self.root.after(0, lambda: self._update_result(f"检查失败: {err_msg}"))
+            has_update, latest_tag, download_url, message = updater.check_update()
+            if has_update is None:
+                self.root.after(0, lambda: self._update_result(f"检查失败: {message}"))
+            elif has_update:
+                self.root.after(0, lambda: self._show_update_dialog(latest_tag, download_url))
             else:
-                has_update, latest_tag, download_url, _ = result
-                if has_update:
-                    self.root.after(0, lambda: self._show_update_dialog(latest_tag, download_url))
-                else:
-                    self.root.after(0, lambda: self._update_result(f"已是最新版本 ({latest_tag})"))
+                text = f"已是最新版本 ({latest_tag})" if latest_tag else message
+                self.root.after(0, lambda: self._update_result(text))
             self.root.after(0, lambda: self.update_btn.configure(text="检查更新", state=tk.NORMAL))
         threading.Thread(target=_check, daemon=True).start()
 

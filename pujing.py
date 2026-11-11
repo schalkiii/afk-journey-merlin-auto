@@ -1,3 +1,9 @@
+"""普通竞技场流程：连打至付费门票、战斗 / 结算状态机与次数收敛。
+
+关键接口 `execute_battle_flow()` 与 `flow_pujing()`；依赖 `common` 的模板匹配
+与「跳过 / 结算谁先出现就按谁走」的等待原语。
+"""
+
 import time
 
 from common import (
@@ -184,7 +190,7 @@ def flow_pujing():
                 print("未找到战斗按钮，普晶流程结束。")
                 return False
             battle_tpl, battle_name, battle_pos = battle_hit
-            if not execute_battle_flow(battle_tpl, battle_name, battle_pos):
+            if not _battle_then_continue(battle_tpl, battle_name, battle_pos):
                 return False
             # 继续下一轮循环
             continue
@@ -206,7 +212,7 @@ def flow_pujing():
                 print("未找到战斗按钮，普晶流程结束。")
                 return False
             battle_tpl, battle_name, battle_pos = battle_hit
-            if not execute_battle_flow(battle_tpl, battle_name, battle_pos):
+            if not _battle_then_continue(battle_tpl, battle_name, battle_pos):
                 return False
         else:
             hit_tpl, hit_name, _ = hit
@@ -244,7 +250,7 @@ def flow_pujing():
                     print("未找到战斗按钮，普晶流程结束。")
                     return False
                 battle_tpl, battle_name, battle_pos = battle_hit
-                if not execute_battle_flow(battle_tpl, battle_name, battle_pos):
+                if not _battle_then_continue(battle_tpl, battle_name, battle_pos):
                     return False
 
             # 情况3：识别到 fufeimenpiao
@@ -276,15 +282,48 @@ def flow_pujing():
                 print(f"未知情况：{hit_name}，普晶流程结束。")
                 return False
 
+def _battle_then_continue(battle_tpl, battle_name, battle_pos):
+    """打一场普竞；单场失败但挑战按钮仍在时返回 True（继续下一场）。
+
+    2026-11-08 实跑：第 2 场点战斗被吞后 execute_battle_flow 返回 False，
+    整轮直接结束、竞技场次数有残留。单场失败不等于次数用尽，挑战按钮还在就继续。
+    """
+    if execute_battle_flow(battle_tpl, battle_name, battle_pos):
+        return True
+    if (find_center_silent(tpl_kaishitiaozhan, 0.8, timeout=3)
+            or find_center_silent(tpl_pujingjixutiaozhan, 0.8, timeout=0)):
+        print("本场未完成，但挑战按钮仍在，继续下一场。")
+        return True
+    return False
+
+
 def execute_battle_flow(battle_tpl, battle_name, battle_pos):
     """执行战斗流程"""
     print(f"点击 {battle_name}")
     send_coord(battle_pos[0], battle_pos[1])
     random_sleep()
 
-    # 点击 zhandou 进入战斗
-    if not wait_and_click(tpl_zhandou, "zhandou", 0.8):
-        print("点击 zhandou 失败，普晶流程结束。")
+    # 点击 zhandou 进入战斗；点击可能被窗口激活吞掉（2026-11-08 实跑第 2 场 15 秒未出现），
+    # 未出现且战斗按钮仍在时补点一次；按钮已消失说明界面已切换，不再盲点。
+    zhandou_clicked = False
+    for attempt in range(1, 3):
+        if wait_and_click(tpl_zhandou, f"zhandou({attempt})", 0.8, timeout=15):
+            zhandou_clicked = True
+            break
+        if find_center_silent(battle_tpl, 0.8) is None:
+            print("战斗按钮已消失，界面可能已切换，不再补点。")
+            break
+        print("zhandou 未出现且战斗按钮仍在，补点一次。")
+        send_coord(battle_pos[0], battle_pos[1])
+        random_sleep()
+    if not zhandou_clicked:
+        # 2026-11-09 实机：连续 30 秒等不到「战斗」→ 整条任务失败。此时往往是次数用尽、
+        # 界面弹出门票提示；识别到门票就按「正常结束」处理，不再误报失败。
+        if (find_center_silent(tpl_mianfeimenpiao, 0.8, timeout=2.0)
+                or find_center_silent(tpl_fufeimenpiao, 0.8, timeout=0)):
+            print("出现门票提示，竞技场次数已用尽，本场正常结束。")
+            return True
+        print("点击 zhandou 失败，本场结束。")
         return False
     random_sleep()
 

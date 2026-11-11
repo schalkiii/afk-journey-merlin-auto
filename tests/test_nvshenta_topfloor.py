@@ -29,6 +29,10 @@ def _stub_back(monkeypatch, saodang_hits, clicks):
 
     monkeypatch.setattr(nt, "find_center_silent", fake_find)
     monkeypatch.setattr(nt, "wait_and_click", fake_wait_and_click)
+    # 2026-11-09 起 _back_to_tower_page 在回退两轮后会尝试重进女神塔（退过头到主界面时）；
+    # 这里桩成重进失败，保持「只试 exit/exitck」的断言语义。
+    monkeypatch.setattr(nt, "open_wanfamulu", lambda *a, **k: False)
+    monkeypatch.setattr(nt, "wait_until_loaded", lambda *a, **k: True)
     monkeypatch.setattr(nt, "time", types.SimpleNamespace(time=time.time,
                                                           sleep=lambda _seconds: None))
     return probes

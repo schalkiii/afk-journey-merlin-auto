@@ -10,6 +10,7 @@ goldenhandmaidens.exe
 __pycache__/
 *.pyc
 .pytest_cache/
+.pytest_tmp/
 .ruff_cache/
 
 # User data - not part of source
@@ -18,6 +19,8 @@ warehouse_heroes.txt
 shared/
 game_bot.log
 game_bot.log.*
+# 2026-11-07 已删除的孤儿文件：从未被代码读取，防止误加回仓库
+config.json
 
 # IDE / tools
 .claude/

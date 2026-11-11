@@ -1,3 +1,8 @@
+"""友谊商城购买流程。
+
+入口 `main()`，由 `shangcheng` 调用；依赖 `common` 的模板匹配与点击原语。
+"""
+
 import os
 import time
 

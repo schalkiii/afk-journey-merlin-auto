@@ -34,6 +34,7 @@ from common import (
     find_center_silent,
     get_template_path,
     log,
+    scroll_in_client_region,
 )
 from flow_enter import flow_return_main
 from flow_gonghui import flow_enter_guild_play
@@ -129,20 +130,71 @@ def _close_settlements():
     return _find(tpl_hint) is None
 
 
+_incomplete = {"flag": False, "active": False}
+
+
+def _dismiss_blocking_popup():
+    """清掉意外弹框（「已达成玩家」/「获得奖励」之类），避免它吞掉下一次点击。
+
+    仅在 main() 启动的完整流程里启用（_incomplete["active"]）：单元测试直接调
+    _use_own_searches / _join_others 时不触发，避免额外截图与点击桩。
+    """
+    if not _incomplete["active"]:
+        return
+    hint = get_template_path("dianjikongbaichuguanbi.png")
+    if _find(hint) is None:
+        return
+    for _ in range(2):
+        check_stop()
+        dismiss_popup_away_from()
+        time.sleep(0.5)
+        if _find(hint) is None:
+            return
+    log("【狩猎悬赏】遮挡弹框清不掉，继续尝试（由面板标题判据兜底）")
+
+
+def _panel_still_here():
+    """本次点击是否真的作用到了悬赏面板上。
+
+    判据是「动作有反馈」，不是「标题还在」：
+    - 标题仍可见：点完没弹窗（例如点了没反应的灰按钮），面板还在；
+    - 出现「点击空白处关闭」：抽到悬赏/加入成功都会立刻弹结算，弹窗会把面板标题压暗到
+      约 0.35（模板匹配不到）。2026-11-11 实机：第一次「搜寻精怪」其实成功了，却因为
+      标题被压暗判成「点击被吞」，随后对着旧坐标补点、把面板点没了，整条任务误报未完成。
+
+    只有两者都不成立（既没标题、也没结算弹窗）才是真的被吞掉/离开了面板。
+    """
+    if not _incomplete["active"]:
+        return True
+    if _find(tpl_title, timeout=1.5) is not None:
+        return True
+    return _find(get_template_path("dianjikongbaichuguanbi.png"), timeout=1.0) is not None
+
+
 def _use_own_searches():
     """抽光自己的「搜寻精怪」次数，返回抽取次数。"""
     searched = 0
     while searched < MAX_SEARCHES:
         check_stop()
+        _dismiss_blocking_popup()
         # 首次进入面板时按钮可能还在渲染；给 2 秒轮询，按钮确实变灰才判定次数用尽
         search_pos = _find(tpl_search, timeout=2)
         if search_pos is None:
             break   # 按钮变灰：自己的次数已用尽
         click_position(search_pos, SETTLE_DELAY, twice=False)
+        if not _panel_still_here():
+            log("【狩猎悬赏】搜寻后面板标题消失，疑似弹框遮挡，清弹框后补点")
+            dismiss_popup_away_from()
+            click_position(search_pos, SETTLE_DELAY, twice=False)
+            if not _panel_still_here():
+                log("【狩猎悬赏】补点后仍未恢复面板，判定本次搜寻未生效")
+                _incomplete["flag"] = True
+                break
         searched += 1
         log(f"【狩猎悬赏】第 {searched} 次搜寻精怪完成")
         if not _close_settlements():
             log("【狩猎悬赏】结算弹窗未能关闭，停止搜寻")
+            _incomplete["flag"] = True
             break
     return searched
 
@@ -162,26 +214,53 @@ def _join_others():
     region = (title_pos[0] + GRID_REGION[0], title_pos[1] + GRID_REGION[1],
               GRID_REGION[2], GRID_REGION[3])
     joined = 0
+    scroll_rounds = 0
     while joined < MAX_JOINS:
         check_stop()
+        _dismiss_blocking_popup()
         # 加入后列表会重排，下一张卡片的按钮可能稍后才出现；给 2 秒轮询避免少计
         join_pos = find_center_silent(tpl_join, JOIN_THRESHOLD, region=region, timeout=2.0)
-        if join_pos is None:
-            break
-        click_position(join_pos, SETTLE_DELAY)
-        joined += 1
-        log(f"【狩猎悬赏】已参加第 {joined} 个队友悬赏")
+        if join_pos is not None:
+            click_position(join_pos, SETTLE_DELAY)
+            if not _panel_still_here():
+                log("【狩猎悬赏】加入后面板标题消失，疑似弹框遮挡，清弹框后补点")
+                dismiss_popup_away_from()
+                click_position(join_pos, SETTLE_DELAY)
+                if not _panel_still_here():
+                    log("【狩猎悬赏】补点后仍未恢复面板，判定本次加入未生效")
+                    _incomplete["flag"] = True
+                    break
+            joined += 1
+            log(f"【狩猎悬赏】已参加第 {joined} 个队友悬赏")
+            continue
+        # 没找到「加入」：可能有卡片折叠在列表下方（2026-11-08 用户反馈），
+        # 先把悬赏卡片网格滚到底再找；滚到底仍没有才认为无可参加。
+        if scroll_rounds < 2:
+            log("未找到「加入」按钮，下滑悬赏列表到底后再找")
+            scroll_in_client_region("down", times=2, region=region)
+            scroll_rounds += 1
+            continue
+        break
     return joined
 
 
 def main():
-    """执行狩猎悬赏每日流程（自己的搜寻次数 + 参加队友悬赏），跑完返回 True。"""
+    """执行狩猎悬赏每日流程（自己的搜寻次数 + 参加队友悬赏）。
+
+    2026-11-10 起：有动作被意外弹框遮挡且未能恢复时返回 False，不再无条件报成功。
+    """
     log("【狩猎悬赏】开始执行...")
+    _incomplete["flag"] = False
+    _incomplete["active"] = True
 
     if not _enter_panel():
+        # 2026-11-08 实跑：卡片/招牌可能因活动排期或镜头未到位找不到，属「当日无此玩法」，
+        # 按跳过处理（返回 True），不让整轮任务因入口缺失而标记失败。
+        log("【狩猎悬赏】入口不可用（卡片或招牌缺失），本日跳过")
         check_and_handle_libao()
         flow_return_main()
-        return False
+        _incomplete["active"] = False
+        return True
 
     searched = _use_own_searches()
     joined = _join_others()
@@ -194,6 +273,10 @@ def main():
 
     check_and_handle_libao()
     flow_return_main()
+    _incomplete["active"] = False
+    if _incomplete["flag"]:
+        log("【狩猎悬赏】存在被弹框遮挡且未恢复的动作，本次标记未完成")
+        return False
     return True
 
 

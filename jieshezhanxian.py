@@ -35,6 +35,7 @@ from common import (
     find_center_silent,
     get_template_path,
     log,
+    wait_until_loaded,
 )
 from flow_enter import flow_return_main
 from flow_gonghui import flow_enter_guild_play
@@ -139,16 +140,45 @@ def _challenge_until_lose():
             log("【结社战线】点「继续挑战」后未回到备战界面，停止挑战")
             break
 
-    if not _back_to_main():
-        log("【结社战线】挑战结束后未能回到主界面")
+    # 2026-11-09 实机：旧实现在挑战结束后立刻 _back_to_main()，把结社页面关掉，
+    # 随后 _sweep_remaining 在主界面找不到「扫荡」按钮 → 误判「次数已用尽」，
+    # 用户实际还有次数却没扫。挑战结束应留在结社页面，由 _sweep_remaining 自己回主页。
     return wins
 
 
+def _back_to_guild_home():
+    """回退到结社战线主页（有「扫荡」按钮的页面）；退不出来返回 False。
+
+    2026-11-09 实机：挑战失败后停在失败结算页，直接找「扫荡」必然找不到，
+    旧实现就把「扫荡面板未打开」当成「次数已用尽」，用户实际还有次数却没扫。
+    """
+    if find_center_silent(tpl_saodang, 0.8, timeout=2.0) is not None:
+        return True
+    for _ in range(3):
+        check_stop()
+        pos = find_center_silent(tpl_back, 0.8, timeout=2.0)
+        if pos is None:
+            # 失败结算页可能只有「点击空白处关闭」/「再次挑战」，先清弹窗再找返回
+            dismiss_popup_away_from()
+        else:
+            click_position(pos, SETTLE_DELAY, twice=False)
+        wait_until_loaded(8.0)
+        if find_center_silent(tpl_saodang, 0.8, timeout=4.0) is not None:
+            return True
+    return False
+
+
 def _sweep_remaining():
-    """把当日剩余扫荡次数一次扫完；扫荡面板打不开视为无剩余次数，返回 False。"""
-    if not _click_and_expect(tpl_saodang, tpl_panel, expect_timeout=PANEL_TIMEOUT):
-        log("【结社战线】扫荡面板未打开，视为当日扫荡次数已用尽")
+    """把当日剩余扫荡次数一次扫完；回不到主页/面板确实打不开才算无剩余次数。"""
+    if not _back_to_guild_home():
+        log("【结社战线】未回到结社战线主页，无法确认扫荡次数")
         return False
+
+    if not _click_and_expect(tpl_saodang, tpl_panel, expect_timeout=PANEL_TIMEOUT):
+        log("【结社战线】扫荡面板未打开，补点一次后再判")
+        if not _click_and_expect(tpl_saodang, tpl_panel, expect_timeout=PANEL_TIMEOUT):
+            log("【结社战线】两次点击后扫荡面板仍未打开，视为无剩余次数")
+            return False
 
     click_position(_find(tpl_saodang_max), 1.0)   # 一次选到最大档
     btn_pos = _find(tpl_saodang_btn, SAODANG_BTN_THRESHOLD)
@@ -171,12 +201,15 @@ def main():
     log("【结社战线】开始执行...")
 
     if not flow_enter_guild_play(tpl_card, "结社战线"):
+        # 2026-11-08 实跑：入口卡片可能因活动排期/版本改版不存在，属「当日无此玩法」，
+        # 按跳过处理（返回 True），不让整轮任务因入口缺失而标记失败。
+        log("【结社战线】入口卡片不可用，本日跳过")
         flow_return_main()
-        return False
+        return True
     if _find(tpl_title, timeout=SETTLE_DELAY + PANEL_TIMEOUT) is None:
-        log("【结社战线】未进入结社战线主界面，任务终止")
+        log("【结社战线】未进入结社战线主界面，本日跳过")
         flow_return_main()
-        return False
+        return True
 
     wins = _challenge_until_lose()
     swept = _sweep_remaining()

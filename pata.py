@@ -1,18 +1,27 @@
+"""爬塔任务入口：按 `TOWER_ORDER` 逐塔分发到 `flow_tower`，并处理塔内礼包。
+
+被 GUI「爬塔」任务分发，入口 `main()`；单塔异常只跳过该塔，不中断整条任务。
+"""
+
 import time
 
 from common import (
+    click_and_confirm,
     find_center_silent,
     get_template_path,
+    is_loading_screen,
     log,
     open_wanfamulu,
     random_sleep,
     recover_to_main_interface,
-    send_coord,
+    scroll_in_client_region,
     wait_and_click,
 )
 
 # 模板路径
+tpl_wanfamulu = get_template_path("wanfamulu.png")
 tpl_pata = get_template_path("pata.png")
+tpl_patatiaozhan = get_template_path("patatiaozhan.png")
 tpl_yaoguangzhita = get_template_path("yaoguangzhita.png")
 tpl_ziranzhita = get_template_path("ziranzhita.png")
 tpl_manxuezhita = get_template_path("manxuezhita.png")
@@ -26,6 +35,31 @@ TOWER_ORDER = [
     ("manxuezhita", tpl_manxuezhita),
     ("wanglingzhita", tpl_wanglingzhita),
 ]
+
+
+def _left_catalog_page():
+    """已离开玩法目录：塔选择页与塔内页都不再有「玩法目录」标题。
+
+    加载中画面同样没有标题，所以加载中直接判 False，等加载结束再确认——
+    否则「点了没反应」和「正在加载」都会被误当成「已经进去了」。
+    """
+    if is_loading_screen():
+        return False
+    return find_center_silent(tpl_wanfamulu, 0.7) is None
+
+
+def _in_tower_page():
+    """已在塔内部：塔内独有的「爬塔挑战」按钮出现。
+
+    2026-11-11 实机：进入塔曾用 `_left_catalog_page` 做确认，但**塔选择页同样没有**
+    「玩法目录」标题，于是「点塔卡片被吞、仍停在选择页」也算通过，flow_tower 随后在
+    选择页上找不到「爬塔挑战」，15 秒后误判「已经推完」并去点 exit 退出。
+    塔内必然有「挑战」按钮（能点到某张塔卡片，说明该塔状态是「出发」= 有可挑战关卡），
+    故选它作为判据：找不到就是没进去，由 click_and_confirm 补点。
+    """
+    if is_loading_screen():
+        return False
+    return find_center_silent(tpl_patatiaozhan, 0.9) is not None
 
 
 
@@ -58,12 +92,26 @@ def flow_pata():
         return False
     random_sleep()
 
-    # 2. 点击 pata 进入爬塔选择界面
-    if not wait_and_click(tpl_pata, "pata", 0.8, timeout=3.0):
-        # 2026-11-07 实测：常规玩法页已没有「天穹试炼」卡片（活动结束/入口改版），
-        # 旧的固定点位兜底会点到相邻卡片（女神试炼/巅峰竞技场），把游戏带到别的玩法页。
-        # 宁可失败交给上层恢复，也不要盲点。
-        log("玩法目录里没有「天穹试炼」卡片（活动可能已结束），跳过爬塔。")
+    # 2. 找「天穹试炼」卡片并点击。常规玩法页卡片列表可滚动，该卡片在首屏下方、
+    # 需下滑才看得到（2026-11-08 用户更正：不是活动下线）。旧的固定点位兜底会点到
+    # 相邻卡片（女神试炼/巅峰竞技场），不可用；改为滚动列表后重试模板查找。
+    card_pos = find_center_silent(tpl_pata, 0.8, timeout=3.0)
+    # 2026-11-10 实机：一次滚两下会「滚过头」——现场截图里天穹试炼标题被推到列表顶部
+    # 边缘、模板匹配不到。改为逐次下滑、每滑一次就检查一次。
+    for attempt in range(1, 4):
+        if card_pos is not None:
+            break
+        log(f"首屏未找到「天穹试炼」卡片，第 {attempt} 次下滑列表后再找。")
+        scroll_in_client_region("down", times=1)
+        card_pos = find_center_silent(tpl_pata, 0.8, timeout=2.0)
+    if card_pos is None:
+        log("滚动后仍未找到「天穹试炼」卡片，跳过爬塔。")
+        return False
+    # 点击后必须确认离开了玩法目录：2026-11-10 实机里这一下被吞掉，脚本却当成已进入，
+    # 结果在目录页上找不到「爬塔挑战」，进而误判「已经推完」并去点 exit。
+    if not click_and_confirm(tpl_pata, "天穹试炼(爬塔入口)", _left_catalog_page,
+                             attempts=2, find_timeout=2.0, confirm_timeout=8.0):
+        log("点击「天穹试炼」后仍停在玩法目录，跳过爬塔。")
         return False
     random_sleep()
 
@@ -79,8 +127,13 @@ def flow_pata():
         
         print(f"{tower_name} 检测到，位置: {pos}")
         
-        # 点击进入该塔
-        send_coord(pos[0], pos[1])
+        # 点击进入该塔，并确认真的进去了；没进去就不要调 flow_tower，
+        # 否则它会在塔选择页里找「爬塔挑战」失败并误判成「已经推完」。
+        if not click_and_confirm(tower_tpl, f"{tower_name}(进入塔)", _in_tower_page,
+                                 attempts=2, threshold=0.9, find_timeout=1.0,
+                                 confirm_timeout=10.0):
+            print(f"{tower_name} 点击后未进入塔内，跳过该塔。")
+            continue
         random_sleep()
         
         # 调用 flow_tower.py

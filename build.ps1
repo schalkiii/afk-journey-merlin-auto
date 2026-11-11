@@ -2,7 +2,9 @@
 # 用法：pwsh -NoProfile -File build.ps1 check
 param(
     [ValidateSet('build', 'check', 'clean')]
-    [string]$Target = 'check'
+    [string]$Target = 'check',
+    # 依赖按 Python 3.13 实盘 pin；多版本共存时可用 -Python 显式指定解释器
+    [string]$Python = 'python'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -14,9 +16,27 @@ Set-Location -LiteralPath $RepoRoot
 
 $script:ExitCode = 0
 
+function Assert-Python {
+    # 门禁结果必须可复现：不同 Python 版本装到的 cv2 / numpy 行为不同，
+    # 用 PATH 里偶然解析到的解释器跑测试会让「全绿」失去意义。
+    # 用 Write-Host 输出而非 Write-Output：PowerShell 函数会把 Write-Output 的内容
+    # 一起返回给调用方，污染 `if (Assert-Python)` 的布尔判断。
+    $version = & $Python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
+    if ($LASTEXITCODE -ne 0 -or "$version".Trim() -ne '3.13') {
+        Write-Host "[check] 需要 Python 3.13（requirements 按此版本 pin），当前解释器: $version"
+        return $false
+    }
+    Write-Host "[check] Python $version"
+    return $true
+}
+
 function Invoke-Check {
+    if (-not (Assert-Python)) {
+        $script:ExitCode = 1
+        return
+    }
     Write-Output '[check] 1/3 compileall（跳过 build/dist/__pycache__）'
-    & python -m compileall -q -x 'build|dist|__pycache__' .
+    & $Python -m compileall -q -x 'build|dist|__pycache__' .
     if ($LASTEXITCODE -ne 0) {
         Write-Output "[check] compileall 失败，退出码 $LASTEXITCODE"
         $script:ExitCode = 1
@@ -24,7 +44,11 @@ function Invoke-Check {
     }
 
     Write-Output '[check] 2/3 pytest'
-    & python -m pytest -q -p no:cacheprovider
+    # 每次用一个全新的空 basetemp：固定目录或系统 %TEMP% 会让 pytest 在启动时批量清理
+    # 历史临时文件，受限会话里的批量删除守卫会把它判成 SystemExit(1)，用例其实全绿。
+    # 新目录不存在，pytest 只创建、不删除；累积的目录由 clean 目标清理。
+    $runTag = (Get-Date -Format 'yyyyMMdd_HHmmss') + '_' + (Get-Random -Maximum 9999)
+    & $Python -m pytest -q -p no:cacheprovider --basetemp=".pytest_tmp/run_$runTag"
     if ($LASTEXITCODE -ne 0) {
         Write-Output "[check] pytest 未全绿，退出码 $LASTEXITCODE"
         $script:ExitCode = 1
@@ -53,7 +77,7 @@ function Invoke-Check {
     }
 
     # ruff 有存量告警时退出码非 0，属预期；只解析告警行，按文件计数
-    $ruffOutput = & python -m ruff check . --output-format concise 2>&1
+    $ruffOutput = & $Python -m ruff check . --output-format concise 2>&1
     $counts = @{}
     foreach ($line in $ruffOutput) {
         $text = [string]$line
@@ -100,8 +124,12 @@ function Invoke-Check {
 }
 
 function Invoke-BuildTarget {
+    if (-not (Assert-Python)) {
+        $script:ExitCode = 1
+        return
+    }
     Write-Output '[build] python -m PyInstaller goldenhandmaidens.spec --distpath . --workpath build --noconfirm'
-    & python -m PyInstaller goldenhandmaidens.spec --distpath . --workpath build --noconfirm
+    & $Python -m PyInstaller goldenhandmaidens.spec --distpath . --workpath build --noconfirm
     if ($LASTEXITCODE -ne 0) {
         Write-Output "[build] 打包失败，退出码 $LASTEXITCODE"
         $script:ExitCode = 1
@@ -112,7 +140,7 @@ function Invoke-BuildTarget {
 
 function Invoke-Clean {
     # 只清已知的缓存/中间目录，绝不触碰根目录成品 exe 与 templates/
-    $targets = @('build', 'dist', '.pytest_cache', '.ruff_cache')
+    $targets = @('build', 'dist', '.pytest_cache', '.pytest_tmp', '.ruff_cache')
     foreach ($name in $targets) {
         $path = Join-Path $RepoRoot $name
         if (Test-Path -LiteralPath $path) {

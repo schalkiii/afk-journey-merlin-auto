@@ -229,11 +229,15 @@ def test_claim_reward_falls_back_to_label_offset(monkeypatch):
 
 
 def test_claim_reward_reports_failure_without_claim_popup(monkeypatch):
-    """点了礼盒但「获得奖励」弹窗没出现（无可领档位）：补点两次后判未领取且不关弹窗。"""
+    """点了礼盒但「获得奖励」弹窗没出现（无可领档位）：补点一次后判未领取且不关弹窗。
+
+    2026-11-08 实跑：无可领奖励时 3 次尝试白等 15 秒，已减为 2 次（首次可能被吞、
+    第二次生效）；本用例钉住该次数，避免回退到 3 次。
+    """
     clicks, closes, _lookups = _stub_claim(monkeypatch, None, None)
 
     assert ywd._claim_reward(LABEL_POS) is False
-    assert clicks == [((2486, 156), 0.6)] * 3
+    assert clicks == [((2486, 156), 0.6)] * 2
     assert closes == []
 
 

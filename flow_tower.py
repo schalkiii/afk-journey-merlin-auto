@@ -14,11 +14,13 @@ from common import (
     find_center_silent,
     get_template_path,
     get_work_path,
+    is_loading_screen,
     load_template,
     random_sleep,
     screenshot_bgr,
     send_coord,
     wait_and_click,
+    wait_until_loaded,
 )
 from common import (
     is_lineup_acceptable as _is_lineup_acceptable_impl,
@@ -624,7 +626,13 @@ def flow_tower():
 
     # 战斗监控函数
     def monitor_battle():
-        """监控战斗状态，返回战斗结果"""
+        """监控战斗状态，返回战斗结果。
+
+        2026-11-09 实机：点完「一键采用」会弹「通关阵容」预览弹窗（现场截图为
+        赛季光辉之塔 115 层 + 一键采用 + 点击空白处关闭），战斗标志被遮挡，旧实现
+        空等 3 分钟后判「无法判断」。现在每轮先清一次「点击空白处关闭」类弹窗；
+        加载画面不算卡死，重置计时避免误判。
+        """
         last_seen_guaji = time.time()
         while True:
             hit = wait_for_any(
@@ -636,8 +644,18 @@ def flow_tower():
             if hit:
                 return hit
 
+            # 弹窗会遮住战斗标志：先清弹窗，避免空等 3 分钟
+            if find_center_silent(tpl_dianjikongbaichuguanbi, 0.8, timeout=0) is not None:
+                wait_and_click(tpl_dianjikongbaichuguanbi,
+                               "dianjikongbaichuguanbi(战斗中清弹窗)", 0.8)
+                last_seen_guaji = time.time()
+                continue
+
             pos_guaji = find_center_silent(tpl_zidongtiaozhanzhong, threshold=0.8)
             if pos_guaji:
+                last_seen_guaji = time.time()
+            elif is_loading_screen():
+                # 加载中不是卡死：重置计时，避免把加载算成「无法判断」
                 last_seen_guaji = time.time()
 
             now = time.time()
@@ -651,7 +669,18 @@ def flow_tower():
     # 主循环
     while True:
         # 1. 点击 patatiaozhan 进入战斗界面
-        if not wait_and_click(tpl_patatiaozhan, "patatiaozhan", 0.8):
+        clicked = wait_and_click(tpl_patatiaozhan, "patatiaozhan", 0.8)
+        if not clicked:
+            # 2026-11-11 实机：打完一层后结算/奖励弹窗把塔内界面压暗，「挑战」按钮
+            # 跟着匹配不到，15 秒后误判「已经推完」并退出，塔其实还没打。先关弹窗再找。
+            popup = find_center_silent(tpl_dianjikongbaichuguanbi, 0.8)
+            if popup is not None:
+                print("未找到 patatiaozhan，但检测到结算弹窗，关闭后重试一次。")
+                send_coord(popup[0], popup[1])
+                time.sleep(1.5)
+                clicked = wait_and_click(tpl_patatiaozhan, "patatiaozhan(关弹窗后)",
+                                         0.8, timeout=8)
+        if not clicked:
             print("未找到 patatiaozhan，认为已经推完，尝试点击 exit 退出。")
             # 尝试点击 exit 退出（只需要点击一次，因为已经在关卡界面）
             if not wait_and_click(tpl_exit, "exit", 0.8):
@@ -671,6 +700,11 @@ def flow_tower():
         # 3. 等待战斗结果
         hit = monitor_battle()
         if hit is None:
+            # 2026-11-09 实机：监控超时直接 return True，界面还停在塔内，
+            # flow_pata 继续下一个塔时「未检测到」全跳过、最后 exit 也找不到 → 整条任务失败。
+            # 先退回塔选择页再返回。
+            wait_and_click(tpl_exit, "exit(监控超时退回塔选择页)", 0.8, timeout=2.0)
+            wait_until_loaded(8.0)
             return True
 
         hit_tpl, _hit_name, _ = hit
@@ -740,6 +774,9 @@ def flow_tower():
             # 监控战斗状态
             hit = monitor_battle()
             if hit is None:
+                # 同上：超时先退回塔选择页，避免后续塔全部「未检测到」
+                wait_and_click(tpl_exit, "exit(监控超时退回塔选择页)", 0.8, timeout=2.0)
+                wait_until_loaded(8.0)
                 return True
 
             hit_tpl, _hit_name, _ = hit

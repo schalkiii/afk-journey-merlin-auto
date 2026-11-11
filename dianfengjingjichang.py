@@ -183,10 +183,28 @@ def _select_opponent_and_lineup():
 
 def _fight_once(index):
     """挑战一场：继续挑战 → 选对手 → 三队确认 → 战斗 → 等结算，返回是否打完一场。"""
-    if not wait_and_click(tpl_jixutiaozhan, f"继续挑战({index})", 0.8, timeout=10):
-        log(f"第 {index} 次没有找到「继续挑战」按钮，结束。")
+    # 「继续挑战」点击可能被窗口激活吞掉（2026-11-08 实机第 2 场）：没进选对手界面
+    # 就补点一次，两次都不进才判定次数用尽。
+    entered_select = False
+    for attempt in range(1, 3):
+        if not wait_and_click(tpl_jixutiaozhan, f"继续挑战({index})", 0.8, timeout=10):
+            if attempt == 1:
+                continue
+            log(f"第 {index} 次没有找到「继续挑战」按钮，结束。")
+            return False
+        random_sleep()
+        if find_center_silent(tpl_xuanzeduishou, 0.8, timeout=8.0) is not None:
+            entered_select = True
+            break
+        # 防误补点：选择对手页的「挑战他」按钮已可见时，说明其实已进入（2026-11-08 实机：
+        # 标题模板 3 秒内没等到就误判被吞、补点反而把界面点回去）
+        if find_center_silent(tpl_tiaozhan, 0.8, timeout=0) is not None:
+            entered_select = True
+            break
+        log(f"点击「继续挑战({index})」后未进入选择对手，补点一次。")
+    if not entered_select:
+        log(f"第 {index} 场未能进入选择对手界面，结束。")
         return False
-    random_sleep()
 
     if not _select_opponent_and_lineup():
         return False
@@ -231,8 +249,13 @@ def _fight_once(index):
         click_position((x0 + SETTLEMENT_DISMISS_POS[0], y0 + SETTLEMENT_DISMISS_POS[1]),
                        wait=1.5, twice=False)
         if not _wait_panel(15.0):
-            log("关闭失败页后未回到挑战界面，结束。")
-            return False
+            # 首次点击可能被吞（2026-11-08 实跑：失败页关不掉导致第 2 场后整轮提前结束、
+            # 挑战次数有残留）：补点一次空白，仍不行再走「回到挑战主页」兜底。
+            click_position((x0 + SETTLEMENT_DISMISS_POS[0], y0 + SETTLEMENT_DISMISS_POS[1]),
+                           wait=1.5, twice=False)
+            if not _wait_panel(10.0) and not _back_to_challenge_view():
+                log("关闭失败页后未回到挑战界面，结束。")
+                return False
     else:
         # 胜利会直接回到挑战界面；清掉可能残留的奖励/段位变化弹窗
         dismiss_popup_away_from()
@@ -240,16 +263,26 @@ def _fight_once(index):
 
 
 def flow_dianfeng(challenge_count=DEFAULT_CHALLENGE_COUNT):
-    """巅峰竞技场主流程。返回 True=正常进入并执行，False=没进入。"""
+    """巅峰竞技场主流程。返回 True=正常进入并执行（含休赛期跳过），False=没进入。"""
     log("开始执行巅峰竞技场...")
     recover_to_main_interface()
     if not _enter_dianfeng():
-        return False
+        # 2026-11-09 实机：巅峰竞技场进入休赛期后点卡片只回到家园、看不到「继续挑战」，
+        # 旧实现记任务失败。拿不到挑战按钮说明当日无赛程（休赛期/未开赛），按跳过处理。
+        log("巅峰竞技场入口不可用（休赛期或未开赛），本日跳过")
+        recover_to_main_interface()
+        return True
 
     times = max(1, min(int(challenge_count), MAX_CHALLENGE_COUNT))
     done = 0
     for index in range(1, times + 1):
         if not _fight_once(index):
+            # 单场失败不等于次数用尽（2026-11-08：第 2 场失败页卡住导致第 3 场没打）：
+            # 先回到挑战主页，「继续挑战」仍在就继续下一场；按钮消失才是真的打完。
+            _back_to_challenge_view()
+            if find_center_silent(tpl_jixutiaozhan, 0.8, timeout=3.0):
+                log(f"第 {index} 场未完成，但「继续挑战」仍在，继续下一场。")
+                continue
             break
         done += 1
     log(f"巅峰竞技场：完成 {done} 场（上限 {times} 次）。")

@@ -1,3 +1,9 @@
+"""仓库管理：扫描英雄网格，按种族 / 职业筛选并据头像边框判定练度。
+
+关键接口 `init_templates_from_dir()`、`_match_best_hero()`；结果写入
+`warehouse_heroes.txt` 供 `flow_tower` 判断阵容练度。依赖 `common` / `hero_metadata`。
+"""
+
 import os
 import time
 

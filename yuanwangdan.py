@@ -187,12 +187,14 @@ def _claim_reward(label_pos):
         gift_pos = (label_pos[0] + GIFT_CLICK_OFFSET[0], label_pos[1] + GIFT_CLICK_OFFSET[1])
     # 礼盒是弹窗类按钮，必须单击：click_position(twice=True) 会在弹窗刚出现时再点一次，
     # 把「获得奖励」当场关掉，导致永远检测不到领奖（2026-11-07 实机踩过：奖励已发但判未领）。
-    for attempt in range(1, 4):
+    # 2026-11-08 实跑：无可领奖励时 3 次尝试白等 15 秒，减为 2 次（首次可能被吞、第二次生效）。
+    claim_pos = None
+    for attempt in range(1, 3):
         _click_once(gift_pos, 0.6)
         claim_pos = _find(tpl_claim, timeout=4.0)
         if claim_pos is not None:
             break
-        log(f"【家园愿望单】第 {attempt} 次点进度礼盒未弹奖励，补点一次")
+        log(f"【家园愿望单】第 {attempt} 次点进度礼盒未弹奖励")
     if claim_pos is None:
         log("【家园愿望单】未检测到获得奖励弹窗，进度礼盒可能已领取或未达上限")
         return False
@@ -480,7 +482,8 @@ def main():
         _close_by_blank_hint()
 
     # 收尾：家园视图下「玩法目录」(wanfamulu) 匹配度不足 0.5，调用 recover 会空转十余秒，
-    # 故仅当已离开家园时才执行兜底回主界面；该任务在 GUI 中固定排在执行顺序末尾。
+    # 故仅当已离开家园时才执行兜底回主界面。任务位置由用户在 GUI 里拖拽决定（建议放最后）；
+    # 若被拖到中间，调度层会在下一任务开始前校验主界面，无法恢复则跳过该任务并留现场。
     if _find(tpl_entry) is None:
         flow_return_main()
     return delivered > 0

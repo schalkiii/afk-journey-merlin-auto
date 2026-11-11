@@ -1,15 +1,24 @@
+"""女神塔流程：逐塔挑战、扫荡、自动配置阵容与礼包检测。
+
+入口 `flow_nvshenta()`；阵容判定复用 `common.is_lineup_acceptable`，
+英雄模板来自 `warehouse` / `hero_metadata`。
+"""
+
 import os
 import time
 
 from common import (
+    click_and_confirm,
     find_center_silent,
     get_template_path,
+    is_loading_screen,
     open_wanfamulu,
     random_sleep,
     screenshot_bgr,
     send_coord,
     try_auto_configure_lineup,
     wait_and_click,
+    wait_until_loaded,
 )
 from jiance import check_and_handle_libao
 
@@ -23,6 +32,12 @@ tpl_exitck = get_template_path("exitck.png")
 tpl_exit = get_template_path("exit.png")
 tpl_nvshentasaodang = get_template_path("nvshentasaodang.png")
 tpl_nvshentasaodangmax = get_template_path("nvshentasaodangmax.png")
+# 可选模板：扫荡完成弹窗（用户按实机界面补图后自动生效；未采集时跳过该候选，不阻断流程）
+tpl_nvshentasaodangwancheng = (
+    get_template_path("nvshentasaodangwancheng.png")
+    if os.path.exists(get_template_path("nvshentasaodangwancheng.png"))
+    else None
+)
 tpl_dianjikongbaichuguanbi = get_template_path("dianjikongbaichuguanbi.png")
 tpl_nvshentahuiji = get_template_path("nvshentahuiji.png")
 tpl_jingzhihuiji = get_template_path("jingzhihuiji.png")
@@ -119,16 +134,30 @@ def do_saodang_and_exit():
         return False
     random_sleep()
     
-    # 3. 点击 nvshentasaodang 确认扫荡
-    if not wait_and_click(tpl_nvshentasaodang, "nvshentasaodang_confirm", 0.8):
-        print("点击 nvshentasaodang 确认失败")
-        return False
-    random_sleep()
-    
-    # 4. 点击 dianjikongbaichuguanbi 关闭扫荡结果
-    if not wait_and_click(tpl_dianjikongbaichuguanbi, "dianjikongbaichuguanbi", 0.8):
-        print("点击 dianjikongbaichuguanbi 失败")
-        return False
+    # 3. 点击 nvshentasaodang 确认扫荡（按钮仍在 = 首次点击被吞，补点一次）
+    for attempt in range(1, 3):
+        if not wait_and_click(tpl_nvshentasaodang, f"nvshentasaodang_confirm{attempt}", 0.8):
+            print("点击 nvshentasaodang 确认失败")
+            return False
+        random_sleep()
+        if find_center_silent(tpl_nvshentasaodang, 0.8) is None:
+            break   # 扫荡已开始/完成，按钮消失
+        if (find_center_silent(tpl_dianjikongbaichuguanbi, 0.8) is not None
+                or (tpl_nvshentasaodangwancheng is not None
+                    and find_center_silent(tpl_nvshentasaodangwancheng, 0.8) is not None)):
+            break   # 已出结果弹窗
+        print("扫荡确认按钮仍在，补点一次")
+
+    # 4. 关闭扫荡结果弹窗（可选）：2026-11-08 实测扫荡确认后可能无弹窗直接回面板，
+    # 旧逻辑只认「点击空白处关闭」，等 15 秒超时就把整条任务判失败。
+    # 现改为两种结果弹窗任选其一关闭；都没出现视为无弹窗，继续退出流程。
+    for tpl, name in ((tpl_dianjikongbaichuguanbi, "dianjikongbaichuguanbi"),
+                      (tpl_nvshentasaodangwancheng, "nvshentasaodangwancheng")):
+        if tpl is None:
+            continue   # 可选模板未采集，跳过该候选
+        if find_center_silent(tpl, 0.8, timeout=5) is not None:
+            wait_and_click(tpl, name, 0.8)
+            break
     random_sleep()
     
     # 5. 点击 exit 退出女神塔
@@ -145,26 +174,56 @@ def do_saodang_and_exit():
     return True
 
 
+def _wait_saodang(timeout):
+    """等扫荡按钮出现（带超时轮询，避免加载中被秒判失败）。"""
+    return find_center_silent(tpl_nvshentasaodang, 0.8, timeout=timeout) is not None
+
+
+def _tower_page_open():
+    """已在女神塔页面：扫荡按钮（已通关）或挑战按钮（未通关）任一可见。
+
+    加载中两者都不在，直接判 False，等加载结束再确认。
+    """
+    if is_loading_screen():
+        return False
+    return (find_center_silent(tpl_nvshentasaodang, 0.8) is not None
+            or find_center_silent(tpl_nvshentiaozhan, 0.8) is not None)
+
+
 def _back_to_tower_page(max_attempts=3):
     """登顶后回退到女神塔页面（该页面才有一键扫荡按钮）。
 
     挑战到顶后没有下一层，只会出现「再次挑战」，直接找扫荡按钮必然失败。
     先确认当前是否已在女神塔页面；否则逐层点 exit / exitck 退出，每层退出后
     重新确认扫荡按钮是否出现。全部尝试后仍看不到则返回 False。
+    2026-11-09 实机：回退过程中会经过「加载中…」画面（现场截图近似全黑），
+    旧实现等 1 秒就判「未看到扫荡按钮」而失败；改为等加载结束 + 带超时轮询。
     """
-    if find_center_silent(tpl_nvshentasaodang, 0.8):
+    if _wait_saodang(6.0):
         return True
 
     for attempt in range(1, max_attempts + 1):
         wait_and_click(tpl_exit, "exit", 0.8, timeout=2.0)
-        time.sleep(1.0)
-        if find_center_silent(tpl_nvshentasaodang, 0.8):
+        wait_until_loaded(10.0)
+        if _wait_saodang(6.0):
             return True
 
         wait_and_click(tpl_exitck, "exitck", 0.8, timeout=2.0)
-        time.sleep(1.0)
-        if find_center_silent(tpl_nvshentasaodang, 0.8):
+        wait_until_loaded(10.0)
+        if _wait_saodang(6.0):
             return True
+
+        # 2026-11-09 实机：层内页面连续退两次会退过头到主界面（此时 caidan 可见），
+        # 扫荡按钮在女神塔页面里，再退只会越走越远——重新进一次女神塔再判。
+        # 2026-11-10 实机：重进的这一次点击同样被吞过，代码却当成已进去，随后在玩法目录
+        # 里找扫荡按钮失败 → 整任务判失败。改为点击后校验「塔页面已打开」再判扫荡。
+        if attempt == 2 and open_wanfamulu(threshold=0.7, timeout=8):
+            print("回退后已到主界面，重新进入女神塔确认扫荡按钮")
+            if not click_and_confirm(tpl_nvshenta, "nvshenta(重进)", _tower_page_open,
+                                     attempts=2, find_timeout=6.0, confirm_timeout=10.0):
+                print("重进女神塔未生效（仍停在玩法目录）")
+            elif _wait_saodang(8.0):
+                return True
 
     print(f"回退 {max_attempts} 次后仍未确认女神塔页面（未看到扫荡按钮）")
     return False
@@ -207,7 +266,9 @@ def flow_nvshenta(auto_configure_lineup=False):
     
     # 2.5 检测当前界面状态：判断是挑战界面还是扫荡界面
     # 如果直接识别到扫荡按钮，说明已经通关
-    pos_saodang = find_center_silent(tpl_nvshentasaodang, 0.8)
+    # 2026-11-08 实机踩过：刚进入时按钮可能未渲染，立即检测会误走挑战分支、
+    # 随后挑战按钮也等不到而失败。改为带超时轮询，按钮出现再判定分支。
+    pos_saodang = find_center_silent(tpl_nvshentasaodang, 0.8, timeout=6.0)
     if pos_saodang:
         print("检测到扫荡按钮，已通关")
         # 计算扫荡按钮下方的区域
@@ -257,6 +318,10 @@ def flow_nvshenta(auto_configure_lineup=False):
     
     # 点击 nvshentiaozhan 挑战
     if not wait_and_click(tpl_nvshentiaozhan, "nvshentiaozhan", 0.8):
+        # 可能是已通关但扫荡按钮渲染慢：再试一次扫荡（2026-11-08 实机踩过）
+        if find_center_silent(tpl_nvshentasaodang, 0.8):
+            print("挑战按钮未出现但扫荡按钮可见，改走扫荡")
+            return do_saodang_and_exit()
         print("点击 nvshentiaozhan 失败")
         return False
     random_sleep()

@@ -1,3 +1,9 @@
+"""礼包 / 弹窗检测工具。
+
+关键接口 `check_and_handle_libao()`：检测并关闭「专属装备礼包」等广告弹窗，
+被结社战线、狩猎悬赏等多个任务的收尾复用。依赖 `common` 的模板匹配与点击原语。
+"""
+
 import time
 
 from common import find_center, get_template_path, send_coord

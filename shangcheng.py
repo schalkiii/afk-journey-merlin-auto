@@ -1,3 +1,9 @@
+"""商城任务入口：依次执行商城相关子流程。
+
+入口 `main()`，被 GUI「商城」任务分发；友谊商城的购买逻辑在
+`youyishangcheng`，本模块只负责入口与返回。依赖 `common`。
+"""
+
 import os
 import time
 

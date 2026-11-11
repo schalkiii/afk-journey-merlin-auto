@@ -155,7 +155,7 @@ def test_journal_stops_when_sub_tab_row_did_not_move(monkeypatch):
 
     assert hb._sweep_journal("测试记") == 1
     assert swept == ["测试记-奖励"]
-    assert len(clicks) == 3, "只应点 切任务页 + 两个子页签试探，不能继续扫下去"
+    assert len(clicks) == 6, "补点一次任务页签后应停：切页 + 试探各两轮，不能继续扫下去"
 
 
 class _Clock:

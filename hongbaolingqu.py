@@ -541,8 +541,18 @@ def _sweep_journal(name):
     row_daily = _sub_tab_row()
     tap(1)
     if not _row_changed(row_daily, _sub_tab_row()):
-        log(f"{name}：没确认切到任务页签，跳过任务子页。")
-        return total
+        # 2026-11-10：页签点击可能被意外弹框吞掉（用户实看魔法行记奖励没领）。
+        # 补点一次任务页签再确认，仍失败才跳过并计数。
+        log(f"{name}：没确认切到任务页签，补点一次再确认。")
+        click_position((win_x + JOURNAL_TASKS_TAB_POS[0], win_y + JOURNAL_TASKS_TAB_POS[1]),
+                       wait=1.2, twice=False)
+        tap(0)
+        row_daily = _sub_tab_row()
+        tap(1)
+        if not _row_changed(row_daily, _sub_tab_row()):
+            log(f"{name}：补点后仍未确认切到任务页签，跳过任务子页。")
+            _unconfirmed_subitems["count"] += 1
+            return total
 
     # 确认成功时人已停在「每周」，先把这页扫掉，再依次扫挑战、每日
     total += _sweep_view(f"{name}-任务子页2")
@@ -718,6 +728,9 @@ def _claim_guild_war():
     return claimed
 
 
+_unconfirmed_subitems = {"count": 0}
+
+
 def main(params=None):
     """执行红点奖励领取。返回 True=至少进入过其中一个领取界面，False=入口都不在。
 
@@ -732,6 +745,7 @@ def main(params=None):
     log("开始执行红点奖励领取...")
     total = 0
     entered = False
+    _unconfirmed_subitems["count"] = 0
 
     if any(_enabled(params, key) for key in TASK_PANEL_KEYS):
         if _open_task_panel():
@@ -788,6 +802,11 @@ def main(params=None):
         log("领取流程结束时仍未确认回到主界面，请留意下一个任务的起始界面。")
 
     log(f"红点奖励领取结束，共领取 {total} 项。")
+    if _unconfirmed_subitems["count"]:
+        # 不直接判任务失败（本来可能没奖励），但必须让日志说清「没领全」，
+        # 避免像 2026-11-10 那样显示 ✔ 而用户实看魔法行记奖励还在。
+        log(f"警告：有 {_unconfirmed_subitems['count']} 个手记/行记子页未确认切换，"
+            "对应奖励可能未领取，请到游戏内核对。")
     return entered
 
 

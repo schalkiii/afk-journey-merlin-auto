@@ -1,10 +1,12 @@
-"""点击链路的守护逻辑测试：坐标未被消费时的告警、以及客户区限定匹配的坐标换算。
+"""点击链路的守护逻辑测试：点击器存活探测、坐标未消费告警、客户区限定匹配的坐标换算。
 
-这两个功能都不依赖真实游戏窗口：
-- 存活探测用临时目录里的假坐标文件模拟「无人消费」；
+这三个功能都不依赖真实游戏窗口：
+- 存活探测打桩 `subprocess.run`，并断言探测过程不写坐标文件（不得产生真实点击）；
+- 未消费告警用临时目录里的假坐标文件模拟「无人消费」；
 - 区域限定匹配用合成图片与合成模板，验证命中位置与偏移补偿。
 """
 import os
+import subprocess
 import sys
 
 import numpy as np
@@ -24,10 +26,56 @@ def isolated_coord(tmp_path, monkeypatch):
     return path
 
 
-def test_clicker_alive_false_when_coord_never_consumed(isolated_coord):
-    # 没有任何进程删除该文件，模拟点击器已退出
+def _fake_tasklist(stdout):
+    """tasklist 以 bytes 返回（中文 Windows 上 stdout 是 GBK，不能按 text 解析）。"""
+    return lambda *_args, **_kwargs: subprocess.CompletedProcess(
+        args=["tasklist"], returncode=0,
+        stdout=stdout if isinstance(stdout, bytes) else stdout.encode("ascii"),
+        stderr=b"",
+    )
+
+
+def test_clicker_alive_false_when_coord_never_consumed(isolated_coord, monkeypatch):
+    """坐标文件残留时直接判死，且不产生任何新的点击副作用。"""
+    with open(isolated_coord, "w", encoding="utf-8") as handle:
+        handle.write("100 200")
+    monkeypatch.setattr(common.subprocess, "run", _fake_tasklist("click_from_file.exe"))
     assert common.clicker_alive() is False
-    assert os.path.exists(isolated_coord), "探测用的哨兵坐标应留在文件里，等待调用方处理"
+    assert os.path.exists(isolated_coord), "残留坐标文件应由调用方处理，探测不得改动它"
+
+
+def test_clicker_alive_reads_process_list_without_writing_coord(isolated_coord, monkeypatch):
+    """负验证：把探测改回「写哨兵坐标」，本用例会因文件被创建而失败。"""
+    monkeypatch.setattr(common.subprocess, "run",
+                        _fake_tasklist("click_from_file.exe   1234 Console   1   10,000 K"))
+    assert common.clicker_alive() is True
+    assert not os.path.exists(isolated_coord), "只读探测绝不能写坐标 IPC 文件"
+
+
+def test_clicker_alive_false_when_process_absent(isolated_coord, monkeypatch):
+    monkeypatch.setattr(common.subprocess, "run",
+                        _fake_tasklist("INFO: No tasks are running which match the specified criteria."))
+    assert common.clicker_alive() is False
+
+
+def test_clicker_alive_assumes_alive_when_probe_fails(isolated_coord, monkeypatch):
+    """探测失败时按存活处理，交给 send_coord 的连续未消费计数兜底。"""
+    def boom(*_args, **_kwargs):
+        raise subprocess.SubprocessError("tasklist unavailable")
+
+    monkeypatch.setattr(common.subprocess, "run", boom)
+    assert common.clicker_alive() is True
+
+
+def test_clicker_alive_tolerates_gbk_output(isolated_coord, monkeypatch):
+    """中文 Windows 的 tasklist 输出是 GBK：按 bytes 解析，不能因解码错误崩溃。
+
+    2026-11-08 实机踩过：`text=True` 用 UTF-8 解 GBK 抛 UnicodeDecodeError、
+    stdout 变 None，`in None` 直接 TypeError。
+    """
+    gbk = "信息: 没有运行的任务匹配指定标准。\n".encode("gbk")
+    monkeypatch.setattr(common.subprocess, "run", _fake_tasklist(gbk))
+    assert common.clicker_alive() is False
 
 
 def test_send_coord_raises_after_consecutive_misses(isolated_coord):

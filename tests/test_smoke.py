@@ -16,10 +16,14 @@ def test_all_modules_import():
     mods = [
         os.path.splitext(f)[0]
         for f in glob.glob("*.py")
-        if not f.startswith("_") and f != "start.py"
+        if not f.startswith("_")
     ]
+    assert mods, "未扫描到任何顶层模块，说明扫描规则失效"
+    imported = []
     for m in mods:
         importlib.import_module(m)
+        imported.append(m)
+    assert len(imported) == len(mods)
 
 
 def test_lineup_acceptable(monkeypatch):
@@ -37,7 +41,7 @@ def test_lineup_acceptable(monkeypatch):
 
 
 def test_lineup_acceptable_special_hero(monkeypatch):
-    """特殊角色（common.py:1076 分支）：拥有即可且忽略需求档位，但未拥有仍拒绝。"""
+    """特殊角色分支（`common.is_lineup_acceptable`）：拥有即可且忽略需求档位，但未拥有仍拒绝。"""
     push = importlib.import_module("push")
     monkeypatch.setattr(push, "LEVEL_SCORE", {"未拥有": 0, "低": 1, "中": 2, "高": 3})
     monkeypatch.setattr(push, "SPECIAL_HERO_SET", {"meimo"})
@@ -49,7 +53,7 @@ def test_lineup_acceptable_special_hero(monkeypatch):
 
 
 def test_lineup_acceptable_unrecognized_need_level(monkeypatch):
-    """需求档位认不出来时（common.py:1084 兜底默认按「低」）：非未拥有即可通过，未拥有仍拒绝。"""
+    """需求档位认不出来时（`common.is_lineup_acceptable` 兜底默认按「低」）：非未拥有即可通过。"""
     push = importlib.import_module("push")
     monkeypatch.setattr(push, "LEVEL_SCORE", {"未拥有": 0, "低": 1, "中": 2, "高": 3})
     monkeypatch.setattr(push, "SPECIAL_HERO_SET", set())

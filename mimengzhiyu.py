@@ -1,3 +1,9 @@
+"""迷梦之域挑战流程。
+
+覆盖自动配置通关阵容、战斗快进 / 结算等待、结算弹窗清理、排行榜礼包领取，
+以及收尾返回主界面；入口 `flow_mimengzhiyu()`。依赖 `common` / `flow_enter` / `jiance`。
+"""
+
 import time
 
 from common import (

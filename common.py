@@ -17,11 +17,21 @@ import hashlib
 import os
 import random
 import shutil
+import subprocess
 import sys
 import threading
 import time
 from collections import OrderedDict, deque
 from ctypes import wintypes
+
+# 名称映射表已抽到 template_names（纯数据模块）；这里 re-export，保持
+# 全仓 `from common import display_name / TEMPLATE_CN` 的导入方式不变。
+from template_names import (  # noqa: F401
+    ACTION_CN,
+    LOG_NAME_MAP,
+    TEMPLATE_CN,
+    display_name,
+)
 
 
 def _enable_dpi_awareness():
@@ -542,9 +552,14 @@ GAME_WINDOW_KEYWORDS = ("剑与远征：启程", "剑与远征", "启程", "AFK 
 _client_region = {"rect": None, "hwnd": None}
 _window_handle = {"hwnd": None, "ts": 0.0}
 
-# 底部导航带（客户区相对，按 1600×900）：主界面「玩法目录」入口与任务面板底部页签
+# 游戏客户区尺寸：全部模板与固定点位都按此分辨率采集（登记表见 doc/CLIENT-RESOLUTION.md）。
+# 游戏 UI 不随窗口等比缩放，换尺寸时模板 + 偏移常量必须一起重做。
+CLIENT_WIDTH = 1600
+CLIENT_HEIGHT = 900
+
+# 底部导航带（客户区相对）：主界面「玩法目录」入口与任务面板底部页签
 # 都落在这条带内。保守取底部 250px，宁可面积大一点也不要漏判；实机截图后可再收窄。
-BOTTOM_BAR_CLIENT_REGION = (0, 650, 1600, 250)
+BOTTOM_BAR_CLIENT_REGION = (0, CLIENT_HEIGHT - 250, CLIENT_WIDTH, 250)
 
 
 def find_game_window():
@@ -827,30 +842,78 @@ def _activate_game_window(hwnd):
 
 
 def ensure_game_clickable():
-    """点击前确保游戏窗口在前台；否则先激活，避免第一次点击被系统吞掉。"""
+    """点击前确保游戏窗口在前台；返回是否**确认**已经在最前（False = 前台锁没解开）。
+
+    True  = 本来就在前台，或激活后已确认到前台；
+    False = 尝试激活但 `GetForegroundWindow` 仍不是游戏（Windows 前台锁），
+            此时第一次点击会被系统用于激活而吞掉，调用方应改用「点标题栏」等方式补激活；
+    None  = 未启用自动激活 / 取不到窗口（调用方按原样继续）。
+
+    2026-11-11 实机回归：旧实现激活后只 sleep(0.25) 就当成功，前台锁下
+    SetForegroundWindow 静默失败，于是当天从第一个「邮件」任务起每次点菜单都被吞，
+    表现为「点击全部不准」。
+    """
     if not _auto_activate["enabled"]:
-        return
+        return None
     hwnd = find_game_window()
     if hwnd is None:
-        return
+        return None
     try:
         user32 = ctypes.windll.user32
         if user32.IsIconic(hwnd):
             user32.ShowWindow(hwnd, 9)  # SW_RESTORE
             time.sleep(0.2)
         if user32.GetForegroundWindow() == hwnd:
-            return
+            return True
         # 即使点击点属于游戏窗口，只要窗口不在前台，系统也可能把第一次点击用于激活而吞掉：
         # 先显式切前台，保证这次点击一定落到游戏上（实测幻灵入口偶发首次点击丢失）。
         _activate_game_window(hwnd)
-        # 激活是异步的：不等一下就把坐标写过去，这一次点击仍可能被正在发生的窗口切换吃掉
-        time.sleep(0.25)
+        # 激活是异步的，且**可能被前台锁挡下**：轮询确认真的到前台，而不是盲等 0.25 秒
+        deadline = time.time() + 1.0
+        while time.time() < deadline:
+            if user32.GetForegroundWindow() == hwnd:
+                break
+            time.sleep(0.05)
         now = time.time()
         if now - _auto_activate["last_log"] > 5.0:
             _auto_activate["last_log"] = now
             log("游戏窗口不在前台，已自动切到前台后点击")
+        return user32.GetForegroundWindow() == hwnd
     except (AttributeError, OSError, ctypes.ArgumentError):
-        pass
+        return None
+
+
+def _window_root_at(x, y):
+    """返回该屏幕坐标最上层窗口的顶层句柄；取不到返回 None。"""
+    try:
+        user32 = ctypes.windll.user32
+        hwnd = user32.WindowFromPoint(wintypes.POINT(int(x), int(y)))
+        if not hwnd:
+            return None
+        return user32.GetAncestor(hwnd, 2) or hwnd  # GA_ROOT
+    except (AttributeError, OSError, ctypes.ArgumentError):
+        return None
+
+
+def _window_title(hwnd):
+    if not hwnd:
+        return ""
+    try:
+        buf = ctypes.create_unicode_buffer(160)
+        ctypes.windll.user32.GetWindowTextW(hwnd, buf, 160)
+        return buf.value
+    except (AttributeError, OSError, ctypes.ArgumentError):
+        return ""
+
+
+def point_owned_by_game(x, y):
+    """点击点是否真的落在游戏窗口上（被浮窗/对话框盖住时返回 False）。"""
+    hwnd = find_game_window()
+    if hwnd is None:
+        return True
+    root = _window_root_at(x, y)
+    return root is None or root == hwnd
+
 
 
 def _resolve_search_region(region=None, client_region=None):
@@ -931,9 +994,10 @@ def find_center_silent(template_path, threshold=0.8, region=None, timeout=0, int
                        client_region=None):
     """find_center 的静默版本：命中返回中心坐标，否则返回 None，不打印匹配得分。
 
-    与 find_center 的唯一区别是不输出相似度分数——适合在紧循环里高频调用，
-    例如战斗监控、结算弹窗轮询，避免日志被分数刷屏。所有子脚本统一复用本实现，
-    既消除各脚本重复定义，也保证 F9 停止检查（check_stop 内）一致生效。
+    与 find_center 的共同点：都支持 region / client_region 限定搜索范围，返回值都是整屏绝对坐标。
+    差异（不止「静默」）：本函数额外支持 timeout/interval 轮询等待、client_region 每轮按当前
+    窗口矩形重算、以及未命中时刷新一次窗口矩形再试。适合在紧循环里高频调用，
+    例如战斗监控、结算弹窗轮询；所有子脚本统一复用本实现以保证 F9 停止检查一致生效。
     region: 限定搜索范围 (x, y, w, h)（整屏绝对坐标）以加快匹配；None 表示用游戏客户区
             （取不到窗口时才退回整屏）。返回值始终是整屏绝对坐标。
     client_region: 客户区相对坐标 (x, y, w, h)，与 region 互斥。窗口可能被拖动，
@@ -1196,89 +1260,7 @@ class ClickerNotRunning(RuntimeError):
     """click_from_file.exe 已退出，坐标不再被消费——点击全部落空。"""
 
 
-# 日志里给人看的模板中文名：键是模板/动作的拼音名，值是中文。
-# 模板文件名保持拼音不动，日志输出成「中文(拼音)」，排查时仍能一眼对上文件名。
-TEMPLATE_CN = {
-    "wanfamulu": "玩法目录", "caidan": "菜单", "renwu": "任务",
-    "pujing": "竞技场", "pujingzhandou": "竞技场战斗",
-    "pujingjixutiaozhan": "竞技场继续挑战", "pujingjieshu": "竞技场结算",
-    "kaishitiaozhan": "开始挑战", "mianfeimenpiao": "免费门票",
-    "fufeimenpiao": "付费门票", "querengoumaimenpiao": "确认购买门票",
-    "bumaifufeimenpiao": "不买付费门票",
-    "zhandou": "战斗", "tiaoguo": "跳过", "tiaoguozhandou": "跳过战斗",
-    "guajiguanqia": "挂机关卡", "advance": "挂机关卡", "huanlingcha": "幻灵挑战",
-    "guajijixian": "挂机极限", "huidaoguaji": "回到挂机", "tuichulibao": "退出礼包",
-    "exit": "返回", "exitck": "返回按钮", "fanhui": "返回",
-    "dianjikongbaichuguanbi": "点击空白处关闭", "libao": "礼包",
-    "huodejiangli": "获得奖励", "lingqu": "领取", "yijianlingqu": "一键领取",
-    "baoxiang_full": "宝箱", "shouhuojiangli": "收获奖励",
-    "mimengzhiyu": "迷梦之域", "mimengpaiming": "迷梦排行榜",
-    "tiaozhan": "挑战", "cishubugou": "次数不足", "goumaimimeng": "购买迷梦次数",
-    "pata": "爬塔", "towerjixian": "爬塔极限", "tower": "爬塔",
-    "yaoguangzhita": "光辉之塔", "ziranzhita": "自然之塔",
-    "manxuezhita": "不朽之塔", "wanglingzhita": "意志之塔",
-    "nvshenta": "女神塔", "mimeng": "迷梦",
-    "jieshezhanxian": "结社战线", "lieshouxunshang": "狩猎悬赏",
-    "gonghuiwanfa": "公会玩法", "gonghuiwanfaactive": "公会玩法(选中)",
-    "gonghuizhengfa": "公会征伐", "saijijieduanpaiming": "赛季阶段排名",
-    "shoutongjiangli": "首通奖励", "dianfengjingjichang": "巅峰竞技场",
-    "dianfengliansai": "巅峰联赛",
-    "dianfengjixutiaozhan": "巅峰竞技场继续挑战",
-    "dianfengxuanzeduishou": "选择对手", "dianfengtiaozhan": "挑战他",
-    "dianfengbianji": "编辑下一场", "dianfengzhandou": "巅峰竞技场战斗",
-    "fail": "战斗失败", "repeat": "再次挑战",
-    "yuanwangdan": "愿望单", "xinyuandanbiaoti": "愿望单标题",
-    "yijianxuanze": "一键选择", "jiaofu": "交付",
-    "fanfanle": "翻翻乐", "zengjiajindu": "增加进度",
-    "yingxiongtingtang": "英雄厅堂", "yingxiongtingtang_tab": "英雄厅堂页签",
-    "kuaisushengji": "快速升级",
-    "shangcheng": "商城", "youyishangcheng": "友谊商城",
-    "youjian": "邮件", "haoyou": "好友", "yijianzengli": "一键赠礼",
-    "shouqu": "收曲", "migong": "迷宫", "warehouse": "仓库",
-    # 今日日志中仍以拼音出现的其余模板/动作名（模板文件名保持不变）
-    "yueduquanbu": "阅读全部", "notyueduquanbu": "未读全部",
-    "notyijianzengli": "未赠礼",
-    "tiaozhanonly": "仅挑战", "jixutiaozhan": "继续挑战",
-    "exit_final": "最终返回", "shoutongyijianlingqu": "首通一键领取",
-    "guajijiangli": "挂机奖励", "guajituoguan": "挂机托管",
-    "shalou1": "沙漏·可买3次", "shalou2": "沙漏·可买2次", "shalou3": "沙漏·可买1次",
-    "shalou4": "沙漏·免费结束", "shalou5": "沙漏·已付费1次", "shalou6": "沙漏·已付费2次",
-    "nvshentasaodang": "女神塔扫荡", "nvshentasaodangmax": "女神塔最大扫荡",
-    "nvshentasaodang_confirm": "女神塔扫荡确认", "nvshentasaodangwancheng": "女神塔扫荡完成",
-    "nvshentaxiayiceng": "女神塔下一层", "nvshentazhandoubiaoji": "女神塔战斗标记",
-    "nvshentiaozhan": "女神塔挑战", "nvshentahuiji": "女神塔回击",
-    "jieshesaodang": "结社扫荡", "jieshesaodangmax": "结社最大扫荡",
-    "jieshesaodang_confirm": "结社扫荡确认", "jieshesaodangbtn": "结社扫荡按钮",
-    "jieshesaodangguanqia": "结社扫荡关卡", "jieshesaodangwancheng": "结社扫荡完成",
-    "jieshetiaozhan": "结社挑战", "jieshejixutiaozhan": "结社继续挑战",
-    "jiesheshibai": "结社失败", "jieshengli": "结社胜利",
-    "kaishipengren": "开始烹饪", "kaishiduanzao": "开始锻造", "kaishilianjin": "开始炼金",
-    "goumai50": "购买50", "goumai100": "购买100",
-    "saijishouchuo": "赛季手册", "saijilichengbei": "赛季里程碑",
-    "yuekajiangli": "月卡奖励", "meirirenwujiangli": "每日任务奖励", "richangrenwu": "日常任务",
-    "tongguanzhenrong": "通关阵容", "yijiancaiyong": "一键采用",
-    "zidongtiaozhanzhong": "自动挑战中",
-    "xinyuandanbuzu": "愿望单资源不足", "xinyuandanwancheng": "愿望单完成",
-    "xinyuandanxuqiu": "愿望单需求", "yuanwangdanjindu": "愿望单进度",
-    "tujingjiantou": "途径箭头",
-}
 
-
-def display_name(name):
-    """把日志里的拼音模板名转成「中文(拼音)」，未收录的原样返回。
-
-    调用方传入的 name 可能带后缀（如 ``kuaisushengji(2)``），只翻译括号前的基名，
-    后缀原样保留，避免破坏重试序号等信息。
-    """
-    text = str(name)
-    base = text.split("(")[0]
-    cn = TEMPLATE_CN.get(base)
-    if not cn:
-        return text
-    return f"{cn}({base}){text[len(base):]}"
-
-
-# 连续多少次坐标未被消费才判定点击器已退出：偶发的一次超时（窗口卡顿、系统繁忙）不算故障
 CLICKER_MISS_LIMIT = 3
 _clicker_miss = {"streak": 0}
 
@@ -1307,25 +1289,111 @@ def _restore_cursor_pos(pos):
         ctypes.windll.user32.SetCursorPos(int(pos[0]), int(pos[1]))
 
 
-def clicker_alive():
-    """探测 click_from_file.exe 是否还在消费坐标文件。
+def _ahk_script_running():
+    """确认 AutoHotkey64.exe 跑的是本项目的 click_from_file.ahk（不是用户别的 AHK）。
 
-    用「当前光标位置」作哨兵值而非固定坐标：点击器读到后会移动鼠标到该点，
-    若用 (-1,-1) 之类的值会把光标甩到屏幕角落。
+    tasklist 只看进程名会误判：用户自己开了 AHK 也会显示 AutoHotkey64.exe。
+    查一次命令行（仅启动时调用，开销可接受）；查询失败时保守认为在运行。
+    """
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             ("Get-CimInstance Win32_Process -Filter \"Name='AutoHotkey64.exe'\" "
+              "| Select-Object -ExpandProperty CommandLine")],
+            capture_output=True, timeout=3, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return True
+    out = (result.stdout or b"").decode("utf-8", errors="ignore").strip()
+    if not out:
+        # 提权进程的 CommandLine 常读不到（实测 2026-11-10 为空）：保守按在跑处理，
+        # 避免把正常注入器误判成「已退出」。
+        return True
+    return "click_from_file.ahk" in out
+
+
+def clicker_process_alive():
+    """只读探测点击注入器进程是否在（编译 exe 或 AHK v2 明文脚本，二选一）。"""
+    try:
+        # 不用 text=True：中文 Windows 上 tasklist 输出 GBK，UTF-8 解码会抛错并让
+        # stdout 变成 None（2026-11-08 实机踩过）。进程名是 ASCII，直接比对 bytes。
+        result = subprocess.run(["tasklist", "/NH"], capture_output=True,
+                                timeout=3, check=False)
+    except (OSError, subprocess.SubprocessError):
+        # 探测本身失败时按存活处理，交给 send_coord 判定，避免误中止整轮任务
+        return True
+    out = result.stdout or b""
+    if b"click_from_file.exe" in out:
+        return True
+    if b"AutoHotkey64.exe" in out:
+        return _ahk_script_running()
+    return False
+
+
+def clicker_alive():
+    """只读探测 click_from_file.exe 是否仍在运行，不产生任何点击副作用。
+
+    旧实现把当前光标位置当哨兵写进坐标 IPC 文件、等点击器消费；消费本身是一次真实
+    点击，若用户光标停在别的窗口上就会被误点。改为 tasklist 进程探测，
+    `send_coord` 的连续未消费计数继续作为第二道保险。
+    2026-11-10 起兼容 AHK v2 明文脚本（click_from_file.ahk）注入器。
     """
     if os.path.exists(coord_path):
         return False   # 上一条坐标都没人取走，必然没在运行
-    point = wintypes.POINT()
-    if not ctypes.windll.user32.GetCursorPos(ctypes.byref(point)):
-        return True    # 拿不到光标位置（非 Windows）：无法判断，按存活处理，不阻断流程
-    with open(coord_path, "w", encoding="utf-8") as f:
-        f.write(f"{point.x} {point.y}")
-    deadline = time.time() + 1.0
-    while time.time() < deadline:
-        if not os.path.exists(coord_path):
-            return True
+    return clicker_process_alive()
+
+
+def _write_coord_raw(x, y, wait_timeout=1.5):
+    """把坐标写入 IPC 并等注入器消费完成；返回 True 表示注入器已处理（点击已执行）。
+
+    只负责「写 + 等」，不含激活窗口、光标归位等前置动作，供 send_coord 与
+    `_click_title_bar` 共用（后者需要绕过 send_coord 自身的前置逻辑）。
+    """
+    wait_count = 0
+    while os.path.exists(coord_path) and wait_count < 20:
+        check_stop()  # 若 AHK 迟迟未消费上一条坐标，允许 F9 在此期间中断
         time.sleep(0.05)
-    return False
+        wait_count += 1
+
+    with open(coord_path, "w", encoding="utf-8") as f:
+        f.write(f"{x} {y}")
+
+    deadline = time.time() + wait_timeout
+    while os.path.exists(coord_path):
+        check_stop()
+        if time.time() >= deadline:
+            break
+        time.sleep(0.02)
+    return not os.path.exists(coord_path)
+
+
+def _click_title_bar():
+    """点窗口标题栏把游戏真正激活；标题栏不属于客户区，不会触发任何游戏内操作。
+
+    Windows 前台锁下 `SetForegroundWindow` 会静默失败，此时第一次点击会被系统用于
+    激活而吞掉——直接点游戏里的按钮就会「点了没反应」。用标题栏这一下先完成激活，
+    随后的目标点击才稳定落地。无标题栏（全屏无边框）时不做这件事，避免误触游戏画面。
+    """
+    hwnd = find_game_window()
+    if hwnd is None:
+        return False
+    try:
+        rect = wintypes.RECT()
+        if not ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            return False
+        client = _client_rect_of(hwnd)
+        if not client:
+            return False
+        cx, cy, cw, _ch = client
+        title_h = cy - rect.top
+        if title_h < 12:
+            return False   # 没有标题栏：不要拿游戏画面当激活区
+        if not _write_coord_raw(cx + cw // 2, rect.top + title_h // 2, wait_timeout=1.0):
+            return False
+        time.sleep(0.35)
+        return True
+    except (AttributeError, OSError, ctypes.ArgumentError):
+        return False
 
 
 def send_coord(x, y):
@@ -1338,28 +1406,24 @@ def send_coord(x, y):
     click_from_file.exe 会在长时间运行后自行退出，此后所有点击都会静默落空、界面表现为
     「连续多轮无变化」。因此连续 CLICKER_MISS_LIMIT 次坐标无人消费即抛 ClickerNotRunning，
     让调用方立即失败并报出真实原因，而不是空转到各流程自己的超时上限。
+
+    2026-11-11 增加两处前置校验（当天「点击全部不准」的直接原因是第 1 条）：
+    1. `ensure_game_clickable()` 返回 False（前台锁没解开）时，先用标题栏点击激活，
+       否则这一次点击会被系统用于激活而吞掉；
+    2. 点击点被其它窗口盖住时记日志（含遮挡窗口标题），便于事后定位，
+       不再悄悄把点击发给别的窗口。
     """
     check_stop()
-    ensure_game_clickable()
+    if ensure_game_clickable() is False and _click_title_bar():
+        log("前台锁未解开，已用标题栏点击激活窗口后再点目标")
+    if not point_owned_by_game(x, y):
+        root = _window_root_at(x, y)
+        log(f"点击点被其它窗口遮挡：({x},{y}) 属于「{_window_title(root)}」")
+
     cursor_before = _read_cursor_pos() if _restore_cursor["enabled"] else None
-    wait_count = 0
-    while os.path.exists(coord_path) and wait_count < 20:
-        check_stop()  # 若 AHK 迟迟未消费上一条坐标，允许 F9 在此期间中断
-        time.sleep(0.05)
-        wait_count += 1
+    consumed = _write_coord_raw(x, y)
 
-    with open(coord_path, "w", encoding="utf-8") as f:
-        f.write(f"{x} {y}")
-
-    # 等 AHK 读走本次坐标（文件被删除）再返回；最多 0.5s
-    deadline = time.time() + 0.5
-    while os.path.exists(coord_path):
-        check_stop()
-        if time.time() >= deadline:
-            break
-        time.sleep(0.02)
-
-    if os.path.exists(coord_path):
+    if not consumed:
         _clicker_miss["streak"] += 1
         if _clicker_miss["streak"] >= CLICKER_MISS_LIMIT:
             _clicker_miss["streak"] = 0
@@ -1369,9 +1433,14 @@ def send_coord(x, y):
         _clicker_miss["streak"] = 0
 
     if cursor_before is not None:
-        # 等点击器把「移动 + 点击」做完再归位，否则可能被它随后的 MouseMove 覆盖
-        time.sleep(0.12)
-        _restore_cursor_pos(cursor_before)
+        # 旧 exe 在读走坐标后还要 MouseMove + Sleep(80~260ms) + Click 才真正完成，
+        # 过早归位会和它抢光标（用户看到的「鼠标来回横跳」，偶发点击落空）。
+        # 等 0.35s 覆盖旧实现的最坏时序；新脚本虽已完成，多等也无害。
+        time.sleep(0.35)
+        # 目标点本来就贴近原位时不必再动一次光标，减少一次可见跳动
+        if abs(cursor_before[0] - x) > 3 or abs(cursor_before[1] - y) > 3:
+            _restore_cursor_pos(cursor_before)
+
 
 
 def click_position(pos, wait=1.5, twice=True):
@@ -1391,6 +1460,174 @@ def click_position(pos, wait=1.5, twice=True):
         invalidate_screenshot_cache()
     time.sleep(wait)
     return True
+
+
+def click_and_confirm(template_path, name, confirm, *, attempts=2, threshold=0.8,
+                      find_timeout=4.0, confirm_timeout=6.0):
+    """点击跳转型按钮，并校验界面真的切换了；没切过去就补点，最多 attempts 轮。
+
+    「模板命中 + 发送点击」只证明点到了像素，不证明点击生效：窗口不在前台时第一次
+    鼠标事件会被系统吞掉用于激活窗口，弹窗遮挡时点击也会落空。2026-11-10 日志里
+    「点了塔卡片却仍停在玩法目录、后续按钮 15 秒都等不到」「点社交没进好友面板」
+    都是这个原因——旧实现把 send_coord 返回当成成功，于是一路错下去。
+
+    这里把「点击 → 轮询 confirm → 未生效则补点」收敛成一处，跳转类入口统一用它：
+    每次只点一下（twice=False 的效果），确认失败才点第二下，避免「进入后又退出」。
+
+    confirm 必须是无参回调，且判据要选「目标页面独有」的元素（按钮/标题），不要用
+    「当前页面消失」——加载动画期间两者都不成立，会误判。
+    """
+    prefix = display_name(name)
+    if confirm():
+        return True
+    for attempt in range(1, attempts + 1):
+        check_stop()
+        pos = find_center_silent(template_path, threshold, timeout=find_timeout)
+        if pos is None:
+            log(f"{prefix}：第 {attempt} 次没找到按钮，无法点击")
+            return False
+        click_position(pos, wait=0.6, twice=False)
+        deadline = time.time() + confirm_timeout
+        while time.time() < deadline:
+            check_stop()
+            if confirm():
+                return True
+            time.sleep(0.5)
+        log(f"{prefix}：第 {attempt} 次点击后未确认界面切换（首次点击可能被激活吞掉），补点")
+    return False
+
+
+def _drag_scroll(x1, y1, x2, y2, steps=25, step_sleep=0.02):
+    """SendInput 逐步拖动（按住左键 + 逐步移动），用于 ScrollRect 类列表滚动。
+
+    AHK 的 send_drag 是瞬移式拖拽，Unity 的 ScrollRect 不认（2026-11-08 实测：卡片
+    列表纹丝不动）；必须「按住 + 逐步移动 + 松开」才触发滚动。仅用于拖拽滚动，不用于
+    点击。try/finally 保证 LEFTUP 一定执行，避免进程中断卡住左键。
+    注意：目标窗口是管理员进程时，本进程也必须有管理员权限（项目本来就要求）。
+    """
+    INPUT_MOUSE = 0
+    MOUSEEVENTF_LEFTDOWN = 0x0002
+    MOUSEEVENTF_LEFTUP = 0x0004
+
+    class MOUSEINPUT(ctypes.Structure):
+        _fields_ = [("dx", wintypes.LONG), ("dy", wintypes.LONG),
+                    ("mouseData", wintypes.DWORD), ("dwFlags", wintypes.DWORD),
+                    ("time", wintypes.DWORD),
+                    ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong))]
+
+    class INPUT(ctypes.Structure):
+        class _I(ctypes.Union):
+            _fields_ = [("mi", MOUSEINPUT)]
+
+        _anonymous_ = ("i",)
+        _fields_ = [("type", wintypes.DWORD), ("i", _I)]
+
+    def _send(flags):
+        inp = INPUT(type=INPUT_MOUSE)
+        inp.mi = MOUSEINPUT(0, 0, 0, flags, 0, None)
+        return ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(inp))
+
+    ctypes.windll.user32.SetCursorPos(int(x1), int(y1))
+    time.sleep(0.15)
+    _send(MOUSEEVENTF_LEFTDOWN)
+    try:
+        for step in range(1, steps + 1):
+            x = x1 + (x2 - x1) * step / steps
+            y = y1 + (y2 - y1) * step / steps
+            ctypes.windll.user32.SetCursorPos(int(x), int(y))
+            time.sleep(step_sleep)
+    finally:
+        _send(MOUSEEVENTF_LEFTUP)
+    time.sleep(0.3)
+
+
+def scroll_in_client_region(direction="down", distance_ratio=0.35, times=1, region=None):
+    """在卡片列表内做**逐步拖动**滚动，露出下方卡片。
+
+    direction="down" 表示「露出更下面的内容」：鼠标从列表下部往上部拖，内容跟随上移。
+    region: 可选 (x, y, w, h) 全屏绝对坐标滚动区；缺省按玩法目录卡片列表比例取。
+    2026-11-08 实测链路：①滚轮（mouse_event / SendInput）确实能滚，但滚到底后第三行
+    标题被底部页签栏遮挡、模板匹配不到；②按住上拖能把列表拖到「标题露出」的位置，
+    但必须是逐步拖动（见 _drag_scroll），AHK 的瞬移式 send_drag 无效；③卡片图案区
+    不可点，按钮在标题区，所以必须拖到标题可见再点。
+    拖拽后若目录标题消失（误入卡片详情），点返回箭头退回目录。
+    """
+    client = game_client_region()
+    if client is None:
+        return False
+    origin_x, origin_y, width, height = client
+
+    if region is not None:
+        reg_x, reg_y, reg_w, reg_h = region
+        anchor_x = reg_x + reg_w // 2
+        if direction == "down":
+            start_y = reg_y + int(reg_h * 0.80)
+            end_y = reg_y + int(reg_h * 0.25)
+        else:
+            start_y = reg_y + int(reg_h * 0.25)
+            end_y = reg_y + int(reg_h * 0.80)
+    else:
+        # 拖动列与起止：以**首张卡片中心**为基准上下各 120px（2026-11-08 实机验证成功的
+        # 范围：起点在列表内、终点在列表上部；固定比例起止会落在卡片上或列表外，拖不动）。
+        anchor_x = origin_x + width // 2
+        anchor_y = origin_y + int(height * 0.5)
+        for name in ("guajiguanqia.png", "mimengzhiyu.png", "pujing.png",
+                     "nvshenta.png", "pata.png"):
+            pos = find_center_silent(get_template_path(name), 0.8, timeout=0)
+            if pos:
+                anchor_x = pos[0]
+                anchor_y = pos[1]
+                break
+        if direction == "down":
+            start_y = anchor_y + 120
+            end_y = anchor_y - 120
+        else:
+            start_y = anchor_y - 120
+            end_y = anchor_y + 120
+
+    for _ in range(max(1, times)):
+        check_stop()
+        _drag_scroll(anchor_x, start_y, anchor_x, end_y)
+        time.sleep(1.0)
+        invalidate_screenshot_cache()
+        # 护栏（仅玩法目录场景）：拖动松开点若仍落在卡片上会进卡片详情，此时目录标题消失。
+        # 指定 region 的调用方（如悬赏卡片网格）不在目录里，跳过该检查。
+        if region is None and \
+                find_center_silent(get_template_path("wanfamulubiaoti.png"), 0.8, timeout=0) is None:
+            back_pos = (find_center_silent(get_template_path("exit.png"), 0.8, timeout=0)
+                        or find_center_silent(get_template_path("exitck.png"), 0.8, timeout=0))
+            if back_pos:
+                click_position(back_pos, wait=1.5, twice=False)
+    return True
+
+
+def is_loading_screen(brightness_threshold=35.0):
+    """判断当前是否是游戏加载画面（近似全黑、底部显示「加载中…」）。
+
+    2026-11-09 实机：女神塔回退时停在「加载中…」，2 秒内看不到扫荡按钮就被判失败；
+    加载画面客户区中央平均亮度实测很低，正常界面远高于此，用亮度做判据不需要新模板。
+    """
+    img = screenshot_bgr()
+    region = game_client_region()
+    if region is None:
+        return False
+    origin_x, origin_y, width, height = region
+    center = img[origin_y + int(height * 0.2):origin_y + int(height * 0.8),
+                 origin_x + int(width * 0.2):origin_x + int(width * 0.8)]
+    if center.size == 0:
+        return False
+    return float(center.mean()) < brightness_threshold
+
+
+def wait_until_loaded(timeout=15.0, poll=0.5):
+    """等加载画面结束；返回 True 表示已不是加载态（或本来就正常），超时仍在加载返回 False。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        check_stop()
+        if not is_loading_screen():
+            return True
+        time.sleep(poll)
+    return not is_loading_screen()
 
 
 # ===== 无 OCR 区域变化检测（B2）=====

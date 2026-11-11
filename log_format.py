@@ -62,10 +62,10 @@ def _pinyin_rule():
     """懒加载拼音名替换正则：避免 log_format 在导入阶段就拉起 common 的重依赖。"""
     global _PINYIN_PATTERN, _PINYIN_MAP
     if _PINYIN_PATTERN is None:
-        from common import TEMPLATE_CN
+        from common import LOG_NAME_MAP
 
-        _PINYIN_MAP = TEMPLATE_CN
-        names = sorted(TEMPLATE_CN, key=len, reverse=True)
+        _PINYIN_MAP = LOG_NAME_MAP
+        names = sorted(LOG_NAME_MAP, key=len, reverse=True)
         _PINYIN_PATTERN = re.compile(
             r"(?<![A-Za-z0-9_])(?:" + "|".join(re.escape(name) for name in names)
             + r")(?![A-Za-z0-9_])"

@@ -1,3 +1,10 @@
+"""主线推图流程。
+
+覆盖模式入口与落地校验、阵容识别、连续失败上限、赛季首通奖励领取、
+结果页 `repeat(e)` 补点；入口 `main()`。依赖 `common` / `warehouse` / `formation`，
+`flow_push`（幻灵推图）通过薄封装分发到本模块。
+"""
+
 import os
 import time
 
@@ -573,6 +580,26 @@ class PushFlow:
 
     # ---------- 各状态处理 ----------
 
+    def _clear_occluder(self):
+        """清掉「已达成玩家」这类不带「点击空白处关闭」提示的遮挡面板。
+
+        2026-11-10 实机失败现场：点「挑战」后弹出「已达成玩家」赛季进度榜单，整屏盖住
+        备战界面，既没有关闭提示也没有自动挑战按钮，白等 10 秒后被误判「无法进入模式」。
+        该面板左下角是个普通返回箭头（exit 模板实测 0.983），点它即可关闭。
+
+        误点保护：只有「自动挑战不可见 且 极限弹窗不可见」时才动手——正常备战界面必有
+        autocha，出现 guajijixian 属于购买门票分支，两者都不能点 exit 退出去。
+        """
+        if find_center_silent(tpl_autocha, 0.8, timeout=0):
+            return False
+        if find_center_silent(tpl_guajijixian, 0.7, timeout=0):
+            return False
+        if find_center_silent(tpl_exit, 0.8, timeout=0) is None:
+            return False
+        print("检测到无提示的遮挡面板（已达成玩家等），点返回关闭后继续")
+        wait_and_click(tpl_exit, "exit(遮挡面板)", 0.8, timeout=2.0)
+        return True
+
     def _wait_for_any_state(self, candidates, timeout=10.0, interval=0.25, allow_gift_recovery=True):
         """等待目标状态模板出现，返回命中的模板路径；超时返回 None。"""
         deadline = time.time() + timeout
@@ -591,6 +618,8 @@ class PushFlow:
                     if wait_and_click(tpl_tuichulibao, "tuichulibao", 0.8, timeout=3.0):
                         time.sleep(0.5)
                         continue
+                if self._clear_occluder():
+                    continue
 
             time.sleep(interval)
         return None
@@ -631,6 +660,13 @@ class PushFlow:
             )
             if next_path:
                 return next_path
+            # 2026-11-10 实机：点入口后可能弹出「已达成玩家」等结算面板（现场截图），
+            # 目标状态被遮挡 10 秒等不到 → 误判「无法进入模式」。重试前先清一次弹窗。
+            hint_path = get_template_path("dianjikongbaichuguanbi.png")
+            if find_center_silent(hint_path, 0.8, timeout=0):
+                print(f"{action_name} 后检测到遮挡弹窗，先清弹窗再重试")
+                dismiss_popup_away_from()
+                time.sleep(0.8)
         return None
 
     def _click_repeat_and_confirm(self):
@@ -675,6 +711,13 @@ class PushFlow:
             print("点击 advance(a) 进入推图失败。")
             return self._done(False)
 
+        # 首通奖励（赛季阶段排名 → 首通）只能从推图主界面右上角的奖杯进：进了备战界面
+        # 就没有这个入口。2026-11-11 实机：旧实现放在「进入模式成功」之后，两次点奖杯都
+        # 打不开排名面板（点到了备战页的别处），既没领到奖励，回来还把状态判据弄丢，
+        # 直接判「无法确认界面」。改为在推图主界面上先领，再进模式。
+        if self.claim_first_clear:
+            claim_first_clear_reward()
+
         print(f"等待 {self.mode_label} 入口...")
         next_path = self._enter_mode_and_confirm()
         if not next_path:
@@ -683,8 +726,6 @@ class PushFlow:
             return self._done(False)
 
         print(f"进入 {self.mode_label} 成功")
-        if self.claim_first_clear:
-            claim_first_clear_reward()
         return STATE_LIMIT if next_path == tpl_guajijixian else STATE_START_BATTLE
 
     def _st_limit(self):
@@ -711,20 +752,26 @@ class PushFlow:
         return STATE_LIMIT if next_path == tpl_guajijixian else STATE_START_BATTLE
 
     def _st_start_battle(self):
-        if not wait_and_click(tpl_autocha, "autocha(c)", 0.8):
-            print("未找到 autocha(c)，推图流程结束。")
-            return self._done(False)
-        next_path = self._wait_after_action(
-            [(tpl_fail, 0.8), (tpl_end, 0.8), (tpl_zidongtiaozhanzhong, 0.8)],
-            "autocha(c)",
-            timeout=12.0,
-        )
-        if next_path == tpl_fail:
-            return STATE_ON_FAIL
-        if next_path == tpl_end:
-            return STATE_ON_END
-        if next_path == tpl_zidongtiaozhanzhong:
-            return STATE_MONITOR_BATTLE
+        # 「自动挑战」点击可能被窗口激活吞掉（2026-11-08 实跑：按钮仍在、状态未切换），
+        # 未确认目标且按钮仍在时补点一次；按钮已消失说明界面已切换，不盲点。
+        for attempt in range(1, 3):
+            if not wait_and_click(tpl_autocha, f"autocha(c)-{attempt}", 0.8):
+                print("未找到 autocha(c)，推图流程结束。")
+                return self._done(False)
+            next_path = self._wait_after_action(
+                [(tpl_fail, 0.8), (tpl_end, 0.8), (tpl_zidongtiaozhanzhong, 0.8)],
+                f"autocha(c)-{attempt}",
+                timeout=12.0,
+            )
+            if next_path == tpl_fail:
+                return STATE_ON_FAIL
+            if next_path == tpl_end:
+                return STATE_ON_END
+            if next_path == tpl_zidongtiaozhanzhong:
+                return STATE_MONITOR_BATTLE
+            if find_center_silent(tpl_autocha, 0.8) is None:
+                break
+            print("自动挑战按钮仍在，补点一次")
         return self._done(False)
 
     def _st_monitor_battle(self):

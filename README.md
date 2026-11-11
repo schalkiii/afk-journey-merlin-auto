@@ -35,7 +35,7 @@
 | 启动游戏 | 勾选「启动时启动游戏」后，定时/立即开始会先通过桌面快捷方式启动游戏，等待指定秒数后再运行脚本 |
 | 游戏启动等待 | 可设置游戏启动后的等待时间（秒），支持手动输入并自动保存 |
 | 全局热键 | F8 开始运行、F9 停止运行（即使窗口未聚焦也生效） |
-| 检查更新 | 菜单「帮助 → 检查更新」对比本地 `version.py` 与远程 `version.json`，支持下载并自动替换 exe |
+| 检查更新 | 菜单「帮助 → 检查更新」查询**本 fork**（`schalkiii/afk-journey-merlin-auto`）的 GitHub Release；只接受 `goldenhandmaidens.exe` 资产（校验名称与体积），替换前留 `.bak` 以便失败回滚。可用环境变量 `GAMEBOT_UPDATE_REPO` 临时切换仓库；绝不拉取上游版本覆盖本分支增强 |
 | 配置持久化 | 所有勾选项、等待时间、定时设置均写入 `game_bot_config.json`，下次启动自动恢复 |
 
 ---
@@ -165,7 +165,8 @@
 - `get_resource_path` / `get_work_path` 统一下沉到 `common`，GUI 改为从 `common` 导入，避免重复定义。
 - `_ensure_config_files()` 简化为仅确保 `shared` 目录存在（移除已无用的空拷贝循环）。
 - `goldenhandmaidens.spec` 的 `hiddenimports` 补充 `flow_enter`，确保打包后导入无误。
-- 新增 `config.json`（启动器/脚本的默认配置）。
+- 移除从未被代码读取的孤儿 `config.json`：用户配置一律走运行时生成的 `game_bot_config.json`
+  （字段说明见 [doc/CONFIG.md](doc/CONFIG.md)），打包资源只含实际会读的三个 `*.json`。
 
 ### 9. 工程化增强：识别去重 / 截屏缓存 / 依赖自动收集 / 测试基线
 
@@ -275,7 +276,9 @@
      把用户的鼠标一直拽在游戏窗口上。窗口消息注入实测被本游戏忽略，**无法做到完全后台点击**。
 3. 在左侧「功能」列表勾选需要执行的任务（每行行首的勾选框）；可点配置面板「一键全选」批量启用。
    - **调整执行顺序**：按住功能按钮上下拖动即可，列表顺序就是实际执行顺序（保存在配置文件里）。
-      「家园愿望单」在家园视图内执行，结束时会停在家园（即主界面，`wanfamulu` 可见），不会阻断后续任务；放在最后一位只是习惯，不再强制。
+     「家园愿望单」在家园视图内执行，该视图下「玩法目录」判据可能不可靠；调度层会在下一任务
+     开始前用 `ensure_main_interface()` 校验，无法恢复时跳过该任务并留存现场，不会连锁卡死。
+     **仍建议把它放在最后一位**，拖到中间时会给出提示。
    - **只跑一个功能**：在列表里点选该功能，再点配置面板的「只运行当前功能」，忽略其它勾选。
    - 推图类任务关系：**推图**=单次主线推图；**幻灵推图**=单次幻灵推图；**循环推图**=每轮固定先「幻灵推图」、后「推图」，两种都跑完才进入下一轮（不是二选一交替）。单个模式失败 / 异常不中断循环，本轮仍会继续跑另一种、下一轮仍从幻灵开始；停止条件只有三个：按 F9、任一模式连续失败达到「连续失败上限」、连续 3 轮整轮耗时都少于 30 秒（异常空转）。勾选「循环推图」时一般无需再单独勾「幻灵推图」「推图」。
    - 推图的**模式入口 / `repeat`（继续挑战）/ 结果页返回**三处点击都带确认与补点：游戏窗口不在前台时，系统会把第一次点击用于激活窗口而吞掉，流程会先确认界面是否真的切换，仍停在原页面（失败页 / 结果页）才补点一次；界面已经变化则不再盲点，避免点到别处。
@@ -296,6 +299,7 @@ Goldenhandmaidens.py      主程序：tkinter GUI、热键、定时/立即运行
 bot_runtime.py            从主文件拆出的独立工具：stdout 接管、配置读写、ScriptConfig、桌面快捷方式 / 游戏窗口聚焦
 log_format.py             日志行的统一格式：任务归组缩进、高频行压缩、任务边界行
 common.py                 基础能力：模板匹配(find_center/find_center_silent)、坐标 IPC、协作式停止、日志汇聚、自动配置阵容
+template_names.py         模板 / 动作拼音名的中文标注表（从 common 抽出的纯数据模块，由 common re-export）
 start.py                  启动任务：登录、月卡/礼包弹窗处理（被「运行登录」调用）
 flow_enter.py             进入游戏 / 返回主界面(flow_return_main)
 flow_gonghui.py           公会玩法入口共用流程（玩法目录 → 公会玩法页签 → 玩法卡片）
@@ -335,14 +339,15 @@ launch_game.py            命令行启动游戏并可联动启动本项目脚本
 click_from_file.exe       AHK 注入器（读取坐标文件执行点击）
 templates/                界面模板图片
 doc/                      规范与方法学：
-  doc/TEMPLATE-AUTHORING.md   模板采集与标定规范（新增/替换模板前必读）
-  doc/LIVE-DEBUGGING.md       实机开发与调试方法学（怎么发起实跑、怎么校验点击生效、收尾链）
-  doc/AUDIT-REPORT-*.md       阶段性审计报告（历史快照，非现役结论）
-game_bot_config.json      用户配置（运行时生成）
+  doc/TEMPLATE-AUTHORING.md        模板采集与标定规范（新增/替换模板前必读）
+  doc/LIVE-DEBUGGING.md            实机开发与调试方法学（怎么发起实跑、怎么校验点击生效、收尾链）
+  doc/CONFIG.md                    用户配置字段清单与读写位置
+  doc/CLIENT-RESOLUTION.md         客户区 1600×900 假设与偏移常量登记表
+  doc/AUDIT-REPORT-2026-11-07.md   现役全面审计报告（问题清单 / 改进建议 / 处置记录）
+game_bot_config.json      用户配置（运行时生成，字段见 doc/CONFIG.md）
 game_bot.log              本地持久化日志（运行日志写入文件，可在程序「运行日志」窗口查看 / 刷新 / 清空）
-config.json               启动器/脚本默认配置（新增）
 warehouse_heroes.txt      仓库扫描结果（运行时生成；flow_tower 读它判断「我方练度是否够这套阵容」）
-tests/                    pytest 用例（只测决策逻辑，真实屏幕全部打桩；跑法见「二次开发」）
+tests/                    pytest 用例（只测决策逻辑，真实屏幕全部打桩；模板资源校验含 migong 子目录）
 ```
 
 命名说明：`flow_*` 多为「流程模块」——既包括可被 GUI 直接分发的完整流程（如 `flow_migong`、
@@ -378,7 +383,11 @@ python Goldenhandmaidens.py
 pwsh -NoProfile -File build.ps1 build    # 打包为单文件 exe（输出到仓库根，等价于 pyinstaller 命令）
 pwsh -NoProfile -File build.ps1 check    # compileall + pytest + ruff 逐文件基线比对
 pwsh -NoProfile -File build.ps1 clean    # 清理 build/dist/__pycache__/.pytest_cache/.ruff_cache
+pwsh -NoProfile -File build.ps1 check -Python "C:\path\to\python.exe"   # 多版本共存时显式指定 3.13
 ```
+
+`check` / `build` 会校验解释器为 **Python 3.13**（依赖按此版本实盘 pin），不符即失败；
+用 `-Python` 参数指定其它路径的解释器。
 
 `clean` 只删可再生的缓存与中间目录，**不会删除**根目录的 `goldenhandmaidens.exe` / `click_from_file.exe` 与 `templates/`。
 
@@ -450,4 +459,6 @@ A: 把该按钮截图保存为 `templates/yijiannianya.png` 即可自动识别�
 
 MIT License
 
-> 注：`goldenhandmaidens.spec` 已将 `templates/`、`click_from_file.exe`、各 `*.json` 配置及 `flow_enter` 等模块一并打进 exe，新增模板/模块后无需手动修改资源清单。
+> 注：`goldenhandmaidens.spec` 已将 `templates/`、`click_from_file.exe`、
+> `migong_config.json` / `formations.json` / `grid_offsets.json` 三个实际会读取的配置，
+> 以及项目内顶层脚本模块一并打进 exe；新增模板/模块后无需手动修改资源清单。

@@ -1,3 +1,9 @@
+"""挂机奖励领取：按沙漏状态机领取免费次数与可选付费次数。
+
+入口 `main(paid_times=0)`；`check_current_state()` 用模板判定当前沙漏档位。
+依赖 `common` 的模板匹配与点击原语。
+"""
+
 import os
 import time
 

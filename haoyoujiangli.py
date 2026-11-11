@@ -44,6 +44,10 @@ MAX_FRIEND_REWARD_SCANS = 5
 # 一键赠礼并收取最多点几次：实测一次就够，留点余量防它分「发送 / 收取」两段
 MAX_GIFT_CLICKS = 3
 
+# 进入好友面板的最多尝试次数，以及每轮等待面板按钮出现的时长（秒）
+ENTER_ATTEMPTS = 2
+PANEL_WAIT = 6.0
+
 # 主界面右下角的好友（兜帽）图标——好友面板的直达入口，实测客户区 (1566,702)。
 # 菜单→社交 要连中 caidan、shejiao 两处模板，任一处失效就进不去，这里作兜底。
 FRIENDS_HUD_POS = (1566, 702)
@@ -70,6 +74,22 @@ def _close_popups(timeout=8.0):
 def _friends_panel_visible():
     """好友面板是否已打开：可赠（绿色按钮）或已赠完（灰色按钮）都算进来了。"""
     return bool(find_center(YIJIANZENGLI, threshold=0.8) or find_center(NOTYIJIANZENGLI, threshold=0.8))
+
+
+def _wait_friends_panel(timeout=6.0):
+    """轮询等待好友面板按钮出现。
+
+    2026-11-10 实机：点「社交」后固定 sleep 2 秒再查一次，面板没渲染完就直接判
+    「未检测到一键赠礼」并终止——现场截图还停在家园主界面（点击被激活窗口吞掉）。
+    入门这一步必须轮询，不能只看一眼。
+    """
+    deadline = time.time() + timeout
+    while True:
+        if _friends_panel_visible():
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(0.5)
 
 
 def _open_friends_via_hud(retries=2):
@@ -148,41 +168,65 @@ def _claim_friend_rewards():
     return claimed
 
 
-def main():
-    print("【好友奖励】开始执行好友奖励任务...")
+def _enter_friends_panel():
+    """菜单 → 社交 → 校验好友面板；任一级失败退回主界面好友图标直达。
 
-    # 识别并点击菜单
+    2026-11-10 实机日志：08:20:55 点菜单、08:20:58 点社交，08:21:00 就报
+    「未检测到一键赠礼并终止」，而现场截图仍停在家园主界面——那次点击被激活窗口
+    吞掉了。旧实现把 send_coord 当成功，于是整天没送礼也没收礼。改为逐级校验 + 补点。
+    """
     caidan_path = os.path.join(templates_dir, "caidan.png")
     if not wait_and_click(caidan_path, "菜单"):
         print("【好友奖励】未找到菜单(caidan)，改用主界面好友图标直达")
-        if not _open_friends_via_hud():
-            print("【好友奖励】两条入口都没能进入好友面板，任务终止")
-            return False
-    else:
-        print("【好友奖励】已进入菜单，等待 2 秒...")
-        time.sleep(2)
+        return _open_friends_via_hud()
+    print("【好友奖励】已进入菜单，等待 2 秒...")
+    time.sleep(2)
 
-        # 识别并点击社交
-        shejiao_path = os.path.join(templates_dir, "shejiao.png")
-        if not wait_and_click(shejiao_path, "社交"):
+    shejiao_path = os.path.join(templates_dir, "shejiao.png")
+    for attempt in range(1, ENTER_ATTEMPTS + 1):
+        if not wait_and_click(shejiao_path, f"社交({attempt})", timeout=5.0):
             print("【好友奖励】未找到社交(shejiao)，改用主界面好友图标直达")
-            if not _open_friends_via_hud():
-                print("【好友奖励】两条入口都没能进入好友面板，任务终止")
-                return False
-        else:
-            print("【好友奖励】已进入社交界面，等待 2 秒...")
-            time.sleep(2)
+            return _open_friends_via_hud()
+        print(f"【好友奖励】已点击「社交」（第 {attempt} 次），等待好友面板按钮...")
+        if _wait_friends_panel(PANEL_WAIT):
+            print("【好友奖励】已进入好友面板")
+            return True
+        print(f"【好友奖励】第 {attempt} 次点「社交」后未出现好友面板按钮，补点")
 
-    # 识别 yijianzengli / notyijianzengli
+    print("【好友奖励】菜单→社交 始终没进好友面板，改用主界面好友图标直达")
+    return _open_friends_via_hud()
+
+
+def main():
+    print("【好友奖励】开始执行好友奖励任务...")
+
+    if not _enter_friends_panel():
+        print("【好友奖励】两条入口都没能进入好友面板，任务终止")
+        return False
+
+    # _enter_friends_panel 已确认面板按钮可见，这里直接取坐标即可
     yijianzengli_pos = find_center(YIJIANZENGLI, threshold=0.8)
     notyijianzengli_pos = find_center(NOTYIJIANZENGLI, threshold=0.8)
 
+    gifts_ok = True
     if yijianzengli_pos:
         clicks = _collect_gifts()
         if clicks:
             print(f"【好友奖励】一键赠礼并收取共点击 {clicks} 次，结算弹窗已清理")
         else:
-            print("【好友奖励】按钮在首次检查后就不可见，视为已处理")
+            # 2026-11-10：按钮「首次检查后就不可见」多半是点击被意外弹框吞掉或界面
+            # 还没加载完，旧实现直接「视为已处理」→ 奖励没领却报成功。这里复核一次。
+            print("【好友奖励】按钮在首次检查后就不可见，复核一次")
+            time.sleep(1.5)
+            _close_popups()
+            clicks = _collect_gifts()
+            if clicks:
+                print(f"【好友奖励】复核后完成一键赠礼并收取 {clicks} 次点击")
+            elif find_center(YIJIANZENGLI, threshold=0.8):
+                print("【好友奖励】一键赠礼按钮仍可见却点不掉，任务未完成")
+                gifts_ok = False
+            else:
+                print("【好友奖励】复核确认按钮已消失，视为已处理")
     elif notyijianzengli_pos:
         print("【好友奖励】检测到 notyijianzengli（已赠礼/无需赠礼），跳过赠礼，直接进入退出流程")
     else:
@@ -214,4 +258,7 @@ def main():
         print("【好友奖励】好友奖励任务执行完成！已回到主界面")
     else:
         print("【好友奖励】好友奖励任务执行完成，但未能确认回到主界面，请检查游戏画面")
+    if not gifts_ok:
+        print("【好友奖励】一键赠礼未确认完成，任务标记失败")
+        return False
     return True
