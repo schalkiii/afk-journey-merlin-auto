@@ -89,6 +89,15 @@ Don't checklist all four every time — pick the one most relevant to the change
   当前基线只剩 **5 条有意保留的 catch-all**（`Goldenhandmaidens.py=3`、`pata.py=2`），原因写在基线注释里。
 - 改动 `.md` 后跑 `markdownlint README.md CHANGELOG.md CLAUDE.md doc\*.md`（规则配置见 `.markdownlint.json`，
   中文长行 MD013 已关闭），要求零 error。
-- 测试基线以 `python -m pytest -q` 实际结果为准（2026-11-11 实机调试后为 330 条；
+- 测试基线以 `python -m pytest -q` 实际结果为准（2026-11-11 实机调试后为 332 条；
   新增用例后同步更新本行）。
 - 新增用例必须做负验证：故意改坏被测逻辑，用例必须失败。
+
+## 动实机之前先读这两份
+
+- `doc/LIVE-DEBUGGING.md`：实机调试方法学（前台锁与标题栏激活、点击「点→校验→补点」、
+  模板标定、滚动为何要管理员、失败现场怎么取）。**改任何点击/判据代码前必读**。
+- `doc/CLIENT-RESOLUTION.md`：客户区 1600×900 假设与偏移常量登记表——新增写死坐标要同步登记。
+- 三条最容易踩的红线：`_drag_scroll` 与对提权窗口的注入都需要**管理员**权限；跳转型点击一律走
+  `common.click_and_confirm`（点一次就返回 True 会掩盖「没进去」）；「标题匹配不到」不等于
+  「点击被吞」（结算弹窗会压暗面板）。

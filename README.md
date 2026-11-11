@@ -255,7 +255,11 @@
 - **游戏客户区**：1600×900、横向（模板基于此客户区采集；窗口被拖动/缩放到其他尺寸会识别失败，程序会在启动时提示）
 - **Python**：源码运行需 **3.13**（本机 3.13.17 实测，全部依赖按此版本实盘 pin，清单见 `requirements.txt`/`requirements-dev.txt`；`3.10+` 仅理论下限）；**OpenCV 三发行版只装一个**——本机生效的是 `opencv-contrib-python`，切勿再叠加 `opencv-python`/`opencv-python-headless`（三者共用同一 `cv2` 目录会互相覆盖、行为不可复现）；普通用户直接运行打包好的 `goldenhandmaidens.exe` 即可，无需装 Python
 - **依赖组件**：
-  - `click_from_file.exe` / AutoHotkey：负责实际鼠标点击注入（由 `common.send_coord` 写入坐标文件驱动）
+  - `click_from_file.ahk`（首选）/ `click_from_file.exe`（未装 AHK v2 时的回退）：负责实际鼠标
+    点击注入，由 `common.send_coord` 写入坐标文件驱动。程序优先用 `AutoHotkey64.exe` 跑明文
+    脚本——它有「瞬移到点 + 显式按下保持 + 动作真正完成后才删 IPC 文件」三处修正，
+    旧 exe 是瞬时点击且读走坐标就删，容易出现点击过短/光标横跳。
+    **注入器必须以管理员启动**，否则对提权的游戏窗口注入会被 UIPI 静默拦截。
   - `windows-capture`：负责后台截图（Windows Graphics Capture），用于截取被遮挡/提权的游戏窗口；代码有缺失回退普通截图，但这是核心功能所需，已列入 `requirements.txt`
   - 桌面《剑与远征：启程》快捷方式：用于「启动游戏」/ `launch_game.py`
   - `templates/` 目录：界面元素模板图片（含 `tongguanzhenrong.png`、`yijiancaiyong.png` 等）。
@@ -337,13 +341,14 @@ build.ps1                 统一构建入口：build / check / clean（需 Power
 .ruff_baseline            ruff 存量基线（每行 `文件=条数`，由 build.ps1 check 消费）
 launch_game.py            命令行启动游戏并可联动启动本项目脚本（新增）
 click_from_file.exe       AHK 注入器（读取坐标文件执行点击）
+click_from_file.ahk       注入器明文脚本（首选，AHK v2；旧 exe 的同功能修正版）
 templates/                界面模板图片
 doc/                      规范与方法学：
   doc/TEMPLATE-AUTHORING.md        模板采集与标定规范（新增/替换模板前必读）
   doc/LIVE-DEBUGGING.md            实机开发与调试方法学（怎么发起实跑、怎么校验点击生效、收尾链）
   doc/CONFIG.md                    用户配置字段清单与读写位置
   doc/CLIENT-RESOLUTION.md         客户区 1600×900 假设与偏移常量登记表
-  doc/AUDIT-REPORT-2026-11-07.md   现役全面审计报告（问题清单 / 改进建议 / 处置记录）
+  doc/AUDIT-REPORT-2026-11-07.md   2026-11-07 全面审计快照（问题清单 / 改进建议，行号与计数为当时值）
 game_bot_config.json      用户配置（运行时生成，字段见 doc/CONFIG.md）
 game_bot.log              本地持久化日志（运行日志写入文件，可在程序「运行日志」窗口查看 / 刷新 / 清空）
 warehouse_heroes.txt      仓库扫描结果（运行时生成；flow_tower 读它判断「我方练度是否够这套阵容」）
