@@ -187,7 +187,10 @@ def _sweep_remaining():
     else:
         click_position(btn_pos, 2.0, twice=False)
         if _find(tpl_saodang_done, timeout=15) is not None:
-            log("【结社战线】剩余扫荡次数已用完")
+            # 这条日志原先写「剩余扫荡次数已用完」，位置又紧跟在「本场失败」之后，
+            # 读起来像「没扫就没了」（2026-11-11 用户据此反馈「报完成了但没扫荡」）。
+            # 它其实是扫荡成功、次数清零的结果，明确写成完成态。
+            log("【结社战线】扫荡完成，当日剩余次数已清零")
         else:
             log("【结社战线】未看到「扫荡完成」结算，可能扫荡未执行")
         dismiss_popup_away_from()

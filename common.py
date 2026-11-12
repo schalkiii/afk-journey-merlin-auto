@@ -1263,6 +1263,8 @@ class ClickerNotRunning(RuntimeError):
 
 CLICKER_MISS_LIMIT = 3
 _clicker_miss = {"streak": 0}
+# 会话不一致告警只检查一次：send_coord 每次调用都 Tasklist 开销大，且刷屏无意义
+_session_warn = {"checked": False, "done": False}
 
 # 点击后把鼠标放回原处：click_from_file 会把光标留在目标点，连续批处理会一直「拽着」
 # 用户的鼠标。窗口消息注入（PostMessage/SendMessage）实测被本游戏忽略，做不到零打扰，
@@ -1343,6 +1345,113 @@ def clicker_alive():
     return clicker_process_alive()
 
 
+# ===== 会话一致性：注入器必须和游戏在同一个 Windows 会话 =====
+# 2026-11-12 冷启动实测：注入器被上一个会话（RDP-Tcp#1，session 3）启动并留在那里，
+# 而游戏在 Console（session 1）。注入器照常读走坐标文件、SendInput 却打在自己会话的
+# 桌面上——文件消失（判据说「点击成功」）、游戏毫无反应。**坐标文件的消费状态无法区分
+# 这两种情况**，只能比较进程所属会话。
+def _pid_session_id(pid):
+    """返回进程所属的 Windows 会话 ID；取不到返回 None。"""
+    if not pid:
+        return None
+    try:
+        sid = ctypes.c_ulong()
+        if not ctypes.windll.kernel32.ProcessIdToSessionId(int(pid), ctypes.byref(sid)):
+            return None
+        return int(sid.value)
+    except (AttributeError, OSError, ctypes.ArgumentError):
+        return None
+
+
+def current_session_id():
+    """当前进程所在的会话 ID。"""
+    return _pid_session_id(os.getpid())
+
+
+def is_process_elevated():
+    """当前进程是否以管理员身份运行。
+
+    为什么必须查这一条：游戏以管理员启动时，非提权进程的 `SendInput` 会被 UIPI
+    静默丢弃——注入器照常读走坐标文件（「坐标被消费 == 点击成功」的判据全部成立），
+    游戏画面却一动不动，最后表现为**每个任务都超时失败**，日志里找不到任何异常
+    （2026-11-12 实测：同一份代码，普通权限跑全失败，管理员跑立刻正常交付）。
+    """
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except (AttributeError, OSError):
+        return False
+
+
+def game_window_session_id():
+    """游戏窗口所属进程的会话 ID；取不到返回 None。"""
+    hwnd = find_game_window()
+    if hwnd is None:
+        return None
+    try:
+        pid = wintypes.DWORD()
+        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        return _pid_session_id(pid.value)
+    except (AttributeError, OSError, ctypes.ArgumentError):
+        return None
+
+
+def _clicker_session_ids():
+    """列出所有在跑的点击注入器进程的会话 ID。"""
+    try:
+        result = subprocess.run(["tasklist", "/NH"], capture_output=True,
+                                timeout=3, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    out = result.stdout or b""
+    names = []
+    if b"click_from_file.exe" in out:
+        names.append("click_from_file.exe")
+    if b"AutoHotkey64.exe" in out:
+        names.append("AutoHotkey64.exe")
+    sids = []
+    for name in names:
+        try:
+            listing = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {name}", "/FO", "CSV", "/NH"],
+                                     capture_output=True, timeout=3, check=False)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        # 逐行解析 "名字","PID","会话名","会话号","内存"
+        for raw in (listing.stdout or b"").decode("gbk", errors="ignore").splitlines():
+            parts = [p.strip('"') for p in raw.split('","')]
+            if len(parts) >= 4 and parts[1].isdigit():
+                try:
+                    sids.append(int(parts[3]))
+                except ValueError:
+                    continue
+    return sids
+
+
+def clicker_session_mismatch():
+    """注入器与游戏不在同一会话时返回说明文字，正常返回 None。"""
+    game_sid = game_window_session_id()
+    if game_sid is None:
+        return None
+    sids = _clicker_session_ids()
+    if not sids:
+        return None
+    if game_sid in sids:
+        return None
+    return (f"点击注入器运行在会话 {','.join(str(s) for s in sorted(set(sids)))}，"
+            f"游戏在会话 {game_sid}：注入器会读走坐标但点击落在另一个桌面，游戏不会有任何反应")
+
+
+def log_clicker_session_warning():
+    """会话不一致时记一条日志（每个进程只检查一次，避免每次点击都 Tasklist）。"""
+    if _session_warn["checked"]:
+        return
+    _session_warn["checked"] = True
+    note = clicker_session_mismatch()
+    if note is None:
+        return
+    _session_warn["done"] = True
+    log(f"警告: {note}。请关闭旧注入器并在当前会话重新启动程序")
+
+
 def _write_coord_raw(x, y, wait_timeout=1.5):
     """把坐标写入 IPC 并等注入器消费完成；返回 True 表示注入器已处理（点击已执行）。
 
@@ -1414,6 +1523,7 @@ def send_coord(x, y):
        不再悄悄把点击发给别的窗口。
     """
     check_stop()
+    log_clicker_session_warning()
     if ensure_game_clickable() is False and _click_title_bar():
         log("前台锁未解开，已用标题栏点击激活窗口后再点目标")
     if not point_owned_by_game(x, y):
@@ -1628,6 +1738,92 @@ def wait_until_loaded(timeout=15.0, poll=0.5):
             return True
         time.sleep(poll)
     return not is_loading_screen()
+
+
+# ===== 冷启动：等游戏真正可操作再跑任务 =====
+# 从「点了快捷方式」到「画面能跑模板匹配」的默认上限。实测这台机器冷启动约 1 分半
+# （启动器拉起本体 → 资源校验/更新 → 开始界面），180 秒留足余量。
+GAME_READY_TIMEOUT = 180.0
+GAME_READY_POLL = 1.0
+# 客户区尺寸容差：全套模板按 1600×900 采集，尺寸不符时匹配会整体偏移几个像素，
+# 于是「页签/按钮明明在却匹配不到」。窗口在启动动画期间会短暂变化，故要等它稳定。
+CLIENT_SIZE_TOLERANCE = 8
+
+# 「游戏本体已经可以操作」的正向标志：只要命中任意一个，就说明已经越过资源校验/加载。
+# 覆盖四种合法落点：开始界面、主界面 HUD、以及两类只可能出现在可交互弹窗上的元素。
+GAME_READY_MARKERS = (
+    ("开始界面", "start.png"),
+    ("主界面", "wanfamulu.png"),
+    ("可交互弹窗", "dianjikongbaichuguanbi.png"),
+    ("月卡奖励", "yuekajiangli.png"),
+    ("礼包弹窗", "libao.png"),
+)
+
+
+def _game_ready_marker():
+    """返回当前画面命中的「游戏可操作」标志名；没有命中返回 None。"""
+    for label, name in GAME_READY_MARKERS:
+        try:
+            if find_center_silent(get_template_path(name), 0.8, timeout=0):
+                return label
+        except (ValueError, OSError):
+            # 个别模板缺失不应让整个就绪判定失败，跳过该标志即可
+            continue
+    return None
+
+
+def wait_for_game_ready(timeout=GAME_READY_TIMEOUT, poll=GAME_READY_POLL):
+    """等待游戏窗口出现、客户区尺寸稳定、且画面出现游戏内界面标志；返回 (status, message)。
+
+    status 取值：
+      "ok"        窗口在、尺寸在容差内、命中任一 GAME_READY_MARKERS；
+      "no_window" 超时都没出现游戏窗口（快捷方式没起来 / 还停在启动器）；
+      "not_ready" 窗口出现了，但超时时尺寸不符或画面始终没有游戏内标志。
+
+    为什么不用「画面不黑」做判据：2026-11-12 冷启动实测，游戏自己的
+    「正在更新游戏资源 21%」画面中心亮度足够高，`is_loading_screen()` 返回 False，
+    于是亮度判据会把**加载中的画面**当成就绪，任务照样开跑、照样连败。
+    只有模板标志（开始界面 / 主界面 HUD / 可交互弹窗）能真正区分「在加载」和「可操作」。
+    """
+    deadline = time.time() + max(1.0, timeout)
+    seen_window = False
+    last_note = ""
+    while True:
+        check_stop()
+        hwnd = find_game_window()
+        if hwnd is None:
+            if time.time() >= deadline:
+                return ("no_window",
+                        f"等待 {int(timeout)} 秒仍未找到游戏窗口，游戏可能没有启动")
+            time.sleep(poll)
+            continue
+        if not seen_window:
+            seen_window = True
+            log("已找到游戏窗口，等待画面就绪…")
+        try:
+            if ctypes.windll.user32.IsIconic(hwnd):
+                ctypes.windll.user32.ShowWindow(hwnd, 9)   # SW_RESTORE
+                time.sleep(0.3)
+        except (AttributeError, OSError):
+            pass
+
+        region = game_client_region()
+        if region is None:
+            last_note = "取不到客户区矩形"
+        elif (abs(region[2] - CLIENT_WIDTH) > CLIENT_SIZE_TOLERANCE
+              or abs(region[3] - CLIENT_HEIGHT) > CLIENT_SIZE_TOLERANCE):
+            # 窗口还在启动动画/被拖拽缩放：尺寸不对就先不给结论
+            last_note = (f"客户区尺寸 {region[2]}×{region[3]} 与模板基准 "
+                         f"{CLIENT_WIDTH}×{CLIENT_HEIGHT} 不一致")
+        else:
+            marker = _game_ready_marker()
+            if marker is not None:
+                return ("ok", f"游戏已就绪（已出现{marker}，客户区 {region[2]}×{region[3]}）")
+            last_note = "画面没有开始界面/主界面等标志（多半在资源校验或加载中）"
+
+        if time.time() >= deadline:
+            return "not_ready", f"等待 {int(timeout)} 秒后游戏仍未就绪：{last_note}"
+        time.sleep(poll)
 
 
 # ===== 无 OCR 区域变化检测（B2）=====

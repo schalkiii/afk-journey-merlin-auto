@@ -23,6 +23,25 @@
 - **客户区必须 1600×900**：`game_client_region()` 每次调用都重新校验；不是这个尺寸
   整套模板与偏移全部失效，GUI 启动任务时会打警告。RDP 断连/锁屏时系统停止渲染，
   后台截图拿不到新帧——保持会话连接。
+- **注入器与游戏必须同会话**（2026-11-12 冷启动真因）：坐标文件被消费**不代表**点击生效，
+  跨会话时注入器会把点击打到另一个桌面。`common.clicker_session_mismatch()` 查一次即可；
+  详见 §5.3。
+- **调试脚本必须提权跑**（同日第二次踩，代价是半小时）：用普通权限的 python 起 GUI，
+  注入器继承普通权限，`SendInput` 被 UIPI 拦死。表现和「注入器死了」一模一样——
+  坐标文件照常被消费、日志一句不报、界面 8 轮无变化后判卡死。核对方法：
+
+  ```bash
+  python -c "import common; print(common.is_process_elevated())"   # 必须 True
+  ```
+
+  以管理员跑：
+
+  ```powershell
+  Start-Process -Verb RunAs -FilePath <python.exe> -ArgumentList '<script.py>' -WorkingDirectory <repo>
+  ```
+
+  代价：提权进程**无法用普通权限 `Stop-Process` 结束**，要再提权 `taskkill /F /PID`。
+  打包出的 exe 已在 spec 里 `uac_admin=True`，双击即提权；直接跑源码调试时自己提权。
 
 ## 2. 怎么发起一次实跑（不碰用户鼠标）
 
@@ -36,6 +55,28 @@
    注意：各模块自带的 `if __name__ == "__main__": main()` **不注入 F9 停止检查，也不接日志汇聚**，
    直接 `python <module>.py` 会真实驱动点击链路且无法即时中断。单文件直调只用于离线验证
    决策逻辑（配合打桩），**不得用于账号操作**；要实跑一律走上面两种形态或 GUI。
+
+3. **冷启动全链路（游戏关闭 → 定时拉起 → 登录 → flow）**：验证的是「没人管也能自己跑起来」，
+   和上面两种的区别是**游戏进程从零开始**，因此必须先把游戏关干净再计时。
+
+   ```python
+   # 临时脚本，放 %TEMP%；GUI 里只剩定时这一条路，才是在测真实链路
+   root = tk.Tk(); app = gh.GameBotGUI(root)
+   target = datetime.now().astimezone() + timedelta(minutes=2)
+   app.schedule_hour_var.set(target.hour); app.schedule_min_var.set(target.minute)
+   app.set_schedule()                     # 走真实定时，不要直接调 _fire_schedule
+   root.after(8 * 60 * 1000, watchdog)    # 到点后 stop_all + destroy
+   root.mainloop()
+   ```
+
+   - 关游戏要**提权**（游戏以管理员运行）：`Start-Process -Verb RunAs taskkill.exe -ArgumentList '/PID','<pid>','/F' -Wait`，
+     普通 `Stop-Process` 会「拒绝访问」。PID 从 `find_game_window()` + `GetWindowThreadProcessId` 取。
+   - 开跑前记 `wc -l game_bot.log`，跑完只读新增段（`tail -n +<基线>`），否则会混进历史轮次。
+   - 判据不是「有没有日志」，而是**关键动作只出现一次**：
+     `grep -c "定时开始时间到，启动游戏并运行脚本"` 在新增段里必须是 1。
+     两次说明定时线程泄漏了两条循环（见 `_schedule_gen` / `FIRE_GUARD_SECONDS`）。
+   - 冷启动时间量级（2026-11-12 实测）：快捷方式拉起 0.4s → 就绪（界面标志）约 19s →
+     登录到主界面约 40s。任何「按固定秒数就开始跑任务」的写法都会在这里翻车，所以要等**模板标志**。
 
 共同纪律：
 
@@ -205,6 +246,61 @@ Python 发出去会被 UIPI 静默拦截——现象是「滚了 3 次列表纹�
 `pata` 随后报「滚动后仍未找到天穹试炼卡片」。用非提权的 `py` 手动调脚本时必然复现；
 正式 exe 以管理员运行才正常。诊断时先打印 `ctypes.windll.shell32.IsUserAnAdmin()`，
 别把它当成模板或坐标问题。
+
+### 5.3 注入器必须和游戏在**同一个 Windows 会话**
+
+2026-11-12 冷启动实测踩到：注入器是上一个 RDP 会话（`RDP-Tcp#1`，session 3）启动后留下的，
+而游戏在 `Console`（session 1）。表现极具欺骗性——坐标文件被正常读走（所以
+「文件消失 == 点击完成」的判据成立、`_click_title_bar()` 自证也过），但 `SendInput` 打在
+另一个会话的桌面上，游戏画面一动不动。
+
+**判据只能是比较会话号**，不能看坐标文件是否被消费：
+
+```python
+common.game_window_session_id()      # GetWindowThreadProcessId → ProcessIdToSessionId
+common.clicker_session_mismatch()    # None = 一致；否则返回可读说明
+```
+
+处理方式：清掉旧注入器（`taskkill /IM AutoHotkey64.exe`）并在**当前会话**重启。
+GUI 的复用判定已内置这条；`send_coord` 首次调用会记一条告警。多会话环境（RDP Wrapper、
+向日葵、远程协助）里尤其要先查这一条。
+
+**「关掉工具」不等于「关掉注入器」——这是残留的真正来源。** 注入器是独立进程，
+工具退出时若没显式回收，它会一直活着（并一直守着自己启动时所在会话的桌面）。
+2026-11-12 的实证：`on_closing` 只 `taskkill /IM click_from_file.exe`，而装了 AHK v2 的
+机器上注入器进程名是 `AutoHotkey64.exe`，**按名字根本杀不到**；一条 session 3 的注入器
+因此活了整整一天，期间所有点击都「消费坐标但游戏不动」。
+
+三条纪律：
+
+1. **按 PID 回收，不按名字猜**：启动时记 `Popen.pid`，退出时 `taskkill /F /T /PID <pid>`；
+   名字只做兜底（`click_from_file.exe` 一定是自己的，`AutoHotkey64.exe` 可能不是）。
+2. **杀之前校验镜像名**：PID 会被系统复用，照 PID 盲杀可能打到无关进程。
+3. **杀不掉必须留痕**：提权启动的注入器，普通权限 `taskkill` 报「拒绝访问」。
+   静默失败最危险——下次启动会以为「已有注入器可用」而复用它。
+   日志里出现「无法结束注入器 PID …（可能以管理员权限运行）」，就要手动清，
+   而且清理本身也得提权（`Start-Process -Verb RunAs taskkill.exe /F /PID <pid>`）。
+
+排查现况（看数量与所在会话）：
+
+```bash
+tasklist /FO CSV /NH | findstr /I "autohotkey click_from"   # 有没有、在哪个会话
+```
+
+### 5.4 「等某个东西出现」的循环必须有**无进展上限**
+
+2026-11-12：巅峰竞技场点完「跳过」后，界面既不是失败页、也不是挑战主页、也没有
+「点击空白处关闭」。旧循环每 5 秒只做一件事——重判那两个模板，命不中就继续等，
+于是 36 轮（180 秒）纯空转，用户看到的就是「显示完成但中途卡住」。
+
+两条硬要求：
+
+1. **每一轮都要能做出实质动作**：按钮还在就补点、命中弹窗就关、加载中就等；
+2. **连续 N 轮什么都没做成 → 提前放弃并保存失败现场**（`capture_failure_context`），
+   不要靠外层大超时兜底。大超时只该保护「确实在推进但很慢」的情况。
+
+轮询函数另加 `quiet=True`：每轮超时都打一行「放弃等待」会把日志刷成连续同质墙，
+把真正的信号（哪一轮做了补救）埋掉。
 
 ## 6. 勘察未知界面的闭环
 

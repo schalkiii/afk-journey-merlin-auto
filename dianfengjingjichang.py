@@ -15,16 +15,20 @@
 import time
 
 from common import (
+    capture_failure_context,
+    check_stop,
     click_position,
     dismiss_popup_away_from,
     find_center_silent,
     game_client_region,
     get_template_path,
+    is_loading_screen,
     log,
     open_wanfamulu,
     random_sleep,
     recover_to_main_interface,
     wait_and_click,
+    wait_until_loaded,
 )
 from jiance import check_and_handle_libao
 
@@ -53,9 +57,18 @@ MAX_BATTLE_TIME = 180
 DEFAULT_CHALLENGE_COUNT = 3
 MAX_CHALLENGE_COUNT = 10
 
+# 跳过之后的轮询节奏：每轮等多久、连续多少轮「完全没进展」就提前放弃。
+# 4 × 5 秒 = 20 秒；正常结算远短于这个量级，真卡住时也不该盲等 180 秒。
+SKIP_SETTLE_POLL = 5.0
+SKIP_STALL_LIMIT = 4
 
-def _wait_for_any(templates, timeout, interval=0.5):
-    """等待多张图中任意一张出现；返回 (template_path, pos)，超时返回 None。"""
+
+def _wait_for_any(templates, timeout, interval=0.5, quiet=False):
+    """等待多张图中任意一张出现；返回 (template_path, pos)，超时返回 None。
+
+    `quiet=True` 时超时不打日志：轮询循环每轮都会超时一次，逐条打出来会把日志刷成
+    「放弃 fail / jixutiaozhan」的连续墙（2026-11-12 实测 36 条），掩盖真正的原因。
+    """
     start = time.time()
     while True:
         for template_path, name in templates:
@@ -64,8 +77,9 @@ def _wait_for_any(templates, timeout, interval=0.5):
                 log(f"{name} 出现，坐标: {pos}")
                 return template_path, pos
         if time.time() - start > timeout:
-            names = " / ".join(name for _, name in templates)
-            log(f"{names} 在 {timeout} 秒内未出现，放弃等待。")
+            if not quiet:
+                names = " / ".join(name for _, name in templates)
+                log(f"{names} 在 {timeout} 秒内未出现，放弃等待。")
             return None
         time.sleep(interval)
 
@@ -181,6 +195,66 @@ def _select_opponent_and_lineup():
     return False
 
 
+def _settle_after_skip(skip_pos):
+    """点过「跳过」之后等结算信号；返回 (template_path, pos) 或 None。
+
+    2026-11-12 实机（今天唯一的「卡住」现场）：第 2 场 08:50:21 点了「跳过」，
+    之后界面既没有失败页、也没有「继续挑战」，也没有「点击空白处关闭」——旧实现
+    只在那个提示模板命中时才肯动作，于是整整空转 180 秒（36 轮「放弃 fail /
+    jixutiaozhan」）才放弃，用户看到的就是「显示完成但中途卡住」。
+
+    现在每一轮都做三件事，而不是干等：
+    1. 「跳过」按钮还在 → 上一击被吞、战斗仍在进行，按原位置补点一次；
+    2. 命中任一已知弹窗/提示（点击空白处关闭、每日结算、加载中）→ 关掉或等加载；
+    3. 连续 SKIP_STALL_LIMIT 轮完全没有可识别元素、也没有任何补救动作可做 →
+       立刻保存失败现场并放弃，而不是把 180 秒耗光。
+    """
+    deadline = time.time() + MAX_BATTLE_TIME
+    stall = 0
+    while time.time() < deadline:
+        check_stop()
+        outcome = _wait_for_any(
+            [(tpl_fail, "fail"), (tpl_jixutiaozhan, "jixutiaozhan")],
+            timeout=SKIP_SETTLE_POLL,
+            quiet=True,
+        )
+        if outcome is not None:
+            return outcome
+
+        # ① 战斗其实还在进行：跳过没生效，补点（跳过一次失败是常态，见实机记录）
+        if find_center_silent(tpl_tiaoguo, 0.8, timeout=0):
+            log("「跳过」后战斗仍在进行，补点一次跳过")
+            click_position(skip_pos, wait=1.2, twice=False)
+            stall = 0
+            continue
+
+        # ② 各类已知提示/弹窗：关掉后立刻重判
+        if find_center_silent(get_template_path("dianjikongbaichuguanbi.png"), 0.8, timeout=0):
+            dismiss_popup_away_from()
+            log("关闭战斗结算弹窗后继续等待结束信号。")
+            stall = 0
+            continue
+        if find_center_silent(tpl_meirijiesuan, 0.8, timeout=0):
+            _close_daily_settlement()
+            stall = 0
+            continue
+        if is_loading_screen():
+            log("「跳过」后进入加载画面，等待加载结束")
+            wait_until_loaded(15.0)
+            stall = 0
+            continue
+
+        # ③ 完全认不出的界面：数到上限就留现场退出，绝不无限空转
+        stall += 1
+        log(f"「跳过」后界面无可识别信号（第 {stall}/{SKIP_STALL_LIMIT} 轮），继续观察")
+        if stall >= SKIP_STALL_LIMIT:
+            capture_failure_context("巅峰竞技场", "跳过之后无法识别结算界面")
+            log("跳过之后始终无法识别界面，保存现场后结束本场")
+            return None
+    log(f"跳过之后 {MAX_BATTLE_TIME} 秒内未出现结算信号，结束。")
+    return None
+
+
 def _fight_once(index):
     """挑战一场：继续挑战 → 选对手 → 三队确认 → 战斗 → 等结算，返回是否打完一场。"""
     # 「继续挑战」点击可能被窗口激活吞掉（2026-11-08 实机第 2 场）：没进选对手界面
@@ -222,23 +296,8 @@ def _fight_once(index):
     outcome_tpl, outcome_pos = outcome
     if outcome_tpl == tpl_tiaoguo:
         click_position(outcome_pos, wait=1.2, twice=False)
-        # 跳过后的信号可能是失败页 / 挑战界面，也可能停在带「点击空白处关闭」的结算弹窗上：
-        # 2026-11-07 实机有一次两种旧信号 180 秒内都没出现。故每 5 秒补一次弹窗清理再判定，
-        # 让结算弹窗关闭后露出的挑战界面也能被接住。
-        tpl_hint = get_template_path("dianjikongbaichuguanbi.png")
-        outcome = None
-        deadline = time.time() + MAX_BATTLE_TIME
-        while time.time() < deadline:
-            outcome = _wait_for_any(
-                [(tpl_fail, "fail"), (tpl_jixutiaozhan, "jixutiaozhan")], timeout=5.0
-            )
-            if outcome is not None:
-                break
-            if find_center_silent(tpl_hint, 0.8, timeout=0):
-                dismiss_popup_away_from()
-                log("关闭战斗结算弹窗后继续等待结束信号。")
+        outcome = _settle_after_skip(outcome_pos)
         if outcome is None:
-            log("跳过之后未出现结算信号，结束。")
             return False
         outcome_tpl, outcome_pos = outcome
 

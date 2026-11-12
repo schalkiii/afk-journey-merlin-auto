@@ -17,6 +17,7 @@
 - 运行循环（run_scripts_thread）
 """
 
+import atexit
 import contextlib
 import json
 import os
@@ -64,6 +65,17 @@ from hero_metadata import (
 )
 from version import __version__
 from warehouse import ALL_HERO_NAMES, WAREHOUSE_TXT_PATH
+
+# 定时触发的重复护栏：两次触发间隔小于这个秒数就视为同一次（防止多线程同时到点
+# 把游戏拉起两次）；正常「每天循环」的间隔至少一天，不会误伤。
+FIRE_GUARD_SECONDS = 10.0
+
+# 自带入口保障的任务：开始前**不**强制要求「已回到主界面」。
+# 「登录」压根没有主界面概念；「家园愿望单」的 `_ensure_panel` 既能从主界面点家园入口，
+# 也能在面板已开着时直接接管（模板 `xinyuandanbiaoti` 实测 0.999）。
+# 反过来让通用回退拖着它退，会被卡在「愿望单面板 → ← → 家园视图」这一步：
+# 家园视图不是主界面，也没有任何候选退出模板，只能空转到超时（2026-11-12 实测 30 秒）。
+SELF_ENTRY_TASKS = frozenset({"登录", "家园愿望单"})
 
 # 左侧功能列表的状态色（bg, fg, 短标签）：一眼扫出「正在跑哪个 / 哪个挂了」。
 # 用经典 tk.Label 上色而不是给 ttk.Button 设 background——Windows 的 vista 主题会
@@ -157,6 +169,18 @@ class GameBotGUI:
         self.schedule_active = False
         self.scheduled_time = None
         self.schedule_cancel_event = threading.Event()
+        # 定时循环代号：set_schedule 每次 +1，旧循环看到代号变了就自行退出，
+        # 避免「改一次时间就多一条循环，到点触发两次」。
+        self._schedule_gen = 0
+        self._last_fire_ts = 0.0
+        # 本轮是不是「从关闭状态把游戏拉起来的」：冷启动才需要前置登录
+        # （「登录」不在任务列表里时没有任何一步负责把游戏送进主界面）。
+        self._cold_launch = False
+        # 自己启动的注入器 PID：退出时按 PID 精确回收。
+        # 只按镜像名杀会漏 —— 本机装了 AHK v2 时注入器进程叫 AutoHotkey64.exe，
+        # 旧实现 taskkill click_from_file.exe 一个都杀不到，注入器于是长期残留。
+        self._clicker_pid = None
+        atexit.register(self._stop_clicker)
         
         # 启用状态只由用户在左侧列表勾选，运行结束后不再自动改（原 daily_reset
         # 「完成即停用」会让第二天的任务被静默跳过，且改动会被持久化覆盖用户设置）。
@@ -1370,11 +1394,11 @@ class GameBotGUI:
         if self.is_running:
             if messagebox.askokcancel("退出", "脚本正在运行中，确定要停止并退出吗？"):
                 self.stop_all()
-                subprocess.run(["taskkill", "/F", "/IM", "click_from_file.exe"], capture_output=True, check=False)
+                self._stop_clicker()
                 self.root.destroy()
-        else:
-            subprocess.run(["taskkill", "/F", "/IM", "click_from_file.exe"], capture_output=True, check=False)
-            self.root.destroy()
+            return
+        self._stop_clicker()
+        self.root.destroy()
         
     def launch_game_then_start(self, launch_game=True):
         """按需启动游戏，等游戏就绪后开始脚本流程。
@@ -1390,22 +1414,102 @@ class GameBotGUI:
             messagebox.showwarning("警告", "没有启用任何脚本！")
             return
         if launch_game and not is_game_running():
-            self.launch_game_from_shortcut()
+            ok = self.launch_game_from_shortcut()
+            # 只有真的把游戏拉起来了才算冷启动：拉起失败时 game_launch_delay 到点
+            # 仍然会走「等就绪」，那就没必要再补一次登录。
+            self._cold_launch = bool(ok)
             delay = self.game_launch_delay
             self.log(f"{delay} 秒后将开始运行脚本流程")
         elif launch_game:
+            self._cold_launch = False
             delay = 0
             self.log("游戏已在运行，跳过启动，立即开始脚本")
         else:
+            self._cold_launch = False
             delay = 0
             self.log("不启动游戏，立即开始脚本")
         # 等待后先确保游戏窗口在前台，再开始脚本（避免因游戏不在前台导致模板匹配失效）
         self.root.after(max(0, int(delay)) * 1000, self._start_after_focus)
 
     def _start_after_focus(self):
-        _ok, msg = focus_game_window()
+        """先确认游戏真的可以操作了，再把任务跑起来。
+
+        2026-11-12：定时冷启动时旧实现只按固定 game_launch_delay（默认 20 秒）就开始，
+        而游戏那时多半还停在登录/资源校验画面上——第一个任务「邮件」在开始界面找「菜单」
+        必然 15 秒超时失败，后面十几项跟着连败。现在改成条件等待：窗口出现 + 客户区尺寸
+        稳定 + 连续两帧不是加载态，才开始跑。
+
+        等待放在后台线程：最长 180 秒，放主线程会把 Tk 界面和 F9 一起冻住。
+        """
+        def worker():
+            try:
+                status, msg = common.wait_for_game_ready()
+            except common.StopRequested:
+                self.root.after(0, lambda: self.log("等待游戏就绪时被 F9 停止"))
+                return
+            except (OSError, RuntimeError, ValueError, AttributeError) as exc:
+                status, msg = "not_ready", f"等待游戏就绪时出错（按未就绪继续）: {exc!s}"
+            self.root.after(0, lambda: self._after_game_ready(status, msg))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _after_game_ready(self, status, msg):
         self.log(msg)
-        self.start_all()
+        if status == "no_window":
+            # 游戏没起来时继续跑只会把 19 项任务全部刷成失败，收益为负，直接收工。
+            self.log("游戏未能启动，本次不执行任务；请检查桌面快捷方式与启动器")
+            return
+        if status == "not_ready":
+            self.log("游戏画面尚未就绪，仍继续执行：冷启动会先跑一次登录")
+        _ok, focus_msg = focus_game_window()
+        self.log(focus_msg)
+        if self._should_login_before_flow():
+            self._run_login_before_flow()
+        else:
+            self.start_all()
+
+    def _should_login_before_flow(self):
+        """冷启动且「登录」不在任务列表里时，才需要补一次前置登录。
+
+        「登录」留在任务列表里时它本身就是第一项，不必重跑；已经热重启（_cold_launch
+        为 False）时游戏仍在原来的界面上，也不该多点一次开始。
+        """
+        if not self._cold_launch:
+            return False
+        return not any(s.enabled and s.name == "登录" for s in self.scripts)
+
+    def _run_login_before_flow(self):
+        """冷启动后先执行一次登录，再开始任务列表。
+
+        2026-11-12 实测：游戏刚被快捷方式拉起来时停在开始界面，第一个任务「邮件」
+        干等了 15 秒才等到主界面。那是运气好——资源校验慢一点就直接超时失败，
+        后面十几项跟着连败，而日志里看不出根因（登录根本不是列表里的一项）。
+        所以冷启动必须有一方负责「把游戏送进主界面」，这里补上。
+
+        放后台线程：登录最坏要等 3 分钟（开始界面 180s + 主界面 120s），
+        在主线程跑会把 Tk 界面和 F9 一起冻住。
+        """
+        self.log("冷启动：先执行登录流程，再开始任务列表")
+
+        def worker():
+            import start
+
+            try:
+                ok = start.main()
+            except common.StopRequested:
+                self.root.after(0, lambda: self.log("登录流程被 F9 停止，本次不执行任务"))
+                return
+            except (OSError, RuntimeError, ValueError, AttributeError) as exc:
+                ok = False
+                # 先把异常文本落成字符串再进回调：except 块结束后 `exc` 会被删除，
+                # lambda 里再引用它就是 NameError（运行期才炸，静态检查看不出来）。
+                note = f"登录流程异常: {exc!s}"
+                self.root.after(0, lambda: self.log(note))
+            if not ok:
+                self.root.after(0, lambda: self.log("登录流程未确认到达主界面，仍继续执行任务列表"))
+            self.root.after(0, self.start_all)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _auto_open_flow(self):
         """启动后自动流程：按需启动游戏，等待后再按需自动运行脚本。"""
@@ -1442,7 +1546,12 @@ class GameBotGUI:
         self.schedule_cancel_event.clear()
         self.save_config()
         self.log(f"已设定定时开始: {self.schedule_time}（{target.strftime('%Y-%m-%d %H:%M')}，每天循环）")
-        threading.Thread(target=self._schedule_loop, daemon=True).start()
+        # 每次设定都换一代：_fire_schedule 末尾会再次 set_schedule（每天循环），
+        # 若不换代会同时留下两条循环线程，到点时两条都判「remaining<=0」→ 触发两次，
+        # 游戏被拉起两次（2026-11-12 实测：10:15:01 的「启动游戏并运行脚本」重复了一整段）。
+        self._schedule_gen += 1
+        threading.Thread(target=self._schedule_loop, args=(self._schedule_gen,),
+                         daemon=True).start()
         self.update_schedule_status()
 
     def cancel_schedule(self):
@@ -1454,8 +1563,10 @@ class GameBotGUI:
         self._set_schedule_status("未设定定时")
         self.log("已取消定时开始")
 
-    def _schedule_loop(self):
+    def _schedule_loop(self, gen=None):
         while True:
+            if gen is not None and gen != self._schedule_gen:
+                return      # 已被更新的设定取代，退出这条循环
             if not self.schedule_active or self.schedule_cancel_event.is_set():
                 return
             if self.scheduled_time is None:
@@ -1468,6 +1579,12 @@ class GameBotGUI:
             self.schedule_cancel_event.wait(timeout=1.0)
 
     def _fire_schedule(self):
+        # 重复触发护栏：即便真有两条循环同时到点，也只允许一次真正开跑。
+        now_ts = time.time()
+        if now_ts - self._last_fire_ts < FIRE_GUARD_SECONDS:
+            self.log("定时开始：刚触发过，忽略本次重复触发")
+            return
+        self._last_fire_ts = now_ts
         self.schedule_active = False
         self.scheduled_time = None
         if self.is_running:
@@ -1558,12 +1675,15 @@ class GameBotGUI:
         exe = get_resource_path("click_from_file.exe")
         return [exe] if os.path.exists(exe) else None
 
-    def _launch_clicker(self):
-        """（重新）启动点击注入器：先清掉同名旧进程，再按 launcher 启动一个。"""
-        with contextlib.suppress(Exception):
-            subprocess.run(["taskkill", "/F", "/IM", "click_from_file.exe"],
-                           capture_output=True, check=False)
-            time.sleep(0.3)
+    def _launch_clicker(self, kill_ahk=False):
+        """（重新）启动点击注入器：先清掉本进程启动过的旧注入器，再按 launcher 起一个。
+
+        `kill_ahk=True` 时连同类 AutoHotkey64.exe 一起清掉，用于「旧注入器残留在别的
+        会话」的情形（2026-11-12 实测：RDP 会话里留下的注入器会读走坐标却把点击打到
+        另一个桌面，游戏毫无反应，而坐标文件消失让所有既有判据都显示「点击成功」）。
+        默认不清 AHK：用户可能自己开着别的 AHK 脚本。
+        """
+        self._stop_clicker(kill_ahk=kill_ahk)
         try:
             work_dir = get_work_path("")
             launcher = self._resolve_clicker_launcher()
@@ -1573,9 +1693,10 @@ class GameBotGUI:
             self.log(f"点击注入器: {launcher}")
             self.log(f"工作目录: {work_dir}")
             # CREATE_NO_WINDOW：Windows 下不弹出控制台黑框，消除「启动终端框」的视觉卡顿
-            subprocess.Popen(launcher + [work_dir],
-                             creationflags=subprocess.CREATE_NO_WINDOW)
-            self.log("点击注入器启动成功")
+            proc = subprocess.Popen(launcher + [work_dir],
+                                    creationflags=subprocess.CREATE_NO_WINDOW)
+            self._clicker_pid = proc.pid
+            self.log(f"点击注入器启动成功（PID {proc.pid}）")
         except (OSError, ValueError) as e:
             self.log(f"运行点击注入器失败: {e!s}")
             self.log("警告: 点击注入器未启动，部分功能可能无法正常工作")
@@ -1583,14 +1704,73 @@ class GameBotGUI:
         time.sleep(2)
         return True
 
+    def _stop_clicker(self, kill_ahk=False):
+        """停掉自己启动的点击注入器；`kill_ahk=True` 时再清同名 AHK 进程。
+
+        为什么必须记 PID：本机装了 AHK v2 时 `_resolve_clicker_launcher()` 优先走
+        明文脚本，注入器进程名是 **AutoHotkey64.exe**，而 `on_closing` 原先只
+        `taskkill /IM click_from_file.exe` —— 名字对不上，一个都杀不到，注入器
+        因此长期残留。2026-11-12 的实证：session 3（RDP）里留下的注入器一直活到
+        手动清理，期间所有点击都「成功消费坐标但游戏毫无反应」。
+        """
+        pid = self._clicker_pid
+        self._clicker_pid = None
+        if pid and self._pid_is_clicker(pid) and not self._taskkill(["/F", "/T", "/PID", str(pid)]):
+            # 提权启动的注入器普通权限杀不掉（实测报「拒绝访问」）。静默失败最危险：
+            # 下一次启动会以为「已有注入器可用」而复用它，实际坐标全落在别处。
+            with contextlib.suppress(Exception):
+                self.log(f"警告: 无法结束注入器 PID {pid}（可能以管理员权限运行），"
+                         "请手动关闭，否则它会继续读走坐标却把点击打到别处")
+        # click_from_file.exe 一定是本工具自己的，按名字清安全
+        self._taskkill(["/F", "/IM", "click_from_file.exe"])
+        if kill_ahk:
+            time.sleep(0.3)
+            self._taskkill(["/F", "/IM", "AutoHotkey64.exe"])
+            time.sleep(0.5)
+
+    def _warn_if_not_elevated(self):
+        """非管理员运行时告警，返回是否打出了告警。
+
+        游戏以管理员启动时，非提权进程的 `SendInput` 会被 UIPI 静默丢弃：注入器照样
+        读走坐标文件（「点击成功」的判据全部成立），游戏画面一动不动，最后每个任务
+        都超时失败而日志里毫无异常。2026-11-12 实测：同一份代码，普通权限跑愿望单
+        连续 8 轮「界面无变化」判卡死，以管理员重跑立刻正常交付。
+        """
+        if common.is_process_elevated():
+            return False
+        self.log("警告: 本工具未以管理员身份运行。若游戏以管理员启动，所有点击都会被"
+                 "系统拦截（表现为任务全部超时失败但日志无异常），请以管理员身份重新运行")
+        return True
+
+    @staticmethod
+    def _taskkill(args):
+        """跑一次 taskkill，返回是否成功（进程已不存在也算成功）。"""
+        try:
+            res = subprocess.run(["taskkill", *args], capture_output=True,
+                                 timeout=10, check=False)
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return res.returncode == 0
+
+    @staticmethod
+    def _pid_is_clicker(pid):
+        """确认该 PID 现在仍是注入器进程（防 PID 复用后误杀无关程序）。"""
+        try:
+            # 中文 Windows 的 tasklist 输出是 GBK，这里只比对 ASCII 镜像名，按 bytes 处理
+            out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                                 capture_output=True, timeout=5, check=False).stdout or b""
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return b"AutoHotkey" in out or b"click_from_file" in out
+
     # ===== 任务分发（字典映射替代巨型 if/elif，降低维护成本）=====
     # 每个 _run_* 方法对应一个任务，返回 True 表示执行成功、False 表示失败；
     # 内部 import 失败抛 ImportError 由 _run_script_dispatch 统一捕获并记日志。
     def _run_login(self, script):
         import start
-        # 登录流程没有失败语义：找不到开始界面说明游戏已在登录态，属正常跳过，故恒为成功
-        start.main()
-        return True
+        # 2026-11-12：改为如实返回。旧实现恒返回 True，冷启动没进游戏时日志里
+        # 「登录」也是 ✔，看不出后面十几项连败的真正起点在这里。
+        return start.main()
 
     def _run_warehouse(self, script):
         if not os.path.exists(WAREHOUSE_TXT_PATH):
@@ -1838,8 +2018,14 @@ class GameBotGUI:
         上一任务可能把游戏留在无法恢复的界面（如家园生产页），继续跑只会让本任务
         白等到超时并连锁拖垮后续任务。`ensure_main_interface()` 的返回值必须被处理，
         不能像旧实现那样静默忽略。抽成方法便于在不启动运行线程的前提下验证该契约。
+
+        `SELF_ENTRY_TASKS` 里的任务不走这条闸：它们自带入口保障，能从「已在自己的
+        面板上」直接接管，而被通用回退拖着退出反而更容易失败。2026-11-12 实证：
+        家园愿望单面板开着时，`recover_to_main_interface` 连点 6 轮都退不出来
+        （面板左下角那个 ← 只退回**家园视图**，而家园视图不是主界面，那里也没有
+        任何候选退出模板），30 秒白耗后还被判「失败」——可面板明明就在眼前。
         """
-        if script.name == "登录" or common.ensure_main_interface():
+        if script.name in SELF_ENTRY_TASKS or common.ensure_main_interface():
             return False
         self.log(f"{script.name} 开始前未回到主界面，跳过本次执行")
         script.status = "失败"
@@ -1876,12 +2062,26 @@ class GameBotGUI:
         # 复用的可能是上一天留下的进程——它绑定的工作目录未必是当前仓库（例如已被清理的
         # _MEI 临时目录），于是坐标无人消费、点击全部落空，表现为「从第一个任务起点击都不准」。
         # 现在复用前先用一次「点标题栏」自证：能消费本目录坐标才复用，否则重启注入器。
-        if self.is_click_from_file_running() and common._click_title_bar():
+        #
+        # 2026-11-12 冷启动实测补充：还有比工作目录更隐蔽的一种失效——**会话不同**。
+        # RDP 会话里留下的注入器会照常读走坐标文件（所以「点标题栏自证」也过），
+        # 但 SendInput 打在自己会话的桌面上，游戏在 Console 会话里毫无反应。
+        # 因此复用前先比一次会话号，不一致就带着 AHK 一起清掉、在当前会话重启。
+        mismatch = common.clicker_session_mismatch()
+        if mismatch:
+            self.log(f"现有注入器与游戏不在同一会话：{mismatch}。清掉后重新启动")
+            self._launch_clicker(kill_ahk=True)
+        elif self.is_click_from_file_running() and common._click_title_bar():
             self.log("点击注入器已在运行且能消费本目录坐标，复用现有进程")
         else:
             if self.is_click_from_file_running():
                 self.log("现有注入器没有消费坐标（工作目录可能已失效），改为重新启动")
             self._launch_clicker()
+
+        # 权限一致性：游戏以管理员运行时，非提权进程的 SendInput 会被 UIPI 静默丢弃。
+        # 注入器照样读走坐标文件，于是「点击成功」的判据全都成立、画面却一动不动，
+        # 最终每个任务都超时失败，日志里看不出任何异常（2026-11-12 实测确认）。
+        self._warn_if_not_elevated()
 
         
         # 按调用方给定的脚本列表依次执行。列表由 start_all / run_single_script 从

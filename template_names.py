@@ -58,6 +58,7 @@ TEMPLATE_CN = {
     'huidaoguaji': '回到挂机',
     'huodejiangli': '获得奖励',
     'jiayuanmubiao': '家园目标',
+    'jiayuanrukou': '家园入口',
     'jieduaimubiao': '阶段目标',
     'jieshejixutiaozhan': '结社继续挑战',
     'jieshengli': '结社胜利',

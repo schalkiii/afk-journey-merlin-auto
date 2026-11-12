@@ -49,7 +49,9 @@ import os
 import time
 
 from common import (
+    at_main_interface,
     check_stop,
+    click_and_confirm,
     click_position,
     find_center_silent,
     game_client_region,
@@ -77,6 +79,10 @@ tpl_label = get_template_path("xinyuandanbiaoti.png")       # 左上角「愿望
 tpl_gift = get_template_path("yuanwangdanjindu.png")        # 第一档礼盒（金色心形）本体
 tpl_claim = get_template_path("huodejiangli.png")           # 领奖弹窗「获得奖励」标题
 tpl_close_popup = get_template_path("dianjikongbaichuguanbi.png")
+
+# 主界面右下角「家园」入口（2026-11-12 从实机截图裁取，同屏 0.99）。
+# 之前没有这张模板，任务只能靠返回箭头「退回家园」，而主界面上根本没有回去的路。
+tpl_jiayuan = get_template_path("jiayuanrukou.png")
 
 MATCH_THRESHOLD = 0.8
 # 礼盒相对「愿望单」标题中心的偏移。2026-11-07 实机重新量得：
@@ -203,6 +209,25 @@ def _claim_reward(label_pos):
     return True
 
 
+def _enter_homestead():
+    """从主界面点右下角「家园」入口，把游戏带进家园视图。
+
+    2026-11-12 实机定位到的根因：愿望单入口只存在于**家园视图左侧**，而任务排在列表
+    末尾，上一步（循环推图 / 幻灵推图）收尾时会把游戏停回主界面。主界面既没有愿望单
+    立牌、也没有通往家园的返回箭头——`_ensure_panel` 只会点返回箭头，于是每天都以
+    「3 轮 15 秒找不到入口」收场（11-11、11-12 都是这个形态）。
+
+    实测判据（同一秒钟、同一坐标）：愿望单模板 0.54 → 点「家园」后 0.99；家园入口
+    模板本身 0.99 → 0.69。用 `click_and_confirm` 而不是裸点击：主界面这一次点击很容易
+    被窗口激活吞掉，没进去就会一路错下去。
+    """
+    return click_and_confirm(
+        tpl_jiayuan, "家园入口",
+        lambda: _find(tpl_entry, timeout=1) is not None,
+        find_timeout=2.0,
+    )
+
+
 def _ensure_panel():
     """确保处于愿望单界面：已在则直接返回，否则点击家园左侧入口进入。
 
@@ -217,10 +242,19 @@ def _ensure_panel():
         return True
 
     # 愿望单入口只在家园视图出现：公会大厅/玩法目录等界面底部同样有「玩法目录」按钮，
-    # 上一步任务可能把游戏停在那里。找不到入口时先逐层返回家园再重试，最多 2 次。
+    # 上一步任务可能把游戏停在那里。先试一次「点家园入口进家园」——这是主界面唯一的
+    # 正路（主界面没有返回箭头可点）；进去之后再走下面的多轮搜索兜底。
+    if _find(tpl_entry) is None and _enter_homestead():
+        log("【家园愿望单】已从主界面点「家园」入口进入家园视图")
+
+    # 找不到入口时先逐层返回家园再重试。
+    # 2026-11-12 实机：入口是**场景内的立牌**，镜头位置变了就整块落在画面之外（实测
+    # 模板最高分只有 0.57）；旧实现找不到返回箭头时只搜 5 秒就放弃，一次就记任务失败。
+    # 现在无论有没有返回箭头都搜满 3 轮（≈15 秒），并且把「当时是不是在主界面」写进日志，
+    # 便于区分「不在家园」和「在家园但镜头没带到入口」。
     entry_pos = None
     back_templates = (tpl_back, tpl_exit, tpl_exitck)
-    for _ in range(3):
+    for attempt in range(1, 4):
         deadline = time.time() + 5
         while time.time() < deadline:
             entry_pos = _find(tpl_entry)
@@ -234,12 +268,15 @@ def _ensure_panel():
             back_pos = _find(template_path)
             if back_pos is not None:
                 break
-        if back_pos is None:
-            break
-        log("【家园愿望单】当前不在家园视图，点击返回箭头后重试")
-        _click_once(back_pos, SETTLE_DELAY)
+        if back_pos is not None:
+            log("【家园愿望单】当前不在家园视图，点击返回箭头后重试")
+            _click_once(back_pos, SETTLE_DELAY)
+            continue
+        log(f"【家园愿望单】第 {attempt}/3 轮未找到入口（"
+            f"{'在主界面，镜头可能没带到愿望单立牌' if at_main_interface() else '界面未知'}）")
+        time.sleep(1.0)
     if entry_pos is None:
-        log("【家园愿望单】未找到愿望单入口，任务终止")
+        log("【家园愿望单】3 轮共约 15 秒都没找到愿望单入口，任务终止")
         return False
     _click_once(entry_pos, SETTLE_DELAY)
     log("【家园愿望单】已点击愿望单入口")

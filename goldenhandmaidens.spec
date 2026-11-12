@@ -40,6 +40,10 @@ exe = EXE(
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
+    # 必须要求管理员：游戏以管理员权限运行，非提权进程的 SendInput 会被 UIPI 直接拦掉。
+    # 症状极具欺骗性——注入器照常读走坐标文件（所有「点击成功」的判据都成立），
+    # 游戏画面一动不动，最后表现为每个任务都超时失败（2026-11-12 实测确认）。
+    uac_admin=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
