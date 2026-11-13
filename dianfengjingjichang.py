@@ -58,10 +58,14 @@ DEFAULT_CHALLENGE_COUNT = 3
 MAX_CHALLENGE_COUNT = 10
 
 # 等结算信号的轮询节奏：每轮等多久、连续多少轮「完全没进展」就提前放弃。
-# 4 × 5 秒 = 20 秒；正常结算远短于这个量级，真卡住时也不该盲等 180 秒。
 # 点「战斗」之后与点「跳过」之后共用这套节奏（两者都曾出现 180 秒空转）。
 OUTCOME_POLL = 5.0
+# 「跳过之后」：结算应在 20 秒内出现，认不出的界面数到 4 轮就留现场退出。
 OUTCOME_STALL_LIMIT = 4
+# 「战斗之后」是**观战阶段**：2026-11-13 失败现场是倒计时 89 秒的正常战斗画面，
+# 界面长时间不变是对的，绝不能套用 20 秒上限把正在打的战斗误杀。上限取满
+# MAX_BATTLE_TIME，且每轮仍做补点 / 关弹窗 / 等加载，不是一次性盲等。
+BATTLE_STALL_LIMIT = int(MAX_BATTLE_TIME / OUTCOME_POLL)
 
 
 def _wait_for_any(templates, timeout, interval=0.5, quiet=False):
@@ -222,13 +226,15 @@ def _recover_during_battle(phase, retry_template, retry_pos=None):
     return False
 
 
-def _poll_until_outcome(signals, phase, retry_template, retry_pos=None):
-    """短轮询等战斗结束信号；连续 OUTCOME_STALL_LIMIT 轮毫无进展就存现场放弃。
+def _poll_until_outcome(signals, phase, retry_template, retry_pos=None,
+                        stall_limit=OUTCOME_STALL_LIMIT):
+    """短轮询等战斗结束信号；连续 stall_limit 轮毫无进展就存现场放弃。
 
     2026-11-12 的 180 秒空转发生在「跳过之后」，2026-11-13 又发生在「点战斗之后」
     （09:08:19 → 09:11:25 一次性长等 180 秒，日志只有一行「放弃」）。两处同源：
     一次性 `_wait_for_any(timeout=180)` 中间不补点、不关弹窗、不等加载。
-    这里把「短轮询 + 每轮实质动作 + 无进展上限」收敛成一处，两个阶段共用。
+    这里把「短轮询 + 每轮实质动作 + 无进展上限」收敛成一处，两个阶段共用，
+    但 stall_limit 按阶段给：观战阶段界面长时间不变是正常的，见 BATTLE_STALL_LIMIT。
     """
     deadline = time.time() + MAX_BATTLE_TIME
     stall = 0
@@ -241,8 +247,10 @@ def _poll_until_outcome(signals, phase, retry_template, retry_pos=None):
             stall = 0
             continue
         stall += 1
-        log(f"{phase}：界面无可识别信号（第 {stall}/{OUTCOME_STALL_LIMIT} 轮），继续观察")
-        if stall >= OUTCOME_STALL_LIMIT:
+        # 观战阶段最多 36 轮，逐轮打会把日志刷成同质墙（11-12 教训）：降频输出。
+        if stall == 1 or stall % 5 == 0 or stall >= stall_limit:
+            log(f"{phase}：等待战斗结束信号（第 {stall}/{stall_limit} 轮）")
+        if stall >= stall_limit:
             capture_failure_context("巅峰竞技场", f"{phase}无法识别结算界面")
             log(f"{phase}始终无法识别界面，保存现场后结束本场")
             return None
@@ -263,11 +271,14 @@ def _wait_for_battle_outcome():
 
     2026-11-13 实机：点完战斗界面既没出跳过也没出结算，旧实现在这一步一次性
     `_wait_for_any(timeout=180)`，干等 3 分钟且随后仍按「完成 0 场」打 ✔。
+    同日复跑又证明：这里其实是观战阶段（失败现场倒计时 89 秒），
+    所以 stall_limit 必须用 BATTLE_STALL_LIMIT，不能沿用跳过阶段的 20 秒。
     """
     return _poll_until_outcome(
         [(tpl_tiaoguo, "tiaoguo"), (tpl_fail, "fail"),
          (tpl_jixutiaozhan, "jixutiaozhan")],
         phase="「战斗」后", retry_template=tpl_zhandou,
+        stall_limit=BATTLE_STALL_LIMIT,
     )
 
 

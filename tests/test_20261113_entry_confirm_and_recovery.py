@@ -80,7 +80,36 @@ def test_battle_outcome_reclicks_zhandou(monkeypatch):
 
     assert df._wait_for_battle_outcome() is None
     assert clicks == [(1139, 897), (1139, 897)], "战斗按钮还在就必须补点"
-    assert len(polls) == df.OUTCOME_STALL_LIMIT + 2
+    assert len(polls) == df.BATTLE_STALL_LIMIT + 2
+
+
+def test_battle_outcome_waits_through_full_battle(monkeypatch):
+    """观战阶段倒计时 89 秒：20 秒内没有信号也必须继续等，不能把战斗误杀。
+
+    负验证：去掉 `_wait_for_battle_outcome` 的 `stall_limit=BATTLE_STALL_LIMIT`
+    传参（回落到跳过阶段的 4 轮）→ 本用例必须失败。
+    """
+    polls = []
+    saved = []
+    monkeypatch.setattr(df, "log", lambda *_a, **_k: None)
+    monkeypatch.setattr(df, "check_stop", lambda: None)
+    monkeypatch.setattr(df, "click_position", lambda *_a, **_k: None)
+    monkeypatch.setattr(df, "find_center_silent", lambda *_a, **_k: None)
+    monkeypatch.setattr(df, "is_loading_screen", lambda: False)
+    monkeypatch.setattr(df, "capture_failure_context",
+                        lambda *_a, **_k: saved.append(1))
+
+    def fake_wait(*_a, **_k):
+        polls.append(1)
+        # 第 19 轮（约 95 秒）才出结算，模拟 89 秒倒计时走完
+        if len(polls) == 19:
+            return (df.tpl_jixutiaozhan, (100, 100))
+        return None
+
+    monkeypatch.setattr(df, "_wait_for_any", fake_wait)
+    assert df._wait_for_battle_outcome() == (df.tpl_jixutiaozhan, (100, 100))
+    assert len(polls) == 19
+    assert saved == [], "正常战斗不得保存失败现场"
 
 
 def test_zero_battles_is_failure(monkeypatch):

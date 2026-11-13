@@ -325,12 +325,21 @@ def load_template(template_path):
 ensure_appdata_templates()
 
 def get_work_path(relative_path):
-    """获取工作目录下的文件路径（配置文件等）。
+    """获取工作目录下的文件路径（配置文件、日志、坐标 IPC、失败现场等）。
 
-    打包后(sys.frozen)以 exe 所在目录为基准，保证配置文件与 exe 同目录、可持久化。
+    打包后(sys.frozen)默认以 exe 所在目录为基准，保证数据与 exe 同目录、可持久化。
+    2026-11-13 起产物统一放 `dist/`，此时**数据目录仍取上一级（仓库根）**：
+    否则 `game_bot_config.json` 读不到（19 项勾选 / 定时 / 任务参数全部回默认）、
+    日志改写到 `dist/game_bot.log`、shared 坐标与 debug 现场也跟着分裂成两套。
+    判据用「上一级存在 game_bot_config.json」：把 dist/ 单独拷到别处时会自动
+    回退到「exe 同目录」的原行为，不影响便携使用。
     """
-    if getattr(sys, 'frozen', False):
+    if getattr(sys, "frozen", False):
         base_path = os.path.dirname(sys.executable)
+        parent = os.path.dirname(base_path)
+        if (os.path.basename(base_path).lower() == "dist"
+                and os.path.exists(os.path.join(parent, "game_bot_config.json"))):
+            base_path = parent
     else:
         base_path = os.path.dirname(__file__)
     return os.path.join(base_path, relative_path)

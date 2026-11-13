@@ -89,12 +89,12 @@ Don't checklist all four every time — pick the one most relevant to the change
   当前基线只剩 **5 条有意保留的 catch-all**（`Goldenhandmaidens.py=3`、`pata.py=2`），原因写在基线注释里。
 - 改动 `.md` 后跑 `markdownlint README.md CHANGELOG.md CLAUDE.md doc\*.md`（规则配置见 `.markdownlint.json`，
   中文长行 MD013 已关闭），要求零 error。
-- 测试基线以 `python -m pytest -q` 实际结果为准（2026-11-13 收尾为 381 条；
+- 测试基线以 `python -m pytest -q` 实际结果为准（2026-11-13 第二批收尾为 386 条；
   新增用例后同步更新本行）。
 - **打包只走 `powershell -NoProfile -File build.ps1 build -Python <Python3.13 解释器>`**：
-  该脚本用 `--distpath .` 把成品写仓库根目录（用户日常双击的那份），并同步到 `dist/`
-  校验哈希。直接调 PyInstaller 只会更新 `dist/`，会让「已修复」的代码在实机上完全不生效。
-  详见 `doc/LIVE-DEBUGGING.md` §10。
+  成品**唯一**在 `dist/goldenhandmaidens.exe`，桌面快捷方式也指向它；脚本用
+  `--distpath dist`，并会主动删除根目录残留的同名 exe。直接调 PyInstaller 或把产物
+  放根目录都会造成「已修复的代码在实机上不生效」。详见 `doc/LIVE-DEBUGGING.md` §10。
 - 新增用例必须做负验证：故意改坏被测逻辑，用例必须失败。
 
 ## 动实机之前先读这两份

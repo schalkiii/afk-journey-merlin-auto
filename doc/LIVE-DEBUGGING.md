@@ -308,6 +308,10 @@ tasklist /FO CSV /NH | findstr /I "autohotkey click_from"   # 有没有、在哪
 1. **每一轮都要能做出实质动作**：按钮还在就补点、命中弹窗就关、加载中就等；
 2. **连续 N 轮什么都没做成 → 提前放弃并保存失败现场**（`capture_failure_context`），
    不要靠外层大超时兜底。大超时只该保护「确实在推进但很慢」的情况。
+3. **上限按阶段语义给，别一把尺子量到底**：2026-11-13 把「跳过之后」的 20 秒上限
+   套到「点战斗之后」的观战阶段，失败现场其实是倒计时 89 秒的正常战斗画面，
+   20 秒就把正在打的战斗误杀了。现在跳过阶段 4 轮、观战阶段
+   `MAX_BATTLE_TIME / OUTCOME_POLL` 轮，且观战日志每 5 轮才打一条。
 
 轮询函数另加 `quiet=True`：每轮超时都打一行「放弃等待」会把日志刷成连续同质墙，
 把真正的信号（哪一轮做了补救）埋掉。
@@ -376,19 +380,29 @@ tasklist /FO CSV /NH | findstr /I "autohotkey click_from"   # 有没有、在哪
   模块级 `LOG_FILE`，早于用例自己打的补丁；三十轮 pytest 在用户的日志里堆了 300 行启动噪声，
   正好把要看的行埋掉。会话级夹具统一把 `bot_runtime.LOG_FILE` 指向临时目录。
 
-## 10. 打包必须走 build.ps1，日志要能自证版本
+## 10. 打包必须走 build.ps1，成品唯一在 dist/
 
-2026-11-13 事故：`build.ps1 build` 用 `--distpath .`，成品固定写**仓库根目录**
-`goldenhandmaidens.exe`（用户日常双击的就是它）。某次打包直接调了
+2026-11-13 事故：`build.ps1 build` 曾用 `--distpath .` 把成品写**仓库根目录**
+`goldenhandmaidens.exe`（桌面快捷方式也指向它）。某次打包直接调了
 `python -m PyInstaller goldenhandmaidens.spec --noconfirm`，产物进了 `dist/`，
 根目录成品静默停留在 11-11 的旧版。于是第二天实跑时「昨天刚修好的注入器回收又失效」
 看起来像代码回归，实际跑的是旧包——日志里 `点击注入器启动成功` 没有 PID，而修复后的
 版本会打 `点击注入器启动成功（PID xxx）`，这一行就是分界线。
 
-三条纪律：
+**根治办法是取消两份成品**：2026-11-13 第二批改动把产物统一到 `dist/`，桌面快捷方式
+改指 `dist/goldenhandmaidens.exe`，根目录 exe 删除，且 `build` 每次会主动清掉根目录
+同名残留。`build.ps1 clean` 也不再删除 `dist/`（它现在是唯一成品目录，不是缓存）。
+
+四条纪律：
 
 1. **只走** `powershell -NoProfile -File build.ps1 build -Python <Python3.13 解释器>`。
-   脚本现在会把根目录成品同步到 `dist/` 并校验两者 SHA256，杜绝两份分叉。
+   脚本用 `--distpath dist`，打包后校验「dist 有成品、根目录无成品」并打印 SHA256。
 2. **每次运行先看构建标识**：`_begin_run()` 打印 `构建版本: … · 打包于 …`（打包版）
    或 `运行方式: Python 源码`。排查任何「修了没生效」，先拿这一行与 `git log -1` 对时间。
 3. **改了代码没重打包 = 没改**。测试跑源码、实机跑 exe，两者不是一回事。
+4. **桌面快捷方式的目标路径要随仓库一起核对**：`pylnk3.parse()` 可只读验证
+   `path` / `work_dir`（本机策略拦截 COM 实例化，别用 WScript.Shell 改快捷方式）。
+5. **数据目录不跟着 exe 搬**：`get_work_path()` 在打包版且 exe 位于 `dist/`、上级存在
+   `game_bot_config.json` 时把基准取回仓库根，配置 / 日志 / `shared/` 坐标 / debug 现场
+   仍集中在一处；否则会读空配置、日志分裂成两套。把 dist/ 单独拷到别处时自动回退
+   「exe 同目录」，保持便携。

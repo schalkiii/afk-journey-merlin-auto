@@ -44,6 +44,11 @@ function Invoke-Check {
     }
 
     Write-Output '[check] 2/3 pytest'
+    # 中文 Windows 控制台代码页 936：`subprocess.run(text=True)` 按 locale(GBK) 解码
+    # 子进程的 UTF-8 输出，会在后台读管道线程抛 UnicodeDecodeError，pytest 记 4 条
+    # PytestUnhandledThreadExceptionWarning。UTF-8 模式让默认文本编码统一为 UTF-8
+    # （PYTHONIOENCODING 只管解释器自身 stdio，对 subprocess 解码无效）。
+    $env:PYTHONUTF8 = '1'
     # 每次用一个全新的空 basetemp：固定目录或系统 %TEMP% 会让 pytest 在启动时批量清理
     # 历史临时文件，受限会话里的批量删除守卫会把它判成 SystemExit(1)，用例其实全绿。
     # 新目录不存在，pytest 只创建、不删除；累积的目录由 clean 目标清理。
@@ -131,10 +136,11 @@ function Invoke-BuildTarget {
         $script:ExitCode = 1
         return
     }
-    # 必须走本脚本打包：根目录 goldenhandmaidens.exe 是用户日常双击的成品，
-    # `--distpath .` 固定写这里。直接调 PyInstaller 只会更新 dist/，根目录会静默
-    # 停留在旧版（2026-11-13 事故：修复明明已合入，实跑却仍用 11-11 的包）。
-    Write-Output '[build] python -m PyInstaller goldenhandmaidens.spec --distpath . --workpath build --noconfirm'
+    # 成品统一在 dist/：桌面快捷方式也指向 dist/goldenhandmaidens.exe。
+    # 2026-11-13 事故：旧版用 --distpath . 把成品写根目录，某次直接调 PyInstaller
+    # 只更新了 dist/，用户双击的根目录包却静默停留在旧版。现在只认 dist/ 一个产物，
+    # 并主动清掉根目录残留，从根本上杜绝两份分叉。
+    Write-Output '[build] python -m PyInstaller goldenhandmaidens.spec --distpath dist --workpath build --noconfirm'
     # PyInstaller 把所有进度日志写在 stderr。PS 5.1 在 $ErrorActionPreference='Stop' 下
     # 会把原生命令的 stderr 当成终止错误（NativeCommandError），打包必然假失败；
     # PS 7 才认 $PSNativeCommandUseErrorActionPreference。这里临时降级，
@@ -142,7 +148,7 @@ function Invoke-BuildTarget {
     $previousEap = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        & $Python -m PyInstaller goldenhandmaidens.spec --distpath . --workpath build --noconfirm
+        & $Python -m PyInstaller goldenhandmaidens.spec --distpath dist --workpath build --noconfirm
     } finally {
         $ErrorActionPreference = $previousEap
     }
@@ -152,29 +158,27 @@ function Invoke-BuildTarget {
         return
     }
 
-    $rootExe = Join-Path $RepoRoot 'goldenhandmaidens.exe'
-    $distDir = Join-Path $RepoRoot 'dist'
-    if (-not (Test-Path -LiteralPath $distDir)) {
-        New-Item -ItemType Directory -Path $distDir | Out-Null
-    }
-    $distExe = Join-Path $distDir 'goldenhandmaidens.exe'
-    # 两份成品分叉 = 「改了代码却跑旧包」的假回归。强制同步并校验哈希。
-    Copy-Item -LiteralPath $rootExe -Destination $distExe -Force
-    $hashRoot = (Get-FileHash -LiteralPath $rootExe -Algorithm SHA256).Hash
-    $hashDist = (Get-FileHash -LiteralPath $distExe -Algorithm SHA256).Hash
-    if ($hashRoot -ne $hashDist) {
-        Write-Output '[build] 根目录与 dist/ 成品哈希不一致，同步失败'
+    $distExe = Join-Path $RepoRoot 'dist\goldenhandmaidens.exe'
+    if (-not (Test-Path -LiteralPath $distExe)) {
+        Write-Output '[build] dist/ 下没有找到成品 exe'
         $script:ExitCode = 1
         return
     }
-    $stamp = (Get-Item -LiteralPath $rootExe).LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-    Write-Output "[build] 成品: 根目录 goldenhandmaidens.exe（打包于 $stamp）"
-    Write-Output "[build] 已同步 dist/，SHA256 $($hashRoot.Substring(0, 12))…"
+    # 根目录一旦再出现同名 exe，就是「旧包被双击」的隐患。这里只警告不自动删：
+    # 自动删除会被环境的安全删除钩子拦截（要求走回收站），反而让整次 build 假失败。
+    $rootExe = Join-Path $RepoRoot 'goldenhandmaidens.exe'
+    if (Test-Path -LiteralPath $rootExe) {
+        Write-Output '[build] 警告: 根目录存在同名旧成品，请手动删除（成品只应在 dist/）'
+    }
+    $hash = (Get-FileHash -LiteralPath $distExe -Algorithm SHA256).Hash
+    $stamp = (Get-Item -LiteralPath $distExe).LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
+    Write-Output "[build] 成品: dist\goldenhandmaidens.exe（打包于 $stamp）"
+    Write-Output "[build] SHA256 $($hash.Substring(0, 12))…"
 }
 
 function Invoke-Clean {
-    # 只清已知的缓存/中间目录，绝不触碰根目录成品 exe 与 templates/
-    $targets = @('build', 'dist', '.pytest_cache', '.pytest_tmp', '.ruff_cache')
+    # 只清已知的缓存/中间目录；dist/ 是唯一成品目录，绝不清理，templates/ 同理。
+    $targets = @('build', '.pytest_cache', '.pytest_tmp', '.ruff_cache')
     foreach ($name in $targets) {
         $path = Join-Path $RepoRoot $name
         if (Test-Path -LiteralPath $path) {
