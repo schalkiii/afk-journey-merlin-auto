@@ -259,16 +259,21 @@ def flow_nvshenta(auto_configure_lineup=False):
     random_sleep()
     
     # 2. 点击 nvshenta 进入女神塔界面
-    if not wait_and_click(tpl_nvshenta, "nvshenta", 0.8):
-        print("点击 nvshenta 失败")
+    # 2026-11-13 实机：09:02:46 点完卡片仍停在玩法目录，旧实现却认定已进入，
+    # 接着 6 秒盲等扫荡按钮 + 15 次轮询挑战按钮全部落空（合计约 19 秒），
+    # 最后靠用户手动点进去才继续。_tower_page_open 早已存在，但此前只在
+    # _back_to_tower_page 的「重进」分支使用，首次进入漏了这一层校验。
+    if not click_and_confirm(tpl_nvshenta, "nvshenta", _tower_page_open,
+                             attempts=2, find_timeout=6.0, confirm_timeout=10.0):
+        print("点击 nvshenta 后未确认进入女神塔页面（可能仍停在玩法目录）")
         return False
     random_sleep()
-    
+
     # 2.5 检测当前界面状态：判断是挑战界面还是扫荡界面
     # 如果直接识别到扫荡按钮，说明已经通关
-    # 2026-11-08 实机踩过：刚进入时按钮可能未渲染，立即检测会误走挑战分支、
-    # 随后挑战按钮也等不到而失败。改为带超时轮询，按钮出现再判定分支。
-    pos_saodang = find_center_silent(tpl_nvshentasaodang, 0.8, timeout=6.0)
+    # 入口已由 click_and_confirm 确认页面打开，这里只留一小段渲染余量即可，
+    # 不必再拿 6 秒去等一个「可能根本不在这个页面」的按钮。
+    pos_saodang = find_center_silent(tpl_nvshentasaodang, 0.8, timeout=2.0)
     if pos_saodang:
         print("检测到扫荡按钮，已通关")
         # 计算扫荡按钮下方的区域

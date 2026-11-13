@@ -1,4 +1,4 @@
-# 统一构建入口：check（编译 + 测试 + lint 基线比对）/ build（PyInstaller 打包）/ clean（清理缓存与产物）
+﻿# 统一构建入口：check（编译 + 测试 + lint 基线比对）/ build（PyInstaller 打包）/ clean（清理缓存与产物）
 # 用法：pwsh -NoProfile -File build.ps1 check
 param(
     [ValidateSet('build', 'check', 'clean')]
@@ -64,7 +64,10 @@ function Invoke-Check {
     }
 
     $baseline = @{}
-    foreach ($entry in Get-Content -LiteralPath $baselinePath) {
+    # 显式 UTF-8：.ruff_baseline 含中文注释，PS 5.1 的 Get-Content 默认按 GBK 解码，
+    # 会把注释行与配置行搅在一起（实测 Goldenhandmaidens.py=3 被漏读，误报「新增告警」）。
+    foreach ($entry in [System.IO.File]::ReadAllLines(
+            $baselinePath, [System.Text.Encoding]::UTF8)) {
         $trimmed = $entry.Trim()
         if ($trimmed -eq '' -or $trimmed.StartsWith('#')) { continue }
         $pair = $trimmed -split '=', 2
@@ -128,14 +131,45 @@ function Invoke-BuildTarget {
         $script:ExitCode = 1
         return
     }
+    # 必须走本脚本打包：根目录 goldenhandmaidens.exe 是用户日常双击的成品，
+    # `--distpath .` 固定写这里。直接调 PyInstaller 只会更新 dist/，根目录会静默
+    # 停留在旧版（2026-11-13 事故：修复明明已合入，实跑却仍用 11-11 的包）。
     Write-Output '[build] python -m PyInstaller goldenhandmaidens.spec --distpath . --workpath build --noconfirm'
-    & $Python -m PyInstaller goldenhandmaidens.spec --distpath . --workpath build --noconfirm
+    # PyInstaller 把所有进度日志写在 stderr。PS 5.1 在 $ErrorActionPreference='Stop' 下
+    # 会把原生命令的 stderr 当成终止错误（NativeCommandError），打包必然假失败；
+    # PS 7 才认 $PSNativeCommandUseErrorActionPreference。这里临时降级，
+    # 成败只看 $LASTEXITCODE。
+    $previousEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $Python -m PyInstaller goldenhandmaidens.spec --distpath . --workpath build --noconfirm
+    } finally {
+        $ErrorActionPreference = $previousEap
+    }
     if ($LASTEXITCODE -ne 0) {
         Write-Output "[build] 打包失败，退出码 $LASTEXITCODE"
         $script:ExitCode = 1
         return
     }
-    Write-Output '[build] 打包完成，产物在仓库根 goldenhandmaidens.exe'
+
+    $rootExe = Join-Path $RepoRoot 'goldenhandmaidens.exe'
+    $distDir = Join-Path $RepoRoot 'dist'
+    if (-not (Test-Path -LiteralPath $distDir)) {
+        New-Item -ItemType Directory -Path $distDir | Out-Null
+    }
+    $distExe = Join-Path $distDir 'goldenhandmaidens.exe'
+    # 两份成品分叉 = 「改了代码却跑旧包」的假回归。强制同步并校验哈希。
+    Copy-Item -LiteralPath $rootExe -Destination $distExe -Force
+    $hashRoot = (Get-FileHash -LiteralPath $rootExe -Algorithm SHA256).Hash
+    $hashDist = (Get-FileHash -LiteralPath $distExe -Algorithm SHA256).Hash
+    if ($hashRoot -ne $hashDist) {
+        Write-Output '[build] 根目录与 dist/ 成品哈希不一致，同步失败'
+        $script:ExitCode = 1
+        return
+    }
+    $stamp = (Get-Item -LiteralPath $rootExe).LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
+    Write-Output "[build] 成品: 根目录 goldenhandmaidens.exe（打包于 $stamp）"
+    Write-Output "[build] 已同步 dist/，SHA256 $($hashRoot.Substring(0, 12))…"
 }
 
 function Invoke-Clean {

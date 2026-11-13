@@ -600,10 +600,16 @@ class PushFlow:
         wait_and_click(tpl_exit, "exit(遮挡面板)", 0.8, timeout=2.0)
         return True
 
-    def _wait_for_any_state(self, candidates, timeout=10.0, interval=0.25, allow_gift_recovery=True):
-        """等待目标状态模板出现，返回命中的模板路径；超时返回 None。"""
+    def _wait_for_any_state(self, candidates, timeout=10.0, interval=0.25,
+                            allow_gift_recovery=True, allow_occluder=True):
+        """等待目标状态模板出现，返回命中的模板路径；超时返回 None。
+
+        `allow_occluder=False` 用于「刚点过确认购买门票」这类**已知过渡态**：此时
+        autocha 与 guajijixian 都暂时不可见是正常现象，不该被当成无提示遮挡面板。
+        """
         deadline = time.time() + timeout
         missed_rounds = 0
+        occluder_clears = 0
         while time.time() < deadline:
             # 一轮必须完整检查所有候选模板；只有全部未命中才算一次未命中。
             for template_path, threshold in candidates:
@@ -618,7 +624,10 @@ class PushFlow:
                     if wait_and_click(tpl_tuichulibao, "tuichulibao", 0.8, timeout=3.0):
                         time.sleep(0.5)
                         continue
-                if self._clear_occluder():
+                # 一次动作最多清一次遮挡：2026-11-13 实机买完门票的过渡态被误判成
+                # 「已达成玩家」，连点两次 exit 把界面一路退回玩法目录，推图判失败。
+                if allow_occluder and occluder_clears < 1 and self._clear_occluder():
+                    occluder_clears += 1
                     continue
 
             time.sleep(interval)
@@ -631,9 +640,11 @@ class PushFlow:
             timeout=timeout,
         )
 
-    def _wait_after_action(self, candidates, action_name, timeout=10.0):
+    def _wait_after_action(self, candidates, action_name, timeout=10.0,
+                           allow_occluder=True):
         """动作发送后必须看到目标模板，确认界面真的切换。"""
-        hit = self._wait_for_any_state(candidates, timeout=timeout)
+        hit = self._wait_for_any_state(candidates, timeout=timeout,
+                                      allow_occluder=allow_occluder)
         if hit:
             print(f"{action_name} 后确认目标状态: {os.path.basename(hit)}")
         else:
@@ -734,9 +745,14 @@ class PushFlow:
             print("检测到 guajijixian，点击 querengoumaimenpiao...")
             if not wait_and_click(tpl_querengoumaimenpiao, "querengoumaimenpiao", 0.7):
                 return self._done(False)
+            # 买完门票后 autocha 要等界面切换才出现；这段过渡态里两个判据都不可见，
+            # 绝不能让 _clear_occluder 点 exit（2026-11-13 现场：连点两次退回玩法目录）。
+            # 给足 15 秒，只等目标状态，不做遮挡兜底。
             if not self._wait_after_action(
-                [(tpl_autocha, 0.8)], "querengoumaimenpiao", timeout=10.0
+                [(tpl_autocha, 0.8)], "querengoumaimenpiao", timeout=15.0,
+                allow_occluder=False,
             ):
+                print("购买门票后未出现自动挑战按钮（过渡态或遮挡面板），退出推图")
                 return self._done(False)
         elif not find_center_silent(tpl_autocha, threshold=0.8, timeout=0.5):
             print("limit 状态既没有弹窗也没有 autocha，无法确认界面。")

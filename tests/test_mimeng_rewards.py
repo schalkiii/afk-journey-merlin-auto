@@ -57,10 +57,11 @@ def test_claim_top_right_chest_clicks_harvest_and_closes(monkeypatch):
 
     assert mm._claim_top_right_reward() is True
 
-    # 先点右侧「排行榜」入口，确认打不开后才走旧的右上角区域探测
-    assert clicks[0] == ((2216, 590), 1.5, False)
-    assert finds[0] == (mm.tpl_mimeng_rank, None)
-    assert finds[1] == (mm.tpl_baoxiang_full, mm.MIMENG_TOP_RIGHT_REGION)
+    # 2026-11-13 起固定点位前先确认迷梦主界面（避免误点玩家信息卡片），
+    # 排行榜没打开时再探一次「点击空白处关闭」提示，才走旧右上角区域探测。
+    assert finds[0] == (mm.tpl_tiaozhan, None)
+    assert finds[1] == (mm.tpl_mimeng_rank, None)
+    assert (mm.tpl_baoxiang_full, mm.MIMENG_TOP_RIGHT_REGION) in finds
     assert clicks[1] == ((1500, 120), 1.5, False)
     assert waits == [(mm.tpl_shouhuojiangli, "shouhuojiangli(右上角)", 2.0)]
     assert closes == ["close"]
@@ -95,7 +96,9 @@ def test_claim_top_right_returns_false_when_nothing_found(monkeypatch):
     assert waits == []
     assert closes == []
     assert [template for template, _region in finds] == [
+        mm.tpl_tiaozhan,                 # 固定点位前的主界面确认
         mm.tpl_mimeng_rank,
+        mm.tpl_dianjikongbaichuguanbi,  # 排行榜没开时探一次误触弹窗
         mm.tpl_baoxiang_full,
         mm.tpl_lingqu,
         mm.tpl_yijianlingqu,

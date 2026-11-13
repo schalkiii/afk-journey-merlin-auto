@@ -1427,7 +1427,14 @@ def _clicker_session_ids():
 
 
 def clicker_session_mismatch():
-    """注入器与游戏不在同一会话时返回说明文字，正常返回 None。"""
+    """注入器与游戏不在同一会话时返回说明文字，正常返回 None。
+
+    2026-11-13 修正结论强度：会话不一致**不是**点击失效的充分条件。11-12 那次
+    「游戏毫无反应」是同时改了「杀掉旧注入器 + 提权重启」两个变量，功劳被误记到
+    会话上；11-13 实测注入器在会话 3、游戏在会话 1，19 项任务里 17 项点击正常生效。
+    真正会让 SendInput 被静默丢弃的是**非提权进程对提权游戏**（UIPI），见
+    `is_process_elevated()`。这里只作为排查线索，不再断言「游戏不会有任何反应」。
+    """
     game_sid = game_window_session_id()
     if game_sid is None:
         return None
@@ -1437,7 +1444,8 @@ def clicker_session_mismatch():
     if game_sid in sids:
         return None
     return (f"点击注入器运行在会话 {','.join(str(s) for s in sorted(set(sids)))}，"
-            f"游戏在会话 {game_sid}：注入器会读走坐标但点击落在另一个桌面，游戏不会有任何反应")
+            f"游戏在会话 {game_sid}：若出现点击不生效，请优先确认本工具与注入器"
+            f"均已提权，再考虑会话因素")
 
 
 def log_clicker_session_warning():
@@ -1449,7 +1457,7 @@ def log_clicker_session_warning():
     if note is None:
         return
     _session_warn["done"] = True
-    log(f"警告: {note}。请关闭旧注入器并在当前会话重新启动程序")
+    log(f"提示: {note}")
 
 
 def _write_coord_raw(x, y, wait_timeout=1.5):

@@ -39,6 +39,11 @@ def test_startup_does_not_import_updater(tmp_path):
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
+        # 子进程导入 GUI 主模块时会往 stderr 打中文日志；默认 locale 是 GBK，
+        # 用 text=True 不指定编码会让管道读取线程抛 UnicodeDecodeError
+        # （pytest 里表现为 PytestUnhandledThreadExceptionWarning）。
+        encoding="utf-8",
+        errors="replace",
         timeout=60,
         check=False,
     )

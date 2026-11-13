@@ -55,7 +55,7 @@ def test_settle_reclicks_skip_while_battle_continues(monkeypatch):
 
 
 def test_settle_gives_up_after_stall_limit(monkeypatch):
-    """完全认不出的界面：必须在 SKIP_STALL_LIMIT 轮后放弃并留现场，不得把 180 秒耗光。"""
+    """完全认不出的界面：必须在 OUTCOME_STALL_LIMIT 轮后放弃并留现场，不得把 180 秒耗光。"""
     polls = []
     saved = []
     monkeypatch.setattr(df, "log", lambda *_a, **_k: None)
@@ -71,7 +71,7 @@ def test_settle_gives_up_after_stall_limit(monkeypatch):
                         lambda *a, **_k: saved.append(a))
 
     assert df._settle_after_skip((1, 2)) is None
-    assert len(polls) == df.SKIP_STALL_LIMIT, "只允许空转 SKIP_STALL_LIMIT 轮"
+    assert len(polls) == df.OUTCOME_STALL_LIMIT, "只允许空转 OUTCOME_STALL_LIMIT 轮"
     assert saved, "放弃前必须保存失败现场，否则下次无法定位"
 
 

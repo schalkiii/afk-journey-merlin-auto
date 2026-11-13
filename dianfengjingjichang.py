@@ -57,10 +57,11 @@ MAX_BATTLE_TIME = 180
 DEFAULT_CHALLENGE_COUNT = 3
 MAX_CHALLENGE_COUNT = 10
 
-# 跳过之后的轮询节奏：每轮等多久、连续多少轮「完全没进展」就提前放弃。
+# 等结算信号的轮询节奏：每轮等多久、连续多少轮「完全没进展」就提前放弃。
 # 4 × 5 秒 = 20 秒；正常结算远短于这个量级，真卡住时也不该盲等 180 秒。
-SKIP_SETTLE_POLL = 5.0
-SKIP_STALL_LIMIT = 4
+# 点「战斗」之后与点「跳过」之后共用这套节奏（两者都曾出现 180 秒空转）。
+OUTCOME_POLL = 5.0
+OUTCOME_STALL_LIMIT = 4
 
 
 def _wait_for_any(templates, timeout, interval=0.5, quiet=False):
@@ -195,64 +196,79 @@ def _select_opponent_and_lineup():
     return False
 
 
-def _settle_after_skip(skip_pos):
-    """点过「跳过」之后等结算信号；返回 (template_path, pos) 或 None。
+def _recover_during_battle(phase, retry_template, retry_pos=None):
+    """等结算信号期间做一次实质补救；返回是否做了动作。
 
-    2026-11-12 实机（今天唯一的「卡住」现场）：第 2 场 08:50:21 点了「跳过」，
-    之后界面既没有失败页、也没有「继续挑战」，也没有「点击空白处关闭」——旧实现
-    只在那个提示模板命中时才肯动作，于是整整空转 180 秒（36 轮「放弃 fail /
-    jixutiaozhan」）才放弃，用户看到的就是「显示完成但中途卡住」。
+    `retry_template` 是当前阶段「上一击被吞时仍会留在屏上」的操作按钮：
+    跳过阶段是 tiaoguo，开战阶段是 zhandou。它还可见就说明战斗没按预期推进，
+    补点一次比继续空等有用。`retry_pos` 给定时优先用原位置（跳过按钮实测固定）。
+    """
+    pos = find_center_silent(retry_template, 0.8, timeout=0)
+    if pos:
+        log(f"{phase}：操作按钮仍可见，补点一次")
+        click_position(retry_pos or pos, wait=1.2, twice=False)
+        return True
+    if find_center_silent(get_template_path("dianjikongbaichuguanbi.png"), 0.8, timeout=0):
+        dismiss_popup_away_from()
+        log(f"{phase}：关闭结算弹窗后继续等待结束信号。")
+        return True
+    if find_center_silent(tpl_meirijiesuan, 0.8, timeout=0):
+        _close_daily_settlement()
+        return True
+    if is_loading_screen():
+        log(f"{phase}：进入加载画面，等待加载结束")
+        wait_until_loaded(15.0)
+        return True
+    return False
 
-    现在每一轮都做三件事，而不是干等：
-    1. 「跳过」按钮还在 → 上一击被吞、战斗仍在进行，按原位置补点一次；
-    2. 命中任一已知弹窗/提示（点击空白处关闭、每日结算、加载中）→ 关掉或等加载；
-    3. 连续 SKIP_STALL_LIMIT 轮完全没有可识别元素、也没有任何补救动作可做 →
-       立刻保存失败现场并放弃，而不是把 180 秒耗光。
+
+def _poll_until_outcome(signals, phase, retry_template, retry_pos=None):
+    """短轮询等战斗结束信号；连续 OUTCOME_STALL_LIMIT 轮毫无进展就存现场放弃。
+
+    2026-11-12 的 180 秒空转发生在「跳过之后」，2026-11-13 又发生在「点战斗之后」
+    （09:08:19 → 09:11:25 一次性长等 180 秒，日志只有一行「放弃」）。两处同源：
+    一次性 `_wait_for_any(timeout=180)` 中间不补点、不关弹窗、不等加载。
+    这里把「短轮询 + 每轮实质动作 + 无进展上限」收敛成一处，两个阶段共用。
     """
     deadline = time.time() + MAX_BATTLE_TIME
     stall = 0
     while time.time() < deadline:
         check_stop()
-        outcome = _wait_for_any(
-            [(tpl_fail, "fail"), (tpl_jixutiaozhan, "jixutiaozhan")],
-            timeout=SKIP_SETTLE_POLL,
-            quiet=True,
-        )
+        outcome = _wait_for_any(signals, timeout=OUTCOME_POLL, quiet=True)
         if outcome is not None:
             return outcome
-
-        # ① 战斗其实还在进行：跳过没生效，补点（跳过一次失败是常态，见实机记录）
-        if find_center_silent(tpl_tiaoguo, 0.8, timeout=0):
-            log("「跳过」后战斗仍在进行，补点一次跳过")
-            click_position(skip_pos, wait=1.2, twice=False)
+        if _recover_during_battle(phase, retry_template, retry_pos):
             stall = 0
             continue
-
-        # ② 各类已知提示/弹窗：关掉后立刻重判
-        if find_center_silent(get_template_path("dianjikongbaichuguanbi.png"), 0.8, timeout=0):
-            dismiss_popup_away_from()
-            log("关闭战斗结算弹窗后继续等待结束信号。")
-            stall = 0
-            continue
-        if find_center_silent(tpl_meirijiesuan, 0.8, timeout=0):
-            _close_daily_settlement()
-            stall = 0
-            continue
-        if is_loading_screen():
-            log("「跳过」后进入加载画面，等待加载结束")
-            wait_until_loaded(15.0)
-            stall = 0
-            continue
-
-        # ③ 完全认不出的界面：数到上限就留现场退出，绝不无限空转
         stall += 1
-        log(f"「跳过」后界面无可识别信号（第 {stall}/{SKIP_STALL_LIMIT} 轮），继续观察")
-        if stall >= SKIP_STALL_LIMIT:
-            capture_failure_context("巅峰竞技场", "跳过之后无法识别结算界面")
-            log("跳过之后始终无法识别界面，保存现场后结束本场")
+        log(f"{phase}：界面无可识别信号（第 {stall}/{OUTCOME_STALL_LIMIT} 轮），继续观察")
+        if stall >= OUTCOME_STALL_LIMIT:
+            capture_failure_context("巅峰竞技场", f"{phase}无法识别结算界面")
+            log(f"{phase}始终无法识别界面，保存现场后结束本场")
             return None
-    log(f"跳过之后 {MAX_BATTLE_TIME} 秒内未出现结算信号，结束。")
+    log(f"{phase} {MAX_BATTLE_TIME} 秒内未出现结算信号，结束。")
     return None
+
+
+def _settle_after_skip(skip_pos):
+    """点过「跳过」之后等结算信号；返回 (template_path, pos) 或 None。"""
+    return _poll_until_outcome(
+        [(tpl_fail, "fail"), (tpl_jixutiaozhan, "jixutiaozhan")],
+        phase="「跳过」后", retry_template=tpl_tiaoguo, retry_pos=skip_pos,
+    )
+
+
+def _wait_for_battle_outcome():
+    """点过「战斗」之后等第一个信号（跳过 / 失败 / 继续挑战）。
+
+    2026-11-13 实机：点完战斗界面既没出跳过也没出结算，旧实现在这一步一次性
+    `_wait_for_any(timeout=180)`，干等 3 分钟且随后仍按「完成 0 场」打 ✔。
+    """
+    return _poll_until_outcome(
+        [(tpl_tiaoguo, "tiaoguo"), (tpl_fail, "fail"),
+         (tpl_jixutiaozhan, "jixutiaozhan")],
+        phase="「战斗」后", retry_template=tpl_zhandou,
+    )
 
 
 def _fight_once(index):
@@ -286,10 +302,7 @@ def _fight_once(index):
 
     # 战斗中有「跳过」按钮（实测点它直接出结算）；结束时可能停在失败页，
     # 也可能直接回到挑战界面。三种信号谁先出现就按谁走。
-    outcome = _wait_for_any(
-        [(tpl_tiaoguo, "tiaoguo"), (tpl_fail, "fail"), (tpl_jixutiaozhan, "jixutiaozhan")],
-        timeout=MAX_BATTLE_TIME,
-    )
+    outcome = _wait_for_battle_outcome()
     if outcome is None:
         log("战斗结束信号未出现，结束。")
         return False
@@ -349,4 +362,9 @@ def flow_dianfeng(challenge_count=DEFAULT_CHALLENGE_COUNT):
     wait_and_click(tpl_exitck, "exitck(巅峰竞技场)", 0.8, timeout=3.0)
     recover_to_main_interface()
     check_and_handle_libao()
-    return True
+    # 2026-11-13 实机：完成 0 场（战斗信号 180 秒没出现）旧实现照样 return True，
+    # 日志打出「✔ 245.8s」，用户根本看不出这一项其实什么都没干。休赛期在上面已
+    # 显式按跳过返回 True；走到这里却一场没打成，必须如实判失败。
+    if done == 0:
+        log("巅峰竞技场：本轮未完成任何一场，按失败返回。")
+    return done > 0

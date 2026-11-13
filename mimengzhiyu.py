@@ -122,16 +122,23 @@ def _ensure_mimeng_main(timeout=12.0):
 
     实测领完排行榜礼包后，只点一次空白并不能回到主界面：要先关掉奖励弹窗，
     再点返回按钮，挑战按钮才会重新出现。这里循环「空白 → 返回」，直到挑战可见。
+
+    2026-11-13 实机：玩家信息卡片遮挡时 exitck 根本不可见，旧循环每轮先花 1.5 秒
+    等它、再试一次关弹窗，12 秒窗口里只够 3~4 次补救便判失败。改为弹窗优先、
+    返回按钮只做 0.3 秒短探测，把时间留给「关掉遮挡」这个真正有用的动作。
     """
     start = time.time()
     while time.time() - start < timeout:
         if find_center_silent(tpl_tiaozhan, 0.8, timeout=0.5):
             return True
-        if wait_and_click(tpl_exitck, "exitck(迷梦返回)", 0.8, timeout=1.5):
-            time.sleep(0.5)
+        if (find_center_silent(tpl_dianjikongbaichuguanbi, 0.8, timeout=0)
+                and dismiss_popup_away_from()):
+            continue
+        if wait_and_click(tpl_exitck, "exitck(迷梦返回)", 0.8, timeout=0.3):
+            time.sleep(0.3)
             continue
         dismiss_popup_away_from()
-        time.sleep(0.5)
+        time.sleep(0.3)
     return bool(find_center_silent(tpl_tiaozhan, 0.8, timeout=0.5))
 
 
@@ -141,11 +148,21 @@ def _claim_rank_gift():
     实测路径：点右侧「排行榜」→ 用标题确认面板 → 点右上角礼包图标。
     有可领时会直接弹「获得奖励」，或出现「一键领取 / 领取」按钮；领完用 exitck 返回。
     没有可领时只确认界面后原路返回，不盲点其它按钮。
+
+    2026-11-13 实机：进玩法目录卡片后界面还没切到迷梦主界面，这里就用固定坐标点
+    「排行榜」，结果点进了玩家信息区弹出个人卡片（失败现场标注「个人签名」），
+    后续阵容入口 / 返回按钮全被遮挡，整项 40 秒判失败。固定点位之前必须先确认
+    目标页独有元素；误点没打开排行榜时还要清一次「点击空白处关闭」弹窗。
     """
     x0, y0, _w, _h = game_client_region()
+    if not find_center_silent(tpl_tiaozhan, 0.8, timeout=6.0):
+        log("【迷梦之域】未确认进入迷梦主界面，跳过排行榜礼包。")
+        return False
     click_position((x0 + 1216, y0 + 90), wait=1.5, twice=False)   # 右侧「排行榜」
     if not find_center_silent(tpl_mimeng_rank, 0.8, timeout=3.0):
         log("【迷梦之域】未打开排行榜，跳过排名礼包。")
+        if find_center_silent(tpl_dianjikongbaichuguanbi, 0.8, timeout=0):
+            dismiss_popup_away_from()
         return False
 
     click_position((x0 + 1163, y0 + 62), wait=1.2, twice=False)   # 排行榜右上角礼包

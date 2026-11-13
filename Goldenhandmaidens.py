@@ -1342,11 +1342,32 @@ class GameBotGUI:
             if script.status == "等待中":
                 script.status = "就绪"
 
+    def _log_build_banner(self):
+        """把「本次到底跑的是哪份程序」写进日志。
+
+        2026-11-13 事故：根目录 goldenhandmaidens.exe 是用户习惯双击的成品，
+        `build.ps1 build` 也用 `--distpath .` 固定写这里；但某次打包直接调了
+        PyInstaller（默认写 dist/），根目录成品便停留在 11-11 的旧版。于是
+        「昨天刚修好的注入器回收，今天又残留」看起来像代码回归，实际跑的是旧包。
+        打包版用 exe 自身的 mtime 自证版本；源码运行明确标注，避免同类误判。
+        """
+        if getattr(sys, "frozen", False):
+            try:
+                stamp = time.strftime(
+                    "%Y-%m-%d %H:%M:%S",
+                    time.localtime(os.path.getmtime(sys.executable)))
+                self.log(f"构建版本: {os.path.basename(sys.executable)} · 打包于 {stamp}")
+            except OSError:
+                self.log("构建版本: 打包版（无法读取时间戳）")
+        else:
+            self.log("运行方式: Python 源码（非打包 exe）")
+
     def _begin_run(self, scripts_to_run, respect_enabled=True):
         """启动运行线程的公共入口：置运行态、复位状态标记、拉起工作线程。"""
         self.is_running = True
         self.stop_event.clear()
         self.update_master_button()
+        self._log_build_banner()
 
         self._prepare_run_statuses(scripts_to_run, respect_enabled)
         self.update_script_panel()

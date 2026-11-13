@@ -22,6 +22,51 @@
 
 ### 新功能与入口补全
 
+#### 2026-11-13 实跑复盘：跳转型入口确认、结算短轮询、弹窗/遮挡误判与打包版本自证
+
+11-13 实跑 08:56:58–09:48:37（19 项，17 ✔ / 2 ✘）。按「真正自动跑完」口径是 **16/19**：
+女神塔靠用户手动点进去、巅峰竞技场「完成 0 场」仍打 ✔。四处根因同属
+「判据成立但现实没动」。
+
+- **女神塔卡在玩法目录页（用户指出）**：09:02:46 点完 `nvshenta` 卡片仍停在目录，
+  旧实现认定已进入，接着 6 秒盲等扫荡按钮 + 15 次轮询挑战按钮（合计约 19 秒）全部落空，
+  09:03:05 用户手动点进去才继续。首次进入改用
+  `click_and_confirm(tpl_nvshenta, ..., _tower_page_open)`——该确认函数早已存在，
+  但此前只在 `_back_to_tower_page` 的「重进」分支使用；2.5 步的 6 秒盲等缩到 2 秒。
+- **巅峰竞技场 186 秒空转 + 假成功**：09:08:19 点战斗 → 09:11:25「180s 内未出现」，
+  「完成 0 场」仍打 ✔ 245.8s。昨天修的 `_settle_after_skip` 只覆盖「跳过之后」，
+  没覆盖「点战斗之后」。把两处收敛成 `_poll_until_outcome()`（短轮询 + 每轮补点 /
+  关弹窗 / 等加载 + `OUTCOME_STALL_LIMIT` 无进展上限）；`flow_dianfeng` 在 `done==0`
+  时如实返回 False。
+- **迷梦之域 40.2s 失败**：现场是玩家信息卡片遮挡。`_claim_rank_gift()` 在界面还没
+  切到迷梦主界面时就用固定坐标点「排行榜」，误开玩家卡片；之后 `exitck` 3 轮 × 1.5s
+  全被遮挡。改为固定点位前先确认 `tpl_tiaozhan`、没打开排行榜时清一次误触弹窗；
+  `_ensure_mimeng_main()` 改为弹窗优先、返回按钮只做 0.3 秒短探测。
+- **推图 33.2s 失败**：现场停在玩法目录页。买完门票的过渡态里 `autocha` 与
+  `guajijixian` 都暂时不可见，`push._clear_occluder()` 两次误判成「已达成玩家」遮挡面板，
+  连点两次 `exit` 把界面退回目录。给 `_wait_after_action` 加 `allow_occluder`，
+  门票分支显式禁用并给足 15 秒；其它状态一次动作最多清一次遮挡。
+- **注入器残留复发（用户提问）**：不是回收代码回归。`build.ps1 build` 用
+  `--distpath .` 把成品写**根目录**，而昨天打包直接调了 PyInstaller（默认写 `dist/`），
+  根目录 exe 停留在 11-11（`asInvoker`、启动日志无 PID）。今天实跑双击的正是这份旧包。
+  三处收口：`build.ps1` 打包后强制同步根目录 ↔ `dist/` 并校验 SHA256；`_begin_run()`
+  打印 `构建版本: … · 打包于 …`（或「Python 源码」）；文档 §10 写清打包纪律。
+  顺带让 `build.ps1` 兼容 Windows PowerShell 5.1：加 UTF-8 BOM（否则中文注释按 GBK
+  解码直接语法错）、PyInstaller 的 stderr 日志临时降级 `$ErrorActionPreference`
+  （5.1 会把它当 `NativeCommandError`）、基线文件显式按 UTF-8 读取（否则
+  `Goldenhandmaidens.py=3` 被漏读，误报「新增告警」）。
+- **修正 11-12 的过度结论**：今天注入器在 session 3、游戏在 session 1，
+  17 项任务点击正常生效——跨会话不是点击失效的充分条件，权限（UIPI）才是。
+  `clicker_session_mismatch()` 改为提示性措辞，排查顺序改为「存活 → 权限 → 会话 → 前台」。
+- **测试**：新增 `tests/test_20261113_entry_confirm_and_recovery.py`（11 条），
+  七处修复均做负验证（改回坏实现必须失败）；同步更新 `test_mimeng_rewards.py` /
+  `test_nvshenta_topfloor.py` 的桩以匹配新入口契约。
+  又清掉两处测试自身的不确定性：`test_occluder_cleared_at_most_once` 原先靠 20ms
+  真实时间窗凑轮数，全量负载下一轮没跑够就退出（flaky），改为「第 12 次探测才命中」
+  的固定轮数驱动；`test_startup_imports.py` 的子进程补 `encoding="utf-8"`
+  （此前用默认 GBK 解子进程中文 stderr，pytest 报 4 条 `UnicodeDecodeError` 警告）。
+  `pytest -q` **381 passed、0 warnings**、ruff 5 条基线。
+
 #### 2026-11-12 冷启动全自动：会话一致性、游戏就绪判定与「跳过」后空转治理
 
 - **「跳过」后空转 180 秒（用户观察到的「显示完成但中途卡住」）**：巅峰竞技场第 2 场
