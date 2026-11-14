@@ -20,9 +20,12 @@ launch_game.py — 通过桌面「剑与远征：启程」快捷方式启动游�
 import argparse
 import os
 import shlex
-import subprocess
 import sys
 import time
+
+# 起游戏 / 起 GUI 都走隐藏控制台封装：从 GUI（无控制台进程）里被调用时，
+# 裸调 subprocess 会让子进程各自弹一个黑色 cmd 框（见 proc_util）。
+from proc_util import popen_hidden, run_hidden
 
 # 桌面快捷方式候选名称（文件名包含其一即视为匹配）
 SHORTCUT_KEYWORDS = ["剑与远征", "启程", "afk", "afkj"]
@@ -62,7 +65,7 @@ def read_shortcut(lnk_path):
         "Write-Output ('ARGS=' + $s.Arguments);"
         "Write-Output ('WORKDIR=' + $s.WorkingDirectory);"
     )
-    proc = subprocess.run(
+    proc = run_hidden(
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
         capture_output=True,
         text=True,
@@ -98,7 +101,7 @@ def launch_game():
 
     cmd = [target] + (shlex.split(args) if args else [])
     try:
-        subprocess.Popen(cmd, cwd=workdir or None)
+        popen_hidden(cmd, cwd=workdir or None)
         print("已发送游戏启动命令。")
         return target
     except (OSError, ValueError) as e:
@@ -116,7 +119,7 @@ def launch_bot():
         return
     python = sys.executable
     print(f"启动脚本(GUI): {python} {bot_entry}")
-    subprocess.Popen([python, bot_entry])
+    popen_hidden([python, bot_entry])
 
 
 def main():

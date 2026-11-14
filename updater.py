@@ -16,6 +16,9 @@ import shutil
 import sys
 import urllib.request
 
+# update.bat 由 cmd 执行：GUI 子系统没有控制台，直接 startfile 会亮出一个黑色
+# cmd 窗口并停几秒（替换 exe 期间用户正好盯着屏幕），统一走隐藏封装。
+from proc_util import popen_hidden
 from version import __version__
 
 # 本 fork 的 Release 源；上游 yangyh02 的版本不含本仓库增强，不能作为更新来源。
@@ -156,5 +159,5 @@ def install_and_restart(new_path):
         f.write('del "%~f0"\n')
         f.write("exit /b 1\n")
 
-    os.startfile(bat_path)
+    popen_hidden(["cmd", "/c", bat_path])
     sys.exit(0)

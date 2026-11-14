@@ -12,7 +12,6 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 tk = pytest.importorskip("tkinter")
-ttk = pytest.importorskip("tkinter.ttk")
 
 import bot_runtime
 import Goldenhandmaidens as gui
@@ -54,28 +53,33 @@ def _select_hongbao(app):
     return index
 
 
+def _claim_boxes(app):
+    """9 个子项开关：勾选控件自绘（见 _ToggleBox），按标签文字取回。"""
+    return {
+        widget.label_text: widget for widget in app.param_frame.winfo_children()
+        if getattr(widget, "label_text", None)
+    }
+
+
 def test_hongbao_panel_has_nine_checkboxes_default_true(app):
     _select_hongbao(app)
 
     assert set(app.hongbao_claim_vars) == set(CLAIM_KEYS)
     assert all(var.get() is True for var in app.hongbao_claim_vars.values())
 
-    checkbuttons = [
-        widget for widget in app.param_frame.winfo_children()
-        if isinstance(widget, ttk.Checkbutton)
-    ]
-    assert len(checkbuttons) == 9
+    boxes = _claim_boxes(app)
+    assert set(boxes) == {
+        "每日任务", "公会任务", "成长挑战", "赛季任务", "家园目标",
+        "赛季手册", "月桂之旅", "赛季挂机关卡", "公会征伐",
+    }, "9 个子项必须都在面板上，否则用户没法单独关闭某一项"
+    assert all(box.variable.get() is True for box in boxes.values())
 
 
 def test_toggling_claim_guild_writes_back_and_persists(app):
     index = _select_hongbao(app)
     script = app.scripts[index]
 
-    guild_checkbox = next(
-        widget for widget in app.param_frame.winfo_children()
-        if isinstance(widget, ttk.Checkbutton) and widget.cget("text") == "公会任务"
-    )
-    guild_checkbox.invoke()  # 模拟用户取消勾选，走真实 command 链路
+    _claim_boxes(app)["公会任务"].toggle()  # 模拟用户取消勾选，走真实 command 链路
 
     assert app.hongbao_claim_vars["claim_guild"].get() is False
     assert script.params["claim_guild"] is False

@@ -24,6 +24,10 @@ import time
 from collections import OrderedDict, deque
 from ctypes import wintypes
 
+# 子进程一律走「隐藏控制台」封装：本进程是 GUI 子系统（无控制台），裸调
+# tasklist / taskkill / powershell 都会各自新建一个黑色 cmd 窗口，见 proc_util。
+from proc_util import run_hidden
+
 # 名称映射表已抽到 template_names（纯数据模块）；这里 re-export，保持
 # 全仓 `from common import display_name / TEMPLATE_CN` 的导入方式不变。
 from template_names import (  # noqa: F401
@@ -1307,7 +1311,7 @@ def _ahk_script_running():
     查一次命令行（仅启动时调用，开销可接受）；查询失败时保守认为在运行。
     """
     try:
-        result = subprocess.run(
+        result = run_hidden(
             ["powershell", "-NoProfile", "-Command",
              ("Get-CimInstance Win32_Process -Filter \"Name='AutoHotkey64.exe'\" "
               "| Select-Object -ExpandProperty CommandLine")],
@@ -1328,8 +1332,8 @@ def clicker_process_alive():
     try:
         # 不用 text=True：中文 Windows 上 tasklist 输出 GBK，UTF-8 解码会抛错并让
         # stdout 变成 None（2026-11-08 实机踩过）。进程名是 ASCII，直接比对 bytes。
-        result = subprocess.run(["tasklist", "/NH"], capture_output=True,
-                                timeout=3, check=False)
+        result = run_hidden(["tasklist", "/NH"], capture_output=True,
+                            timeout=3, check=False)
     except (OSError, subprocess.SubprocessError):
         # 探测本身失败时按存活处理，交给 send_coord 判定，避免误中止整轮任务
         return True
@@ -1407,8 +1411,8 @@ def game_window_session_id():
 def _clicker_session_ids():
     """列出所有在跑的点击注入器进程的会话 ID。"""
     try:
-        result = subprocess.run(["tasklist", "/NH"], capture_output=True,
-                                timeout=3, check=False)
+        result = run_hidden(["tasklist", "/NH"], capture_output=True,
+                            timeout=3, check=False)
     except (OSError, subprocess.SubprocessError):
         return []
     out = result.stdout or b""
@@ -1420,8 +1424,8 @@ def _clicker_session_ids():
     sids = []
     for name in names:
         try:
-            listing = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {name}", "/FO", "CSV", "/NH"],
-                                     capture_output=True, timeout=3, check=False)
+            listing = run_hidden(["tasklist", "/FI", f"IMAGENAME eq {name}", "/FO", "CSV", "/NH"],
+                                 capture_output=True, timeout=3, check=False)
         except (OSError, subprocess.SubprocessError):
             continue
         # 逐行解析 "名字","PID","会话名","会话号","内存"

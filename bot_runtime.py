@@ -9,7 +9,6 @@ import ctypes
 import json
 import os
 import shlex
-import subprocess
 import sys
 import threading
 import time
@@ -17,6 +16,10 @@ from ctypes import wintypes
 
 import log_format
 from common import get_work_path
+
+# 读快捷方式要起 powershell、拉游戏要起目标 exe：GUI 子系统没有控制台，
+# 裸调都会弹黑框，统一走隐藏封装（见 proc_util）。
+from proc_util import popen_hidden, run_hidden
 
 
 class _LineBuffer:
@@ -255,7 +258,7 @@ def read_game_shortcut(lnk_path):
         "Write-Output ('ARGS=' + $s.Arguments);"
         "Write-Output ('WORKDIR=' + $s.WorkingDirectory);"
     )
-    proc = subprocess.run(
+    proc = run_hidden(
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
         capture_output=True, text=True, encoding="utf-8", errors="ignore", check=False,
     )
@@ -282,7 +285,7 @@ def launch_game_by_shortcut():
         cmd = [target] + (shlex.split(args) if args else [])
         # UWP / 微信小游戏等目标无法直接 Popen，回退到下方系统打开
         with contextlib.suppress(Exception):
-            subprocess.Popen(cmd, cwd=workdir or None)
+            popen_hidden(cmd, cwd=workdir or None)
             return True, f"已按快捷方式启动游戏: {target}"
     # 回退：交给 Windows 外壳解析 .lnk（兼容 UWP / WeGame / 应用商店版本）
     try:

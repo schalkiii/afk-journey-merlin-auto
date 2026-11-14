@@ -15,8 +15,8 @@
 | `script_order` | array[string] | `[]` | 用户拖拽后的执行顺序（任务名列表）；重启时按此排序，未列入的新功能补到末尾。列表顺序即执行顺序，没有第二份硬编码顺序表 |
 | `auto_configure_lineup` | bool | 见 GUI 控制栏 | 挑战前自动采用「通关阵容」 |
 | `auto_start_on_launch` | bool | `false` | 程序启动后立即开始运行 |
-| `launch_game_on_open` | bool | 见 GUI 控制栏 | 定时/立即开始时先启动游戏 |
-| `game_launch_delay` | int | `15` | 启动游戏后等待的秒数 |
+| `launch_game_on_open` | bool | 见 GUI 控制栏 | 定时到点或点「启动游戏并运行」时先启动游戏 |
+| `game_launch_delay` | int | `20` | 启动游戏后等待的秒数（之后还会等界面真正就绪，见 `wait_for_game_ready`） |
 | `schedule_time` | string | `""` | 定时开始，格式 `HH:MM`；解析失败时忽略，不中断启动 |
 | `remote_desktop_compat` | bool | 见 GUI 控制栏 | 后台截图 + 点击前自动激活游戏窗口 |
 | `restore_cursor_after_click` | bool | 见 GUI 控制栏 | 每次注入点击后把光标放回原处 |

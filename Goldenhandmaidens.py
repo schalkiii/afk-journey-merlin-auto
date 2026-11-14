@@ -3,8 +3,8 @@
 职责概览：
 - 提供 tkinter 界面，勾选/配置每日任务并一键运行。
 - 单一「开始运行 (F8) / 停止运行 (F9)」总开关，避免多停止按钮的混乱。
-- 支持「立即开始」（启动游戏 + 运行脚本）与「定时开始」（每天循环，触发时
-  自动检测游戏是否已运行，已运行则直接运行脚本）。
+- 支持「启动游戏并运行」（按快捷方式拉起游戏后运行脚本）与「定时开始」（每天循环，
+  触发时自动检测游戏是否已运行，已运行则直接运行脚本）。
 - 通过全局热键 F8/F9 控制运行；所有设置持久化到 game_bot_config.json。
 - 脚本运行前自动将游戏窗口切换到前台（模板匹配依赖前台截图）。
 
@@ -63,6 +63,10 @@ from hero_metadata import (
     PUSH_COMMON_HEROES,
     RACE_NAMES,
 )
+
+# 注入器拉起 / tasklist / taskkill 都走隐藏封装：本进程是 GUI 子系统（无控制台），
+# 裸调控制台子程序会各自弹一个黑色 cmd 框（见 proc_util）。
+from proc_util import popen_hidden, run_hidden
 from version import __version__
 from warehouse import ALL_HERO_NAMES, WAREHOUSE_TXT_PATH
 
@@ -88,8 +92,129 @@ STATUS_COLORS = {
     "错误": ("#C62828", "white", "错误"),
     "已停止": ("#616161", "white", "停止"),
 }
-# 就绪（还没跑过）不抢视线：底色接近面板、文字留空
-STATUS_NEUTRAL = ("#ECEFF1", "#90A4AE", "")
+# 就绪（还没跑过）不抢视线：底色几乎与卡片同色，只占位不显形——
+# 用灰色块会被误读成「一个禁用的输入框」，留白反而更干净
+STATUS_NEUTRAL = ("#F4F7FA", "#F4F7FA", "")
+
+# ===== 配色 =====
+# 统一走 clam 主题：它是内置主题里唯一真正响应 background / bordercolor 的
+# （vista 主题会忽略 ttk 的 background，这正是当初状态色只能靠 tk.Label 绕开的原因）。
+# 页面底色只在大块留白处露出，所有分区都是白卡片，因此 ttk 控件的默认底色可以
+# 统一设成卡片白，不必给每个控件单独指定 style。
+COLOR_PAGE = "#EDF1F6"
+COLOR_CARD = "#FFFFFF"
+COLOR_BORDER = "#D6DDE6"
+COLOR_TEXT = "#1F2933"
+COLOR_MUTED = "#6B7A8C"
+COLOR_ACCENT = "#2563EB"
+COLOR_ACCENT_DARK = "#1D4ED8"
+COLOR_DANGER = "#B91C1C"
+COLOR_DANGER_DARK = "#991B1B"
+COLOR_SELECTED = "#E8F0FE"
+COLOR_BORDER_STRONG = "#9AA7B6"
+# 定时横幅：琥珀底 + 深棕字，与蓝/灰主色刻意区分，扫一眼就知道「定时是开着的」
+COLOR_BANNER_BG = "#FFF4CE"
+COLOR_BANNER_BG_PULSE = "#FFD54F"
+COLOR_BANNER_TEXT = "#5C4400"
+COLOR_BANNER_BORDER = "#E0A800"
+COLOR_LOG_BG = "#FBFCFD"
+
+
+class _FlowRow:
+    """一组控件按可用宽度自动折行的容器。
+
+    用户反馈「面板拖小以后，设定定时就跑出可视区看不见了」：原来是 pack(side=LEFT)
+    把选项、定时、状态全挤在一行，pack 不折行，窗口一窄右侧就被裁掉。grid 同样不
+    折行，只能在 <Configure> 里按请求宽度重排行号。宽度够时仍是一行，变窄才下移，
+    所以既保留了大窗口下的紧凑，又保证任何宽度下都不会有控件消失。
+
+    只在**宽度变化**时重排：折行会改变自身请求高度，若跟着高度回调再重排会自激。
+    """
+
+    def __init__(self, parent, gap=10):
+        self.frame = ttk.Frame(parent, style="Card.TFrame")
+        self.gap = gap
+        self.items = []
+        self._last_width = -1
+        self.frame.bind("<Configure>", self._on_configure)
+
+    def add(self, widget):
+        """把一个已创建（但还没布局）的控件纳入折行管理。
+
+        先按「一行」放好再等 <Configure> 校正：窗口首帧、以及不显示窗口的场景
+        （测试里 root 是 withdraw 的）都不会收到 Configure，只靠回调会出现
+        「控件已创建但从未被布局」的空档。
+        """
+        widget.grid(row=0, column=len(self.items), sticky=tk.W,
+                    padx=(0, self.gap), pady=2)
+        self.items.append(widget)
+        return widget
+
+    def _on_configure(self, event):
+        if abs(event.width - self._last_width) < 4:
+            return
+        self._last_width = event.width
+        self.reflow(event.width)
+
+    def reflow(self, width):
+        row = col = 0
+        used = 0
+        for widget in self.items:
+            need = widget.winfo_reqwidth() + self.gap
+            if used and used + need > width:
+                row += 1
+                col = 0
+                used = 0
+            widget.grid(row=row, column=col, sticky=tk.W,
+                        padx=(0, self.gap), pady=2)
+            used += need
+            col += 1
+
+
+class _ToggleBox(tk.Canvas):
+    """自绘勾选指示器：方框 + 对勾，勾上时换成强调蓝。
+
+    为什么不用现成控件（2026-11-14 把控件放大 6 倍实测确认）：
+    - clam 主题的 ttk 勾选标记画的是一个 **✗**，「已勾选」看起来像「禁用 / 出错」；
+    - 经典 tk.Checkbutton 在本机 Tk 8.6 上只填 selectcolor，干脆不画对勾。
+
+    自己画 16×16 方框 + 两段折线对勾，尺寸、配色、hover 全部可控，也不依赖字体里
+    有没有 ☑ 这类符号。
+    """
+
+    SIZE = 16
+
+    def __init__(self, parent, variable, command=None, takefocus=1):
+        super().__init__(parent, width=self.SIZE, height=self.SIZE, bg=COLOR_CARD,
+                         highlightthickness=0, borderwidth=0,
+                         takefocus=takefocus, cursor="hand2")
+        self.variable = variable
+        self.command = command
+        self._box = self.create_rectangle(
+            1, 1, self.SIZE - 1, self.SIZE - 1, width=1,
+            outline=COLOR_BORDER_STRONG, fill=COLOR_CARD)
+        self._tick = self.create_line(4, 8, 7, 11, 12, 5, fill="white", width=2,
+                                      capstyle=tk.ROUND, joinstyle=tk.ROUND,
+                                      state=tk.HIDDEN)
+        self.bind("<Button-1>", self.toggle)
+        self.bind("<space>", self.toggle)
+        # 变量被别处改写（update_dashboard_buttons 复位勾选、一键全选等）时同步重绘
+        self.variable.trace_add("write", lambda *_: self._refresh())
+        self._refresh()
+
+    def toggle(self, _event=None):
+        """切换勾选状态并回调；点方框与点文字走同一条路径。"""
+        self.variable.set(not bool(self.variable.get()))
+        if self.command is not None:
+            self.command()
+
+    def _refresh(self):
+        on = bool(self.variable.get())
+        self.itemconfigure(self._box,
+                           fill=COLOR_ACCENT if on else COLOR_CARD,
+                           outline=COLOR_ACCENT if on else COLOR_BORDER_STRONG)
+        self.itemconfigure(self._tick, state=tk.NORMAL if on else tk.HIDDEN)
+
 
 # 全局热键延后注册：keyboard 的导入 + add_hotkey 会让 `import Goldenhandmaidens`
 # 之后的构造阶段多花约 0.15s，而这部分是阻塞启动的来源。把注册挪到首帧之后的
@@ -104,13 +229,19 @@ class GameBotGUI:
         set_file_write_error_callback(self._schedule_file_write_error)
         self.root.title("梅林初号机")
         self.root.geometry("1200x880")
-        self.root.minsize(1024, 640)
-        
-        # 全局默认字体
-        style = ttk.Style()
-        style.configure(".", font=("Microsoft YaHei", 9))
+        # 最小尺寸按「最窄时仍不裁掉任何控件」定：控制栏三行各自的最宽项加起来约
+        # 830px（老版本 1024×640 仍会把定时块挤出可视区），竖向则靠可滚动的配置区
+        # 与可拖动分栏兜住，不必再留 640 的高度下限。
+        self.root.minsize(880, 560)
+
+        # 主题与字体必须先于所有控件创建：style 改了以后已存在的控件不会自动重绘
+        self._setup_theme()
 
         self.is_running = False
+        # 当前任务名单独存一份：标题栏要同时表达「运行到哪」与「定时是否生效」
+        self._current_task_name = "无"
+        # 所有可纵向滚动的 canvas，滚轮事件按指针位置就近派发（见 _on_mousewheel）
+        self._scroll_canvases = []
         self.current_script_index = 0
         self.stop_event = threading.Event()
         # 热键注册被延后到首帧之后，注册前 _unregister_hotkeys 也可能被调用
@@ -274,186 +405,385 @@ class GameBotGUI:
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
     
+    def _setup_theme(self):
+        """统一主题与配色：clam + 一套浅色卡片风格。
+
+        为什么换 clam：vista 主题会忽略 ttk 控件的 background / bordercolor，能调的只有
+        字体和 padding，界面永远是系统灰；状态色也只能靠 tk.Label 绕开（见 STATUS_COLORS）。
+        clam 能真正吃下配色，代价是要把默认样式铺一遍——一次性成本换统一观感。
+
+        默认底色设成卡片白：所有分区都是白卡片，浅灰只作为页面留白露出，这样不必给
+        每个控件单独挂 style，也就不会出现「某处忘设背景变成系统灰」的斑块。
+        """
+        style = ttk.Style(self.root)
+        with contextlib.suppress(tk.TclError):
+            style.theme_use("clam")
+
+        self.root.configure(bg=COLOR_PAGE)
+        base_font = ("Microsoft YaHei UI", 9)
+
+        style.configure(".", font=base_font, background=COLOR_CARD, foreground=COLOR_TEXT)
+        style.configure("TFrame", background=COLOR_CARD)
+        style.configure("Page.TFrame", background=COLOR_PAGE)
+        style.configure("Card.TFrame", background=COLOR_CARD)
+        style.configure("TPanedwindow", background=COLOR_PAGE)
+
+        style.configure("TLabel", background=COLOR_CARD, foreground=COLOR_TEXT)
+        style.configure("Muted.TLabel", background=COLOR_CARD, foreground=COLOR_MUTED)
+        style.configure("Title.TLabel", background=COLOR_CARD,
+                        font=("Microsoft YaHei UI", 12, "bold"))
+        style.configure("Task.TLabel", background=COLOR_CARD, foreground=COLOR_ACCENT,
+                        font=("Microsoft YaHei UI", 10, "bold"))
+
+        style.configure("TLabelframe", background=COLOR_CARD, bordercolor=COLOR_BORDER,
+                        relief="solid", borderwidth=1)
+        style.configure("TLabelframe.Label", background=COLOR_CARD,
+                        foreground=COLOR_MUTED, font=("Microsoft YaHei UI", 9, "bold"))
+
+        style.configure("TCheckbutton", background=COLOR_CARD, foreground=COLOR_TEXT)
+        style.map("TCheckbutton", background=[("active", COLOR_CARD)])
+        # 单选项：clam 默认的未选态是一个蓝点，和「选中」几乎分不清；把指示器底改白、
+        # 圆点用强调蓝，才能一眼看出哪个被选中（勾选项已改自绘，见 _ToggleBox）
+        style.configure("App.TRadiobutton", background=COLOR_CARD, foreground=COLOR_TEXT,
+                        indicatorbackground="white", indicatorforeground=COLOR_ACCENT,
+                        upperbordercolor=COLOR_BORDER_STRONG,
+                        lowerbordercolor=COLOR_BORDER_STRONG,
+                        indicatorsize=12, indicatormargin=(0, 0, 6, 0))
+        style.map("App.TRadiobutton", background=[("active", COLOR_CARD)])
+
+        style.configure("TButton", padding=(10, 4), background="#F7F9FC",
+                        bordercolor=COLOR_BORDER, relief="flat")
+        style.map("TButton",
+                  background=[("pressed", "#DCE5F2"), ("active", "#E8EEF9")],
+                  foreground=[("disabled", "#A7B1BD")])
+        # 主操作实心蓝、停止态实心红（update_master_button 里切 style），
+        # 「启动游戏并运行」用白底蓝边的次一级样式，两个入口一眼分得清主次。
+        style.configure("Accent.TButton", padding=(12, 5), background=COLOR_ACCENT,
+                        foreground="white", bordercolor=COLOR_ACCENT_DARK)
+        style.map("Accent.TButton",
+                  background=[("pressed", "#1E40AF"), ("active", COLOR_ACCENT_DARK),
+                              ("disabled", "#9BB4E8")],
+                  foreground=[("disabled", "#F0F4FF")])
+        style.configure("Danger.TButton", padding=(12, 5), background=COLOR_DANGER,
+                        foreground="white", bordercolor=COLOR_DANGER_DARK)
+        style.map("Danger.TButton",
+                  background=[("pressed", "#7F1D1D"), ("active", COLOR_DANGER_DARK)])
+        style.configure("Outline.TButton", padding=(12, 5), background=COLOR_CARD,
+                        foreground=COLOR_ACCENT, bordercolor=COLOR_ACCENT)
+        style.map("Outline.TButton",
+                  background=[("pressed", "#DCE8FD"), ("active", "#EAF1FE")])
+        # 左侧当前选中行：淡蓝底 + 蓝字，替代原来「按下态」的系统灰
+        style.configure("Selected.TButton", background=COLOR_SELECTED,
+                        foreground=COLOR_ACCENT_DARK, bordercolor=COLOR_ACCENT)
+
+        style.configure("TSpinbox", fieldbackground="white", bordercolor=COLOR_BORDER,
+                        arrowcolor=COLOR_MUTED, padding=(4, 2))
+        style.configure("TCombobox", fieldbackground="white", bordercolor=COLOR_BORDER)
+        style.configure("TScrollbar", background="#C7D2DE", troughcolor=COLOR_PAGE,
+                        bordercolor=COLOR_PAGE, arrowcolor=COLOR_MUTED)
+        style.configure("TSeparator", background=COLOR_BORDER)
+
     def setup_ui(self):
-        main_frame = ttk.Frame(self.root, padding="10")
+        """页面骨架：控制栏 → 定时横幅 → 主体（功能/配置 + 日志分栏）。
+
+        三行都用 grid + 权重：窗口变大只有主体跟着长；窗口变小时控制栏保持原高，
+        主体内部各自滚动，不会再把控制栏或定时块挤出可视区（用户反馈的根因）。
+        """
+        main_frame = ttk.Frame(self.root, padding=10, style="Page.TFrame")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
+
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(1, weight=1)
-        main_frame.rowconfigure(2, weight=0)
-        
-        self.create_control_bar(main_frame)
-        self.create_dashboard(main_frame)
-        self.create_script_panel(main_frame)
-        self.create_log_panel(main_frame)
-        
+        main_frame.columnconfigure(0, weight=1)
+        main_frame.rowconfigure(2, weight=1)
+
+        self.create_control_bar(main_frame)      # row 0
+        self.create_schedule_banner(main_frame)  # row 1（未设定定时时整条隐藏）
+        self.create_work_area(main_frame)        # row 2
+
+        # 滚轮在根窗口统一监听一次，按指针位置派发给最近的滚动容器（见 _on_mousewheel）
+        self.root.bind_all("<MouseWheel>", self._on_mousewheel)
+
+    def create_work_area(self, parent):
+        """主体：上半「功能 + 配置」，下半「运行日志」，中间可拖动分隔。
+
+        用可拖动分栏替代固定行高：小窗口下用户能自己决定把高度让给配置还是日志，
+        两半内部都带滚动条，任何窗口高度下都不会有内容永远看不到。
+        """
+        paned = ttk.PanedWindow(parent, orient=tk.VERTICAL)
+        paned.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        self.work_paned = paned
+
+        top = ttk.Frame(paned, style="Page.TFrame")
+        top.columnconfigure(0, weight=0)   # 功能列表按内容定宽
+        top.columnconfigure(1, weight=1)   # 配置面板吃掉多余宽度
+        top.rowconfigure(0, weight=1)
+        paned.add(top, weight=3)           # 多出来的高度按 3:2 分给上下两栏
+
+        self.create_dashboard(top)
+        self.create_script_panel(top)
+
+        self.log_panel = self.create_log_panel(paned)
+        paned.add(self.log_panel, weight=2)
+
+    def create_schedule_banner(self, parent):
+        """定时已生效时的常驻醒目横幅。
+
+        旧实现只有一行蓝色小字「已定时 08:00 倒计时 …」，混在一堆选项里根本注意不到；
+        而「以为没设定定时 → 到点游戏被莫名拉起」的代价很高。现在改成整条高对比横幅：
+        琥珀底 + 深棕加粗字 + 图标，设定瞬间还会闪几下抓视线，并自带「取消定时」。
+        用经典 tk 控件实现：主题可能忽略 ttk 的 background，横幅必须在任何主题下都染色。
+        """
+        self.schedule_banner_var = tk.StringVar(value="")
+        banner = tk.Frame(parent, bg=COLOR_BANNER_BG,
+                          highlightbackground=COLOR_BANNER_BORDER, highlightthickness=1)
+        banner.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        banner.columnconfigure(1, weight=1)
+        self.schedule_banner = banner
+
+        self.schedule_banner_icon = tk.Label(
+            banner, text="⏰", bg=COLOR_BANNER_BG, fg=COLOR_BANNER_BORDER,
+            font=("Segoe UI Emoji", 14))
+        self.schedule_banner_icon.grid(row=0, column=0, padx=(12, 8), pady=7)
+
+        self.schedule_banner_label = tk.Label(
+            banner, textvariable=self.schedule_banner_var, bg=COLOR_BANNER_BG,
+            fg=COLOR_BANNER_TEXT, font=("Microsoft YaHei UI", 10, "bold"),
+            anchor="w", justify=tk.LEFT)
+        self.schedule_banner_label.grid(row=0, column=1, sticky=(tk.W, tk.E), pady=7)
+
+        self.banner_cancel_btn = ttk.Button(
+            banner, text="取消定时", command=self.cancel_schedule)
+        self.banner_cancel_btn.grid(row=0, column=2, padx=(8, 12), pady=6)
+        # 对外统一用这一个名字：控制栏不再放第二个「取消定时」，避免同名按钮两处都亮
+        self.sched_cancel_btn = self.banner_cancel_btn
+
+        banner.grid_remove()   # 未设定定时时整条不占位置
+
+    def _make_vertical_scroll_area(self, parent):
+        """在 parent 内造一个可纵向滚动的容器，返回内部 Frame。
+
+        配置区高度随功能变化（红点领取 9 个子项、仓库管理还带英雄列表），小窗口下
+        若直接 grid 就会被裁掉且没有滚动条——正是用户说的「元素看不到了」。这里统一
+        包一层 canvas + 滚动条，内容再高也能滚到。
+        """
+        canvas = tk.Canvas(parent, highlightthickness=0, borderwidth=0,
+                           background=COLOR_CARD)
+        scrollbar = ttk.Scrollbar(parent, orient=tk.VERTICAL, command=canvas.yview)
+        inner = ttk.Frame(canvas, style="Card.TFrame")
+
+        window_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+        inner.bind("<Configure>",
+                   lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        # 内容宽度跟随可视宽度：否则标签/输入框按自身请求宽度排布，右侧被裁
+        canvas.bind("<Configure>",
+                    lambda e: canvas.itemconfigure(window_id, width=e.width))
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(0, weight=1)
+
+        self._scroll_canvases.append(canvas)
+        return inner
+
+    def _nearest_scroll_canvas(self, widget):
+        """从指针下的控件往上找最近的滚动容器；找不到返回 None。"""
+        while widget is not None:
+            if widget in self._scroll_canvases:
+                return widget
+            widget = getattr(widget, "master", None)
+        return None
+
+    def _on_mousewheel(self, event):
+        """滚轮统一派发：只滚「鼠标所在的那个滚动区」。
+
+        嵌套滚动区（配置面板里的仓库英雄列表）如果各自 bind_all("<MouseWheel>")，
+        进内层会顶掉外层的绑定、离开内层又不会恢复，滚轮直接失效。改成根窗口监听一次，
+        按指针位置就近决定滚谁，嵌套关系自然正确。
+        """
+        canvas = self._nearest_scroll_canvas(
+            self.root.winfo_containing(event.x_root, event.y_root))
+        if canvas is None:
+            return
+        canvas.yview_scroll(int(-event.delta / 120), "units")
+
+    @staticmethod
+    def _checkbutton(parent, text, variable, command=None, takefocus=1):
+        """勾选项 = 自绘指示器 + 可点文字，返回一个 Frame（直接 pack/grid 即可）。
+
+        点方框与点文字等价（两条路径都是常规操作），键盘用空格切换。
+        统一从这里创建，避免仓里出现「✗ 样式」和「原生方框」两种外观。
+        """
+        frame = tk.Frame(parent, bg=COLOR_CARD, cursor="hand2")
+        box = _ToggleBox(frame, variable, command=command, takefocus=takefocus)
+        box.pack(side=tk.LEFT, padx=(0, 6) if text else 0)
+        if text:
+            label = tk.Label(frame, text=text, bg=COLOR_CARD, fg=COLOR_TEXT,
+                             font=("Microsoft YaHei UI", 9), cursor="hand2")
+            label.pack(side=tk.LEFT)
+            label.bind("<Button-1>", box.toggle)
+        # 对外暴露统一入口：调用方与用例都用 frame.toggle() 触发，不必知道内部结构
+        frame.toggle = box.toggle
+        frame.variable = variable
+        frame.label_text = text
+        return frame
+
+    @staticmethod
+    def _radiobutton(parent, text, variable, value, command=None):
+        """单选项：ttk + 调过色的 App.TRadiobutton（选中蓝点 / 未选空圈）。"""
+        return ttk.Radiobutton(parent, text=text, variable=variable, value=value,
+                               command=command, style="App.TRadiobutton")
+
     def create_control_bar(self, parent):
-        control_frame = ttk.Frame(parent, padding="10")
-        control_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
-        
-        # 第一行：主要操作
-        top_frame = ttk.Frame(control_frame)
-        top_frame.pack(fill=tk.X)
+        """控制栏：主操作 / 选项 / 定时 三层各自独立成行。
+
+        之前三组控件混在同一个 pack 流里，pack 不折行，窗口一窄右侧的「设定定时」
+        直接被裁到可视区外。现在每层是独立一行，选项与定时两层还会按可用宽度自动
+        折行（见 _FlowRow），任何宽度下都不会有控件消失。
+        """
+        card = ttk.Frame(parent, padding=(12, 10), style="Card.TFrame")
+        card.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        card.columnconfigure(0, weight=1)
+        self.control_card = card
+
+        # ---- 第一层：主操作（左）+ 状态信息（右）----
+        top = ttk.Frame(card, style="Card.TFrame")
+        top.grid(row=0, column=0, sticky=(tk.W, tk.E))
+        top.columnconfigure(2, weight=1)   # 弹性留白，把右侧信息推到最右
 
         self.master_switch_btn = ttk.Button(
-            top_frame,
-            text="开始运行 (F8)",
-            command=self.toggle_master_switch
-        )
-        self.master_switch_btn.pack(side=tk.LEFT, padx=5)
+            top, text="开始运行 (F8)", style="Accent.TButton",
+            command=self.toggle_master_switch)
+        self.master_switch_btn.grid(row=0, column=0, sticky=tk.W)
 
+        # 冷启动的一键入口：拉起游戏 → 等画面就绪 → 必要时补登录 → 跑任务列表
         self.immediate_btn = ttk.Button(
-            top_frame, text="立即开始", command=self.launch_game_then_start
-        )
-        self.immediate_btn.pack(side=tk.LEFT, padx=5)
-
-        self.hotkey_hint = ttk.Label(
-            top_frame, text="F8 开始 / F9 停止", foreground="gray"
-        )
-        self.hotkey_hint.pack(side=tk.LEFT, padx=10)
-
-        self.version_label = ttk.Label(top_frame, text=__version__, foreground="gray")
-        self.version_label.pack(side=tk.RIGHT, padx=5)
+            top, text="启动游戏并运行", style="Outline.TButton",
+            command=self.launch_game_then_start)
+        self.immediate_btn.grid(row=0, column=1, sticky=tk.W, padx=(8, 0))
 
         self.current_task_var = tk.StringVar(value="当前任务: 无")
         self.current_task_label = ttk.Label(
-            top_frame, textvariable=self.current_task_var, foreground="blue"
-        )
-        self.current_task_label.pack(side=tk.RIGHT, padx=10)
+            top, textvariable=self.current_task_var, style="Task.TLabel")
+        self.current_task_label.grid(row=0, column=3, sticky=tk.E, padx=(0, 12))
 
         self.clear_log_btn = ttk.Button(
-            control_frame,
-            text="清空日志",
-            command=self.clear_log_file
-        )
-        self.clear_log_btn.pack(side=tk.LEFT, padx=5)
+            top, text="清空日志", command=self.clear_log_file)
+        self.clear_log_btn.grid(row=0, column=4, padx=(0, 6))
 
-        self.help_btn = ttk.Button(
-            control_frame,
-            text="帮助",
-            command=self.show_help_window
-        )
-        self.help_btn.pack(side=tk.LEFT, padx=5)
+        self.help_btn = ttk.Button(top, text="帮助", command=self.show_help_window)
+        self.help_btn.grid(row=0, column=5, padx=(0, 6))
 
-        self.sponsor_btn = ttk.Button(
-            control_frame,
-            text="赞助",
-            command=self.show_sponsor
-        )
-        self.sponsor_btn.pack(side=tk.LEFT, padx=5)
+        self.sponsor_btn = ttk.Button(top, text="赞助", command=self.show_sponsor)
+        self.sponsor_btn.grid(row=0, column=6, padx=(0, 12))
 
         self.update_btn = ttk.Button(
-            top_frame, text="检查更新", command=self._check_update_clicked
-        )
-        self.update_btn.pack(side=tk.RIGHT, padx=5)
+            top, text="检查更新", command=self._check_update_clicked)
+        self.update_btn.grid(row=0, column=7, padx=(0, 8))
 
-        # 第二行：选项 + 定时开始
-        opt_frame = ttk.Frame(control_frame)
-        opt_frame.pack(fill=tk.X, pady=(8, 0))
+        self.version_label = ttk.Label(top, text=__version__, style="Muted.TLabel")
+        self.version_label.grid(row=0, column=8, sticky=tk.E)
 
-        self.auto_start_check = ttk.Checkbutton(
-            opt_frame,
-            text="启动后自动运行",
-            variable=self.auto_start_var,
-            command=self.on_auto_start_changed
-        )
-        self.auto_start_check.pack(side=tk.LEFT, padx=5)
+        # ---- 第二层：运行选项（按宽度折行）----
+        options = _FlowRow(card)
+        options.frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(8, 0))
+        self._option_flow = options
 
-        self.launch_game_check = ttk.Checkbutton(
-            opt_frame,
-            text="启动时启动游戏",
-            variable=self.launch_game_var,
-            command=self.on_launch_game_changed
-        )
-        self.launch_game_check.pack(side=tk.LEFT, padx=5)
+        self.auto_start_check = self._checkbutton(
+            options.frame, text="启动后自动运行",
+            variable=self.auto_start_var, command=self.on_auto_start_changed)
+        options.add(self.auto_start_check)
 
-        self.auto_configure_lineup_check = ttk.Checkbutton(
-            opt_frame,
-            text="自动配置通关阵容",
+        self.launch_game_check = self._checkbutton(
+            options.frame, text="启动时启动游戏",
+            variable=self.launch_game_var, command=self.on_launch_game_changed)
+        options.add(self.launch_game_check)
+
+        self.auto_configure_lineup_check = self._checkbutton(
+            options.frame, text="自动配置通关阵容",
             variable=self.auto_configure_lineup_var,
-            command=self.on_auto_configure_changed
-        )
-        self.auto_configure_lineup_check.pack(side=tk.LEFT, padx=5)
+            command=self.on_auto_configure_changed)
+        options.add(self.auto_configure_lineup_check)
 
-        self.remote_desktop_check = ttk.Checkbutton(
-            opt_frame,
-            text="远程桌面兼容（后台截图+自动激活）",
+        self.remote_desktop_check = self._checkbutton(
+            options.frame, text="远程桌面兼容（后台截图+自动激活）",
             variable=self.remote_desktop_compat_var,
-            command=self.on_remote_desktop_changed
-        )
-        self.remote_desktop_check.pack(side=tk.LEFT, padx=5)
+            command=self.on_remote_desktop_changed)
+        options.add(self.remote_desktop_check)
 
-        self.restore_cursor_check = ttk.Checkbutton(
-            opt_frame,
-            text="点击后归还鼠标位置",
-            variable=self.restore_cursor_var,
-            command=self.on_restore_cursor_changed
-        )
-        self.restore_cursor_check.pack(side=tk.LEFT, padx=5)
+        self.restore_cursor_check = self._checkbutton(
+            options.frame, text="点击后归还鼠标位置",
+            variable=self.restore_cursor_var, command=self.on_restore_cursor_changed)
+        options.add(self.restore_cursor_check)
 
-        ttk.Label(opt_frame, text="游戏等待(s)").pack(side=tk.LEFT, padx=(10, 0))
+        # ---- 第三层：等待时长 + 定时（按宽度折行，「设定定时」永不掉出可视区）----
+        schedule = _FlowRow(card)
+        schedule.frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(6, 0))
+        self._schedule_flow = schedule
+
+        wait_group = ttk.Frame(schedule.frame, style="Card.TFrame")
+        ttk.Label(wait_group, text="游戏等待(秒)").pack(side=tk.LEFT, padx=(0, 4))
         self.game_wait_spin = ttk.Spinbox(
-            opt_frame,
-            from_=0, to=120, width=4,
-            textvariable=self.game_wait_var,
-            command=self.on_game_wait_changed
-        )
-        self.game_wait_spin.pack(side=tk.LEFT, padx=2)
-        # 手动输入（不仅是点击箭头）也要保存
+            wait_group, from_=0, to=120, width=4, textvariable=self.game_wait_var,
+            command=self.on_game_wait_changed)
+        self.game_wait_spin.pack(side=tk.LEFT)
+        # 手动输入（不仅是点箭头）也要保存
         self.game_wait_spin.bind("<KeyRelease>", lambda e: self.on_game_wait_changed())
         self.game_wait_spin.bind("<FocusOut>", lambda e: self._sync_game_wait_spin())
+        schedule.add(wait_group)
 
-        ttk.Label(opt_frame, text="  定时开始:").pack(side=tk.LEFT, padx=(10, 2))
+        # 时/分输入打包成一个折行单位，避免「时」「分」被单独折到下一行
+        time_group = ttk.Frame(schedule.frame, style="Card.TFrame")
+        ttk.Label(time_group, text="定时开始").pack(side=tk.LEFT, padx=(0, 6))
         self.sched_hour_spin = ttk.Spinbox(
-            opt_frame, from_=0, to=23, width=3,
-            textvariable=self.schedule_hour_var
-        )
-        self.sched_hour_spin.pack(side=tk.LEFT, padx=1)
-        ttk.Label(opt_frame, text="时").pack(side=tk.LEFT)
+            time_group, from_=0, to=23, width=3, textvariable=self.schedule_hour_var)
+        self.sched_hour_spin.pack(side=tk.LEFT)
+        ttk.Label(time_group, text="时").pack(side=tk.LEFT, padx=(2, 4))
         self.sched_min_spin = ttk.Spinbox(
-            opt_frame, from_=0, to=59, width=3,
-            textvariable=self.schedule_min_var
-        )
-        self.sched_min_spin.pack(side=tk.LEFT, padx=1)
-        ttk.Label(opt_frame, text="分").pack(side=tk.LEFT, padx=(0, 6))
+            time_group, from_=0, to=59, width=3, textvariable=self.schedule_min_var)
+        self.sched_min_spin.pack(side=tk.LEFT)
+        ttk.Label(time_group, text="分").pack(side=tk.LEFT, padx=(2, 0))
+        schedule.add(time_group)
 
         self.sched_set_btn = ttk.Button(
-            opt_frame, text="设定定时", command=self.set_schedule
-        )
-        self.sched_set_btn.pack(side=tk.LEFT, padx=3)
-        self.sched_cancel_btn = ttk.Button(
-            opt_frame, text="取消定时", command=self.cancel_schedule, state=tk.DISABLED
-        )
-        self.sched_cancel_btn.pack(side=tk.LEFT, padx=3)
+            schedule.frame, text="设定定时", command=self.set_schedule)
+        schedule.add(self.sched_set_btn)
 
-        self.schedule_status_label = ttk.Label(opt_frame, text="未设定定时", foreground="blue")
-        self.schedule_status_label.pack(side=tk.LEFT, padx=10)
+        # 这里只放短状态；倒计时等完整信息交给上方横幅，否则每秒变长的文字会把
+        # 这一行反复挤到折行。「取消定时」也只放在横幅里：定时生效时横幅必然在，
+        # 两处各放一个同名按钮既冗余又容易让人怀疑哪个才是真的。
+        self.schedule_status_label = ttk.Label(
+            schedule.frame, text="未设定定时", style="Muted.TLabel")
+        schedule.add(self.schedule_status_label)
 
     def create_dashboard(self, parent):
-        dashboard_frame = ttk.LabelFrame(parent, text="功能", padding="10")
-        dashboard_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 10))
-        
+        dashboard_frame = ttk.LabelFrame(parent, text="功能（拖名字可调整执行顺序）",
+                                         padding=(8, 6))
+        dashboard_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 10))
+
         # 添加滚动条
         # 宽度要容下一行的三段：勾选框 + 状态色块 + 名称按钮（原来只有按钮，150 够）
-        canvas = tk.Canvas(dashboard_frame, width=205, height=300)
+        canvas = tk.Canvas(dashboard_frame, width=205, height=300, highlightthickness=0,
+                           borderwidth=0, background=COLOR_CARD)
         scrollbar = ttk.Scrollbar(dashboard_frame, orient=tk.VERTICAL, command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas)
-        
+
         scrollable_frame.bind(
             "<Configure>",
             lambda e: canvas.configure(
                 scrollregion=canvas.bbox("all")
             )
         )
-        
+
         canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
-        
+
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
+        self._scroll_canvases.append(canvas)
+
         # 每行 = 启用勾选框 + 状态色块 + 名称按钮。启用状态直接在这一列勾选，
         # 不再放进右侧子页（原来「子页里一个开启勾选 + 列表 ✓ 前缀」是两份状态，
         # 用户看不出到底哪个算数）。拖拽仍然抓名称按钮，行 Frame 是 pack 单位。
@@ -463,14 +793,17 @@ class GameBotGUI:
         self.script_status_labels = []
         self.script_enabled_vars = []
         for i, script in enumerate(self.scripts):
-            row = tk.Frame(scrollable_frame)
+            row = tk.Frame(scrollable_frame, bg=COLOR_CARD)
             enabled_var = tk.BooleanVar(value=script.enabled)
-            check = tk.Checkbutton(
-                row, variable=enabled_var, width=2, takefocus=0,
+            # 不给 width：经典 Checkbutton 的 width 是「文本宽度」，留空时会把指示器
+            # 挤到框外裁掉（实测未勾选态只剩一个「└」角），让它按自身尺寸排布
+            check = self._checkbutton(
+                row, text="", variable=enabled_var, takefocus=0,
                 command=lambda idx=i, var=enabled_var: self.on_row_enabled_changed(idx, var)
             )
             check.pack(side=tk.LEFT)
-            status_label = tk.Label(row, width=4, font=("Microsoft YaHei", 9))
+            status_label = tk.Label(row, width=4, font=("Microsoft YaHei UI", 9),
+                                    bg=COLOR_CARD)
             status_label.pack(side=tk.LEFT, padx=(0, 4))
             btn = ttk.Button(
                 row,
@@ -479,7 +812,7 @@ class GameBotGUI:
                 command=lambda idx=i: self.select_script(idx)
             )
             btn.pack(side=tk.LEFT, fill=tk.X, expand=True)
-            row.pack(pady=4, fill=tk.X)
+            row.pack(pady=3, fill=tk.X)
             # 按住上下拖动即可调整执行顺序；command 在松开时也会触发，故用 _drag_moved 抑制误选
             btn.bind("<ButtonPress-1>", lambda event, b=btn: self._drag_begin(event, b))
             btn.bind("<B1-Motion>", lambda event, b=btn: self._drag_motion(event, b))
@@ -530,7 +863,7 @@ class GameBotGUI:
         for row in self.script_rows:
             row.pack_forget()
         for row in self.script_rows:
-            row.pack(pady=4, fill=tk.X)
+            row.pack(pady=3, fill=tk.X)
 
         # 按钮下标随重排变化，按名字找回当前选中项，避免面板显示到别的功能上
         self.current_script_index = next(
@@ -551,18 +884,24 @@ class GameBotGUI:
             self.root.after(0, self.update_script_panel)
         
     def create_script_panel(self, parent):
-        self.script_panel = ttk.LabelFrame(parent, text="配置", padding="10")
-        self.script_panel.grid(row=1, column=1, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        self.script_panel.columnconfigure(1, weight=1)
-        
-        self.script_name_label = ttk.Label(self.script_panel, text="", font=("Microsoft YaHei", 12, "bold"))
-        self.script_name_label.grid(row=0, column=0, columnspan=2, pady=(0, 10))
-        
+        self.script_panel = ttk.LabelFrame(parent, text="配置", padding=(10, 8))
+        self.script_panel.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N, tk.S))
+
+        # 参数区整体放进可滚动容器：红点领取 9 个子项、仓库管理还带英雄列表，
+        # 面板高度不够时直接 grid 会被裁掉且没有滚动条（用户反馈的「看不到」之一）。
+        body = self._make_vertical_scroll_area(self.script_panel)
+        self.script_panel_body = body
+        body.columnconfigure(1, weight=1)
+
+        self.script_name_label = ttk.Label(
+            body, text="", style="Title.TLabel")
+        self.script_name_label.grid(row=0, column=0, columnspan=2,
+                                    sticky=tk.W, pady=(0, 8))
+
         # 「开启」勾选框已移到左侧列表每行行首，子页不再重复放一份启用状态
         # 一键全选 / 全不选：每天启动后批量勾选 / 取消勾选所有功能脚本
-        select_btns = ttk.Frame(self.script_panel)
-        select_btns.grid(row=1, column=0, columnspan=2, sticky=tk.E, pady=5)
+        select_btns = ttk.Frame(body, style="Card.TFrame")
+        select_btns.grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=(0, 6))
         self.select_all_btn = ttk.Button(
             select_btns, text="一键全选", command=self.enable_all_scripts
         )
@@ -571,28 +910,33 @@ class GameBotGUI:
             select_btns, text="一键全不选", command=self.disable_all_scripts
         )
         self.deselect_all_btn.pack(side=tk.LEFT)
-        
-        self.param_frame = ttk.Frame(self.script_panel)
-        self.param_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+
+        self.param_frame = ttk.Frame(body, style="Card.TFrame")
+        self.param_frame.grid(row=2, column=0, columnspan=2,
+                              sticky=(tk.W, tk.E), pady=(0, 6))
 
         # 单独运行：只跑当前选中的这一个功能，便于逐项验证 / 补跑漏掉的一天
-        run_frame = ttk.Frame(self.script_panel)
-        run_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(5, 0))
+        run_frame = ttk.Frame(body, style="Card.TFrame")
+        run_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(4, 0))
         self.run_single_btn = ttk.Button(
             run_frame, text="只运行当前功能", command=self.run_single_script
         )
         self.run_single_btn.pack(side=tk.LEFT)
-        ttk.Label(run_frame, text="（忽略其它勾选）", foreground="gray").pack(side=tk.LEFT, padx=5)
+        ttk.Label(run_frame, text="（忽略其它勾选）",
+                  style="Muted.TLabel").pack(side=tk.LEFT, padx=5)
 
         self.update_script_panel()
-        
+
     def create_log_panel(self, parent):
-        log_frame = ttk.LabelFrame(parent, text="运行日志", padding="10")
-        log_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(10, 0))
+        """构建日志卡片并返回它（由 create_work_area 挂进竖向分栏）。"""
+        log_frame = ttk.LabelFrame(parent, text="运行日志", padding=(10, 8))
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
 
-        text = tk.Text(log_frame, wrap=tk.WORD, height=10, state=tk.DISABLED)
+        text = tk.Text(log_frame, wrap=tk.WORD, height=8, state=tk.DISABLED,
+                       bg=COLOR_LOG_BG, fg=COLOR_TEXT, relief="flat", borderwidth=0,
+                       padx=10, pady=8, insertbackground=COLOR_TEXT,
+                       font=("Microsoft YaHei UI", 9))
         text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
 
         scrollbar = ttk.Scrollbar(log_frame, orient=tk.VERTICAL, command=text.yview)
@@ -608,7 +952,8 @@ class GameBotGUI:
             text.configure(state=tk.DISABLED)
         self._log_buffer = []
         text.see(tk.END)
-        
+        return log_frame
+
     def show_log_window(self):
         if self.log_text is None:
             return
@@ -701,7 +1046,10 @@ class GameBotGUI:
         """刷新左侧列表：选中高亮、启用勾选状态、以及每行的状态色块。"""
         for index, script in enumerate(self.scripts):
             btn = self.script_buttons[index]
-            btn.state(['pressed'] if index == self.current_script_index else ['!pressed'])
+            # 选中态用专门样式（淡蓝底 + 蓝字），不再用系统「按下态」：clam 下 pressed
+            # 只是一层灰，和禁用态几乎分不出；样式切换在两种主题下都稳定可读。
+            btn.configure(style="Selected.TButton"
+                          if index == self.current_script_index else "TButton")
             # 名称不再加 ✓ 前缀：启用状态已由行首勾选框表达，两处各写一份迟早互相打脸
             btn.configure(text=script.name)
             self.script_enabled_vars[index].set(script.enabled)
@@ -749,6 +1097,11 @@ class GameBotGUI:
             self.create_warehouse_params(0)
         elif script.name == "红点领取":
             self.create_hongbao_params(script, 0)
+
+        if not self.param_frame.winfo_children():
+            # 大部分功能没有参数，空着会让人怀疑「是不是没加载出来」，补一句说明
+            ttk.Label(self.param_frame, text="该功能无需额外参数，勾选后按顺序执行",
+                      style="Muted.TLabel").grid(row=0, column=0, sticky=tk.W, pady=2)
             
     def create_mimengzhiyu_params(self, script, row=0):
         ttk.Label(self.param_frame, text="挑战次数:").grid(row=row, column=0, sticky=tk.W, pady=2)
@@ -774,7 +1127,7 @@ class GameBotGUI:
 
         # 进入迷梦后领取排行榜礼包（实测角标挂在右侧「排行榜」图标上）
         self.mimeng_claim_var = tk.BooleanVar(value=script.params.get("claim_reward", True))
-        ttk.Checkbutton(
+        self._checkbutton(
             self.param_frame,
             text="领取排行榜礼包",
             variable=self.mimeng_claim_var,
@@ -866,7 +1219,7 @@ class GameBotGUI:
                 script.params[k] = bool(v.get())
                 self.save_config()
 
-            ttk.Checkbutton(
+            self._checkbutton(
                 self.param_frame, text=label, variable=var, command=on_toggle
             ).grid(row=row + index // 2, column=index % 2, sticky=tk.W, pady=2)
 
@@ -876,7 +1229,7 @@ class GameBotGUI:
         # 跳过手动战斗
         skip_manual = push_settings.get("skip_manual", True)
         self.skip_manual_var = tk.BooleanVar(value=skip_manual)
-        ttk.Checkbutton(
+        self._checkbutton(
             self.param_frame,
             text="跳过手动战斗阵容",
             variable=self.skip_manual_var,
@@ -887,7 +1240,7 @@ class GameBotGUI:
         # 进入推图界面后领取「赛季阶段排名 → 首通」奖励（固定点位，带界面自证）
         claim_first_clear = push_settings.get("claim_first_clear", True)
         self.claim_first_clear_var = tk.BooleanVar(value=claim_first_clear)
-        ttk.Checkbutton(
+        self._checkbutton(
             self.param_frame,
             text="进入后领取赛季首通奖励",
             variable=self.claim_first_clear_var,
@@ -1001,7 +1354,7 @@ class GameBotGUI:
 
         # 仅显示常用
         self._common_only_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(filter_frame, text="仅常用", variable=self._common_only_var,
+        self._checkbutton(filter_frame, text="仅常用", variable=self._common_only_var,
                         command=self._apply_hero_filter).pack(side=tk.LEFT, padx=(0, 10))
 
         # 批量设置按钮
@@ -1010,7 +1363,8 @@ class GameBotGUI:
                        command=lambda l=level: self._set_all_hero_levels(l)).pack(side=tk.LEFT, padx=2)
 
         # === 可滚动英雄列表 ===
-        canvas = tk.Canvas(container, width=550, height=400, highlightthickness=0)
+        canvas = tk.Canvas(container, width=550, height=400, highlightthickness=0,
+                           borderwidth=0, background=COLOR_CARD)
         scrollbar = ttk.Scrollbar(container, orient=tk.VERTICAL, command=canvas.yview)
         self._hero_list_frame = ttk.Frame(canvas)
 
@@ -1019,13 +1373,11 @@ class GameBotGUI:
         canvas.create_window((0, 0), window=self._hero_list_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
 
-        def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
-        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
-
         canvas.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S))
         scrollbar.grid(row=1, column=2, sticky=(tk.N, tk.S))
+        # 滚轮交给根窗口的就近派发（_on_mousewheel）：这个列表嵌在配置面板的
+        # 滚动区里，各自 bind_all 会互相顶掉绑定。
+        self._scroll_canvases.append(canvas)
 
         container.rowconfigure(1, weight=1)
 
@@ -1043,7 +1395,7 @@ class GameBotGUI:
 
             ttk.Label(row_frame, text=HERO_CN_NAMES.get(hero_name, hero_name), width=8, anchor=tk.W).pack(side=tk.LEFT, padx=(0, 5))
             for lvl in LEVELS:
-                ttk.Radiobutton(row_frame, text=LEVEL_LABELS[lvl], variable=var, value=lvl,
+                self._radiobutton(row_frame, text=LEVEL_LABELS[lvl], variable=var, value=lvl,
                                 command=lambda n=hero_name: self._on_hero_level_change(n)
                                 ).pack(side=tk.LEFT, padx=2)
 
@@ -1163,8 +1515,8 @@ class GameBotGUI:
         self.mg_floors_var = tk.StringVar(value=floors)
         floor_frame = ttk.Frame(self.param_frame)
         floor_frame.grid(row=row, column=1, sticky=tk.W, pady=2)
-        ttk.Radiobutton(floor_frame, text="15层", variable=self.mg_floors_var, value="15").pack(side=tk.LEFT, padx=5)
-        ttk.Radiobutton(floor_frame, text="20层", variable=self.mg_floors_var, value="20").pack(side=tk.LEFT, padx=5)
+        self._radiobutton(floor_frame, text="15层", variable=self.mg_floors_var, value="15").pack(side=tk.LEFT, padx=5)
+        self._radiobutton(floor_frame, text="20层", variable=self.mg_floors_var, value="20").pack(side=tk.LEFT, padx=5)
         row += 1
 
         # 初始阵容（下拉列表，不含括号）
@@ -1284,18 +1636,31 @@ class GameBotGUI:
 
     # ===== 运行控制（开始 / 停止 / 主按钮） =====
     def update_master_button(self):
+        """主按钮文案与配色随运行态切换：跑起来就是红色「停止」，一眼能区分。"""
         if self.is_running:
-            self.master_switch_btn.configure(text="停止运行 (F9)")
+            self.master_switch_btn.configure(text="停止运行 (F9)", style="Danger.TButton")
         else:
-            self.master_switch_btn.configure(text="开始运行 (F8)")
+            self.master_switch_btn.configure(text="开始运行 (F8)", style="Accent.TButton")
+        self._refresh_title()
+
+    def _refresh_title(self):
+        """标题栏常驻「运行到哪 + 定时是否生效」。
+
+        窗口被游戏盖住、只剩任务栏时，这是唯一还能看到的进度提示；定时激活后也靠
+        这里的角标再提醒一次（横幅只在窗口内可见）。
+        """
+        parts = ["梅林初号机"]
+        if self.is_running and self._current_task_name not in (None, "无"):
+            parts.append(f"▶ {self._current_task_name}")
+        if self.schedule_active and self.schedule_time:
+            parts.append(f"⏰ 定时 {self.schedule_time}")
+        self.root.title(" · ".join(parts))
 
     def _set_current_task(self, name):
         """主线程更新「当前任务」标签与窗口标题，便于远程查看运行到哪一项。"""
+        self._current_task_name = name
         self.current_task_var.set(f"当前任务: {name}")
-        if name == "无":
-            self.root.title("梅林初号机")
-        else:
-            self.root.title(f"梅林初号机 - 运行中: {name}")
+        self._refresh_title()
 
     def start_all(self):
         """按功能列表当前顺序运行全部已勾选的功能。"""
@@ -1424,7 +1789,7 @@ class GameBotGUI:
     def launch_game_then_start(self, launch_game=True):
         """按需启动游戏，等游戏就绪后开始脚本流程。
 
-        「立即开始」与「启动游戏」解耦：游戏已在运行时不再按快捷方式重复拉起
+        「启动游戏并运行」里启动与运行两段解耦：游戏已在运行时不再按快捷方式重复拉起
         （会多开客户端/弹启动器），直接 0 延迟开始脚本；launch_game=False 同理。
         """
         if self.is_running:
@@ -1444,11 +1809,11 @@ class GameBotGUI:
         elif launch_game:
             self._cold_launch = False
             delay = 0
-            self.log("游戏已在运行，跳过启动，立即开始脚本")
+            self.log("游戏已在运行，跳过启动，直接开始脚本")
         else:
             self._cold_launch = False
             delay = 0
-            self.log("不启动游戏，立即开始脚本")
+            self.log("不启动游戏，直接开始脚本")
         # 等待后先确保游戏窗口在前台，再开始脚本（避免因游戏不在前台导致模板匹配失效）
         self.root.after(max(0, int(delay)) * 1000, self._start_after_focus)
 
@@ -1574,6 +1939,8 @@ class GameBotGUI:
         threading.Thread(target=self._schedule_loop, args=(self._schedule_gen,),
                          daemon=True).start()
         self.update_schedule_status()
+        # 设定成功时闪几拍横幅：这是「确实注册上了」的确认反馈，比一行日志显眼得多
+        self._pulse_banner(0)
 
     def cancel_schedule(self):
         self.schedule_active = False
@@ -1609,8 +1976,10 @@ class GameBotGUI:
         self.schedule_active = False
         self.scheduled_time = None
         if self.is_running:
-            self.log("定时开始：脚本已在运行中，跳过本次触发")
-            self._set_schedule_status("未设定定时")
+            # 撞上正在跑的脚本：本轮跳过，但必须把明天的重新排上——旧实现直接
+            # return，「每天循环」在第一次撞车后就静默失效到下次重启。
+            self.log("定时开始：脚本已在运行中，跳过本次触发；明天的同一时间仍会自动运行")
+            self.set_schedule()
             return
         # 定时启动时先检查游戏是否已启动：已启动则直接开始脚本，避免重复拉起游戏
         if is_game_running():
@@ -1623,6 +1992,10 @@ class GameBotGUI:
         self.set_schedule()
 
     def update_schedule_status(self):
+        """每秒刷新：行内短状态 + 横幅里的完整倒计时。
+
+        倒计时只放横幅——它每秒都在变，若塞进行内标签，控制栏会跟着反复折行。
+        """
         if not self.schedule_active or self.scheduled_time is None:
             self._set_schedule_status("未设定定时")
             return
@@ -1631,16 +2004,47 @@ class GameBotGUI:
         h = remaining // 3600
         m = (remaining % 3600) // 60
         s = remaining % 60
-        self._set_schedule_status(f"已定时 {self.schedule_time} 倒计时 {h:02d}:{m:02d}:{s:02d}")
+        self._set_schedule_status(
+            f"已定时 {self.schedule_time}",
+            banner=(f"定时已生效：每天 {self.schedule_time} 自动启动游戏并运行"
+                    f"　·　剩余 {h:02d}:{m:02d}:{s:02d}"
+                    f"（{self.scheduled_time.strftime('%m-%d %H:%M')}）"))
 
-    def _set_schedule_status(self, text):
-        if hasattr(self, "schedule_status_label") and self.schedule_status_label is not None:
+    def _set_schedule_status(self, text, banner=None):
+        """定时状态的唯一出口：行内短标签 + 醒目横幅 + 标题角标。
+
+        `banner=None` 表示当前没有生效的定时：整条横幅（连同其中的「取消定时」）隐藏。
+        """
+        if getattr(self, "schedule_status_label", None) is not None:
             self.schedule_status_label.configure(text=text)
-        if hasattr(self, "sched_cancel_btn") and self.sched_cancel_btn is not None:
-            if text.startswith("已定时"):
-                self.sched_cancel_btn.configure(state=tk.NORMAL)
+        if getattr(self, "schedule_banner", None) is not None:
+            if banner:
+                self.schedule_banner_var.set(banner)
+                self.schedule_banner.grid()
             else:
-                self.sched_cancel_btn.configure(state=tk.DISABLED)
+                self.schedule_banner_var.set("")
+                self.schedule_banner.grid_remove()
+        self._refresh_title()
+
+    def _pulse_banner(self, step):
+        """设定成功时让横幅亮暗交替几拍，抓一下视线后停在常态色。
+
+        只闪 6 拍（约 1 秒）：足够让正在看屏幕的人注意到，又不会像广告条那样长期干扰。
+        """
+        if getattr(self, "schedule_banner", None) is None:
+            return
+        if step >= 6 or not self.schedule_active:
+            self._apply_banner_bg(COLOR_BANNER_BG)
+            return
+        self._apply_banner_bg(
+            COLOR_BANNER_BG_PULSE if step % 2 == 0 else COLOR_BANNER_BG)
+        self.root.after(160, lambda: self._pulse_banner(step + 1))
+
+    def _apply_banner_bg(self, color):
+        """横幅底色统一改：frame 与其中的两个 label 必须一起改，否则露出白边。"""
+        for widget in (self.schedule_banner, self.schedule_banner_icon,
+                       self.schedule_banner_label):
+            widget.configure(bg=color)
 
     # ===== 全局热键（F8 开始 / F9 停止） =====
     def _register_hotkeys(self):
@@ -1713,9 +2117,8 @@ class GameBotGUI:
                 return False
             self.log(f"点击注入器: {launcher}")
             self.log(f"工作目录: {work_dir}")
-            # CREATE_NO_WINDOW：Windows 下不弹出控制台黑框，消除「启动终端框」的视觉卡顿
-            proc = subprocess.Popen(launcher + [work_dir],
-                                    creationflags=subprocess.CREATE_NO_WINDOW)
+            # 隐藏控制台：注入器是 AHK 的控制台子系统程序，直接起会闪一个黑框
+            proc = popen_hidden(launcher + [work_dir])
             self._clicker_pid = proc.pid
             self.log(f"点击注入器启动成功（PID {proc.pid}）")
         except (OSError, ValueError) as e:
@@ -1767,8 +2170,8 @@ class GameBotGUI:
     def _taskkill(args):
         """跑一次 taskkill，返回是否成功（进程已不存在也算成功）。"""
         try:
-            res = subprocess.run(["taskkill", *args], capture_output=True,
-                                 timeout=10, check=False)
+            res = run_hidden(["taskkill", *args], capture_output=True,
+                             timeout=10, check=False)
         except (OSError, subprocess.SubprocessError):
             return False
         return res.returncode == 0
@@ -1778,8 +2181,8 @@ class GameBotGUI:
         """确认该 PID 现在仍是注入器进程（防 PID 复用后误杀无关程序）。"""
         try:
             # 中文 Windows 的 tasklist 输出是 GBK，这里只比对 ASCII 镜像名，按 bytes 处理
-            out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"],
-                                 capture_output=True, timeout=5, check=False).stdout or b""
+            out = run_hidden(["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                             capture_output=True, timeout=5, check=False).stdout or b""
         except (OSError, subprocess.SubprocessError):
             return False
         return b"AutoHotkey" in out or b"click_from_file" in out

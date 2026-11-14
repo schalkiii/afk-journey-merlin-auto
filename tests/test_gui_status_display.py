@@ -64,7 +64,8 @@ def test_row_status_label_reflects_script_status(app):
 def test_row_checkbox_updates_enabled_and_persists(app):
     target = app.scripts[5]
     before = target.enabled
-    app.script_checks[5].invoke()      # 模拟用户点勾选框（走真实 command 链路）
+    # 行首勾选是自绘控件（见 _ToggleBox），toggle() 与用户点击走同一条链路
+    app.script_checks[5].toggle()
 
     assert target.enabled == (not before), "勾选框应直接翻转该功能的启用状态"
     assert app.script_enabled_vars[5].get() == target.enabled

@@ -110,7 +110,12 @@ def test_download_update_short_circuits_outside_frozen(monkeypatch):
 
 
 def test_install_writes_backup_and_rollback(tmp_path, monkeypatch):
-    """生成的 bat 必须留 .bak 且在覆盖失败时回滚；同时真实产出备份文件。"""
+    """生成的 bat 必须留 .bak 且在覆盖失败时回滚；同时真实产出备份文件。
+
+    启动 bat 改走 `proc_hidden.popen_hidden(["cmd", "/c", bat])`：GUI 子系统没有
+    控制台，os.startfile 一个 .bat 会亮出黑色 cmd 窗口并停留几秒（替换 exe 期间
+    用户正盯着屏幕）。这里断言「用 cmd 执行 bat」而不是「startfile」。
+    """
     fake_exe = tmp_path / "goldenhandmaidens.exe"
     fake_exe.write_bytes(b"original")
     new_file = tmp_path / "goldenhandmaidens.exe.new"
@@ -119,7 +124,7 @@ def test_install_writes_backup_and_rollback(tmp_path, monkeypatch):
     started = []
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "executable", str(fake_exe), raising=False)
-    monkeypatch.setattr(updater.os, "startfile", lambda path: started.append(path))
+    monkeypatch.setattr(updater, "popen_hidden", lambda cmd: started.append(cmd))
 
     with pytest.raises(SystemExit):
         updater.install_and_restart(str(new_file))
@@ -130,3 +135,4 @@ def test_install_writes_backup_and_rollback(tmp_path, monkeypatch):
     assert 'move /y "%BAK%" "%EXE%"' in bat
     assert ":fail" in bat
     assert len(started) == 1
+    assert started[0][:2] == ["cmd", "/c"] and started[0][2].endswith("update.bat")
