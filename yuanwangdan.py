@@ -83,6 +83,8 @@ tpl_close_popup = get_template_path("dianjikongbaichuguanbi.png")
 # 主界面右下角「家园」入口（2026-11-12 从实机截图裁取，同屏 0.99）。
 # 之前没有这张模板，任务只能靠返回箭头「退回家园」，而主界面上根本没有回去的路。
 tpl_jiayuan = get_template_path("jiayuanrukou.png")
+# 星级进度条右端的「已完成」徽章：今日累计交付星星满 70/70 才会出现（2026-11-14 实机采集）
+tpl_stars_full = get_template_path("xingjiyiman.png")
 
 MATCH_THRESHOLD = 0.8
 # 礼盒相对「愿望单」标题中心的偏移。2026-11-07 实机重新量得：
@@ -93,6 +95,12 @@ MAX_ORDERS = 20           # 单次任务最多交付订单数，防止无限刷�
 MAX_CRAFTS = 5            # 单次任务最多制作次数，防止资源误消耗失控
 MAX_CLAIMS = 10           # 单次任务最多成功领奖次数（愿望单奖励档位逐级提升）
 MAX_IDLE_ROUNDS = 8       # 同一状态连续无变化的最大轮数，超限即判定卡死
+
+# 星级进度条（愿望单面板左上角，客户区相对坐标）与「已完成」徽章的判定参数。
+# 实测：徽章在本面板 0.996~1.000，其它界面同一模板最高 0.75，故阈值取 0.85 并限定搜索范围，
+# 避免在别的面板上误判成「今日已满」而提前收工。
+STARS_CLIENT_REGION = (330, 10, 210, 90)
+STARS_FULL_THRESHOLD = 0.85
 SETTLE_DELAY = 2.0        # 界面切换后的稳定等待
 DELIVER_DELAY = 3.0       # 交付后等待结算动画
 CRAFT_ENTRY_TIMEOUT = 40  # 自动寻路到建筑并打开制作界面的等待上限
@@ -179,6 +187,21 @@ def _panel_state():
         # 剩下的带提示弹窗按结算处理（关闭后重新判定），锚点无意义故返回 None
         return STATE_RESULT, None
     return None, None
+
+
+def _daily_stars_done():
+    """今日累计交付星星是否已满（面板显示 70/70、进度条右端出现完成徽章）。
+
+    2026-11-14 实机：每日奖励是「交付订单累计星数」的阶梯（5 / 20 / 40 / 70 颗星），
+    满 70 之后订单板仍会源源不断刷出新订单，但**不再推进任何每日进度**，继续交付只是
+    拿每单的基础奖励却照旧消耗材料。所以「星级已满」才是这个任务真正的完成线。
+
+    判据刻意做窄：模板 + 客户区固定小区域 + 0.85 阈值（实机 0.996~1.000，其它界面 ≤0.75）。
+    检测不到一律当作「没满」，行为与加这条判据之前完全一致——漏判只会多打几单，
+    不会提前收工。
+    """
+    return find_center_silent(
+        tpl_stars_full, STARS_FULL_THRESHOLD, client_region=STARS_CLIENT_REGION) is not None
 
 
 def _claim_reward(label_pos):
@@ -416,7 +439,11 @@ def _craft_from_lack():
 
 
 def main():
-    """执行家园愿望单自动交付（含缺口自动制作），至少交付一单返回 True。"""
+    """执行家园愿望单自动交付（含缺口自动制作）。
+
+    返回 True 表示「今天的愿望单已完成」：交付过至少一单，或开局就发现今日星星已满
+    （满 70 颗星后订单板还会刷单，但不再推进任何每日进度，继续交付只是白耗材料）。
+    """
     log("【家园愿望单】开始执行...")
 
     if not _ensure_panel():
@@ -429,6 +456,7 @@ def main():
     claim_due = True          # 进度只在交付后才会涨，故只在开局与每次交付后试领一次
     idle_rounds = 0
     last_state = None
+    stars_full = False
 
     while delivered < MAX_ORDERS:
         check_stop()
@@ -444,6 +472,13 @@ def main():
                 idle_rounds = 0
                 last_state = None
                 continue
+
+        # 今日星星已满 70/70：这才是真·完成线，继续交付只烧材料不涨进度。
+        # 放在试领之后，保证「最后一档奖励刚点亮」时至少先领一次再收工。
+        if _daily_stars_done():
+            log("【家园愿望单】今日累计交付星星已满（面板显示 70/70），愿望单已完成")
+            stars_full = True
+            break
 
         state, anchor = _panel_state()
 
@@ -509,7 +544,8 @@ def main():
         log("【家园愿望单】未能识别当前界面，结束本次任务")
         break
 
-    log(f"【家园愿望单】结束：本次交付 {delivered} 单，自动制作 {crafts} 次，领取奖励 {claims} 次")
+    log(f"【家园愿望单】结束：本次交付 {delivered} 单，自动制作 {crafts} 次，"
+        f"领取奖励 {claims} 次，今日星星{'已满' if stars_full else '未满'}")
 
     # 最后一单交付后循环条件即失效，此时结算界面仍然覆盖在愿望单上，需单独关闭，
     # 否则后续任务的「回主界面」流程会被结算界面挡住（退出模板均不匹配该界面）。
@@ -523,7 +559,8 @@ def main():
     # 若被拖到中间，调度层会在下一任务开始前校验主界面，无法恢复则跳过该任务并留现场。
     if _find(tpl_entry) is None:
         flow_return_main()
-    return delivered > 0
+    # 开局就满星也记成功：今天的愿望单确实不需要再交付了，不是失败
+    return delivered > 0 or stars_full
 
 
 if __name__ == "__main__":

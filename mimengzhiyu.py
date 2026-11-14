@@ -8,6 +8,7 @@ import time
 
 from common import (
     at_main_interface,
+    check_stop,
     click_blank_to_exit,
     click_position,
     dismiss_popup_away_from,
@@ -42,13 +43,25 @@ tpl_lingqu            = get_template_path("lingqu.png")
 tpl_yijianlingqu      = get_template_path("yijianlingqu.png")
 tpl_mimeng_rank       = get_template_path("mimengpaiming.png")
 tpl_huodejiangli      = get_template_path("huodejiangli.png")
-# 推荐阵容：入口 / 一键采用 / 「下一套」右箭头（与推图流程共用同一套模板）
-tpl_rank_lineup       = get_template_path("tongguanzhenrong.png")
-tpl_rank_adopt        = get_template_path("yijiancaiyong.png")
-tpl_lineup_next       = get_template_path("right.png")
+# 推荐阵容（迷梦版）：入口只在「挑战」之后的战斗准备界面底部（返回箭头右侧的小按钮），
+# 面板里每行右侧是绿色「使用」按钮。2026-11-14 实机截图采集，同屏 1.000。
+tpl_rank_lineup       = get_template_path("zhenrongtuijian.png")
+tpl_lineup_use        = get_template_path("shiyong.png")
 
 # 推荐阵容最多轮换到第几套：每场换一套，避免连续几场死磕同一套
 LINEUP_ROTATION_MAX = 3
+
+# 阵容推荐面板里「使用」按钮的行距（1600×900 实测三行中心：370 / 550 / 730）
+LINEUP_USE_ROW_STEP = 180
+
+# 「上阵人数不满，确认直接开始战斗吗？」确认框：采用半成品推荐阵容后点「战斗」会弹它。
+# 2026-11-14 实机采集，弹窗上 1.000、其它界面最高 0.257。
+tpl_partial_team      = get_template_path("shangzhenbuman.png")
+# 弹窗文字中心 → 左侧「取消（✗）」按钮中心的偏移（实测 (803,441) → (843,585)）
+PARTIAL_TEAM_CANCEL_OFFSET = (40, 144)
+
+# handle_battle() 的第三种返回值：弹了「上阵人数不满」并被取消，本场没打
+BATTLE_PARTIAL_TEAM = "partial_team"
 
 # 迷梦之域界面右上角的奖励入口（客户区相对坐标，按 1600×900 给出；实机截图后可校准）
 MIMENG_TOP_RIGHT_REGION = (1200, 0, 400, 300)
@@ -249,7 +262,11 @@ def _exit_to_main():
 def handle_battle():
     """处理战斗界面：优先 tiaoguozhandou(跳过战斗)；否则点 zhandou 开战，
     开战后若中途出现 tiaoguozhandou 也点击以快进（首次无预跳过时可中途跳过）；
-    战斗结束后清理结算弹窗，避免卡在「点击空白处关闭」界面。"""
+    战斗结束后清理结算弹窗，避免卡在「点击空白处关闭」界面。
+
+    返回：True 打完一场 / False 失败 / BATTLE_PARTIAL_TEAM 弹了「上阵人数不满」并已取消
+    （第三种不是失败，上层可以换一套阵容重打）。
+    """
     # 先检查是否存在 tiaoguozhandou（预跳过）
     pos_tiaoguozhandou = find_center_silent(tpl_tiaoguozhandou, threshold=0.8)
     if pos_tiaoguozhandou:
@@ -277,6 +294,17 @@ def handle_battle():
         else:
             print("【迷梦之域】未检测到 zhandou 或 tiaoguozhandou，处理战斗界面失败。")
             return False
+
+    # 点完「跳过战斗 / 战斗」可能先弹「上阵人数不满，确认直接开始战斗吗？」——采用推荐阵容
+    # 时最常遇到（推荐列表第一条常是「本轮分享」的半成品，实测只有 2 个上阵英雄）。
+    # 点 ✓ 等于用 2 个人开打、白扔一次次数，所以点 ✗ 取消并让上层换下一套。
+    pos_partial = find_center_silent(tpl_partial_team, 0.8, timeout=2.5)
+    if pos_partial is not None:
+        cancel_pos = (pos_partial[0] + PARTIAL_TEAM_CANCEL_OFFSET[0],
+                      pos_partial[1] + PARTIAL_TEAM_CANCEL_OFFSET[1])
+        print("【迷梦之域】弹出「上阵人数不满」确认框，点取消（✗）不浪费这次次数。")
+        click_position(cancel_pos, wait=1.5, twice=False)
+        return BATTLE_PARTIAL_TEAM
 
     # 等待战斗结束：优先点「竞技场结算」弹窗；2026-11-07 实测战斗结束会直接回到
     # 迷梦主界面（阵容页「挑战」按钮重新可见），不再弹该结算，故两种信号都算打完。
@@ -316,39 +344,85 @@ def lineup_index_for_round(completed, rotate=True, span=LINEUP_ROTATION_MAX):
         return 0
     return int(completed) % int(span)
 
-def _adopt_ranked_lineup(index=0):
-    """打开「通关阵容」并按 index 切到第 N 套推荐阵容后一键采用。
-
-    index=0 与旧行为一致（直接采用当前可见的推荐阵容）。切换用 right.png（下一套），
-    与推图流程同一套模板；点不到 right 说明可选阵容不足，按当前这套采用即可——
-    宁可继续打，也不要因为「切不到第 N 套」把整条任务判失败。
-
-    2026-11-14 用户反馈：迷梦每场都用同一套推荐阵容，遇到打不过的阵容不会换。
-    这里按轮次轮换，连续几场自然覆盖不同推荐阵容。
-    """
-    if not wait_and_click(tpl_rank_lineup, "tongguanzhenrong(推荐阵容)", 0.8, timeout=6):
-        # 部分界面直接把「一键采用」挂在挑战页，没有入口按钮
-        adopt_pos = find_center_silent(tpl_rank_adopt, 0.8)
-        if not adopt_pos:
-            print("【迷梦之域】未检测到通关阵容入口，跳过自动配置。")
+def _wait_gone(template_path, timeout, threshold=0.8):
+    """在 timeout 秒内等待模板从画面上消失；消失返回 True。"""
+    deadline = time.time() + timeout
+    while True:
+        check_stop()
+        if find_center_silent(template_path, threshold) is None:
+            return True
+        if time.time() >= deadline:
             return False
-        send_coord(*adopt_pos)
-        random_sleep()
+        time.sleep(0.4)
+
+def _close_lineup_panel():
+    """退出「阵容推荐」面板：点左下角返回箭头，避免面板盖住战斗按钮。
+
+    正常采用阵容后面板会自己关；只有「没找到使用按钮 / 点了也不关」才走这里。
+    """
+    if _wait_gone(tpl_lineup_use, 0.5):
         return True
-    random_sleep()
-    for step in range(max(0, int(index))):
-        if not wait_and_click(tpl_lineup_next, f"right(切到第 {step + 2} 套)", 0.8,
-                              timeout=1.5):
-            print(f"【迷梦之域】可选推荐阵容只有 {step + 1} 套，采用当前这套。")
-            break
-        time.sleep(0.5)
-    if not wait_and_click(tpl_rank_adopt, "yijiancaiyong(采用)", 0.8, timeout=4):
-        print("【迷梦之域】未找到「一键采用」，退出阵容视图。")
-        if not wait_and_click(tpl_dianjikongbaichuguanbi, "点击空白处关闭", 0.8, timeout=1):
-            click_blank_to_exit()
+    return wait_and_click(tpl_exit, "exit(退出阵容推荐)", 0.8, timeout=3)
+
+def _adopt_ranked_lineup(index=0):
+    """在战斗准备界面采用第 index 套推荐阵容，成功后回到战斗准备界面。
+
+    2026-11-14 实机确认的界面关系（此前按「挑战前就有通关阵容」实现，一直匹配不到）：
+    - 推荐阵容入口**不在**迷梦主界面，只在点过「挑战」之后的战斗准备界面底部
+      （返回箭头右边的小按钮，文案是「阵容推荐」，模板刚采的同屏 1.000）；
+    - 面板里是一列玩家分享的阵容，每行右侧一个绿色「使用」按钮，三行中心 y 差 180px；
+    - 点「使用」当场换阵容、面板自动关闭，回到战斗准备界面（实测战力从 755414万
+      掉到 123500万，确认换阵容真的生效，而不是「点了没反应」）。
+
+    失败一律不阻断挑战：找不到入口 / 没有条目 / 点了不关面板，都退回当前阵容继续打。
+    """
+    index = max(0, int(index))
+    if not wait_and_click(tpl_rank_lineup, "zhenrongtuijian(阵容推荐)", 0.8, timeout=6):
+        print("【迷梦之域】未检测到「阵容推荐」入口，按当前阵容挑战。")
         return False
     random_sleep()
-    return True
+    first = find_center_silent(tpl_lineup_use, 0.8, timeout=6)
+    if first is None:
+        print("【迷梦之域】阵容推荐面板里没有可用的「使用」按钮，退出面板。")
+        _close_lineup_panel()
+        return False
+
+    # 目标行按行距推算；该行不存在时退回第一行（宁可少换一套，也不要卡在这里）
+    candidates = [(first[0], first[1] + index * LINEUP_USE_ROW_STEP)]
+    if index:
+        candidates.append(first)
+    for pos in candidates:
+        # 跳转型按钮：单击 + 确认面板关闭；首次点击可能被窗口激活吞掉，故补点一次
+        for _ in range(2):
+            click_position(pos, 1.0, twice=False)
+            if _wait_gone(tpl_lineup_use, 3.0):
+                random_sleep()
+                return True
+        print(f"【迷梦之域】点「使用」后面板未关闭（y={pos[1]}），换下一候选")
+    _close_lineup_panel()
+    return False
+
+def _fight_with_lineup_rotation(completed_count, rotate_lineup, auto_configure_lineup):
+    """按轮次采用推荐阵容并开战；「上阵人数不满」时取消并换下一套。
+
+    返回 True/False 语义与 handle_battle 一致（是否打完一场），BATTLE_PARTIAL_TEAM 只在
+    内部流转，不会透出去。三套都满员不了就放弃本次挑战——不能拿 2 个英雄去白烧次数。
+    """
+    if not auto_configure_lineup:
+        return handle_battle()
+    start = lineup_index_for_round(completed_count, rotate_lineup)
+    for step in range(LINEUP_ROTATION_MAX):
+        index = (start + step) % LINEUP_ROTATION_MAX
+        if not _adopt_ranked_lineup(index):
+            print("【迷梦之域】未采用推荐阵容，按当前阵容挑战。")
+            return handle_battle()
+        print(f"【迷梦之域】已采用第 {index + 1} 套推荐阵容。")
+        outcome = handle_battle()
+        if outcome != BATTLE_PARTIAL_TEAM:
+            return outcome
+        print(f"【迷梦之域】第 {index + 1} 套推荐阵容上阵人数不满，换下一套。")
+    print("【迷梦之域】三套推荐阵容都不满员，本次不挑战（避免用残缺阵容白烧次数）。")
+    return False
 
 
 def flow_mimengzhiyu(challenge_count=None, auto_configure_lineup=False,
@@ -360,13 +434,15 @@ def flow_mimengzhiyu(challenge_count=None, auto_configure_lineup=False,
 
     参数：
         challenge_count: 挑战次数，None表示无限循环直到次数不足
-        auto_configure_lineup: 是否在每场挑战前采用推荐阵容
+        auto_configure_lineup: 是否在每场战斗前采用推荐阵容（入口在战斗准备界面底部）
         claim_reward: 是否顺带领排行榜礼包
         rotate_lineup: 每场换一套推荐阵容（打不过时不会死磕同一套）
 
     - 先点 wanfamulu 进入玩法目录界面
     - 再点 mimengzhiyu 进入迷梦之域界面
     - 再点 tiaozhan 挑战
+    - 挑战后进入战斗准备界面；若开启自动配置阵容，先按轮次点「阵容推荐」采用第 N 套
+      （入口只在战斗准备界面底部，主界面没有），再点「跳过战斗 / 战斗」
     - 处理两个大分支：
         大分支1：
             - 小分支1：识别到 zhandou
@@ -415,13 +491,8 @@ def flow_mimengzhiyu(challenge_count=None, auto_configure_lineup=False,
             return True
 
         # 3. 点击 tiaozhan 挑战
-        # 可选：挑战前先自动配置通关阵容（按轮次轮换，避免每场都用同一套推荐阵容）
-        if auto_configure_lineup:
-            lineup_index = lineup_index_for_round(completed_count, rotate_lineup)
-            if _adopt_ranked_lineup(lineup_index):
-                print(f"【迷梦之域】已采用第 {lineup_index + 1} 套推荐阵容。")
-            else:
-                print("【迷梦之域】未采用推荐阵容，按当前阵容挑战。")
+        # 注意：推荐阵容入口只在点过「挑战」之后的战斗准备界面出现，故不放在这里，
+        # 由 `_fight_with_lineup_rotation()` 在进入战斗界面后处理（见下方大分支 1 / 2）。
         if not _ensure_mimeng_main():
             print("无法回到迷梦主界面（挑战按钮未出现），流程结束。")
             return False
@@ -465,8 +536,9 @@ def flow_mimengzhiyu(challenge_count=None, auto_configure_lineup=False,
         # 大分支1：检测到战斗相关按钮
         if hit_tpl in [tpl_zhandou, tpl_tiaoguozhandou]:
             print("进入大分支1：战斗界面。")
-            # 处理战斗界面
-            if not handle_battle():
+            # 战斗准备界面才有的推荐阵容入口：按轮次换一套再打
+            if not _fight_with_lineup_rotation(completed_count, rotate_lineup,
+                                               auto_configure_lineup):
                 return False
             # 点击pujingjieshu后，增加完成计数
             completed_count += 1
@@ -498,8 +570,9 @@ def flow_mimengzhiyu(challenge_count=None, auto_configure_lineup=False,
                 print("未检测到战斗界面，迷梦之域流程结束。")
                 return False
 
-            # 处理战斗界面
-            if not handle_battle():
+            # 买票后重进也是战斗准备界面，同样按轮次采用推荐阵容
+            if not _fight_with_lineup_rotation(completed_count, rotate_lineup,
+                                               auto_configure_lineup):
                 return False
             # 点击pujingjieshu后，增加完成计数
             completed_count += 1

@@ -98,7 +98,7 @@ Don't checklist all four every time — pick the one most relevant to the change
   当前基线只剩 **5 条有意保留的 catch-all**（`Goldenhandmaidens.py=3`、`pata.py=2`），原因写在基线注释里。
 - 改动 `.md` 后跑 `markdownlint README.md CHANGELOG.md CLAUDE.md doc\*.md`（规则配置见 `.markdownlint.json`，
   中文长行 MD013 已关闭），要求零 error。
-- 测试基线以 `python -m pytest -q` 实际结果为准（2026-11-14 复盘第二批为 **410** 条；
+- 测试基线以 `python -m pytest -q` 实际结果为准（2026-11-14 实机校正批为 **422** 条；
   新增用例后同步更新本行）。
 - **子进程一律走 `proc_util.run_hidden` / `popen_hidden`**：成品是 GUI 子系统（无控制台），
   裸调 `subprocess` 启动控制台子程序会给它新建一个黑框。`tests/test_20261114_hidden_console.py`
