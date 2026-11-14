@@ -98,7 +98,7 @@ Don't checklist all four every time — pick the one most relevant to the change
   当前基线只剩 **5 条有意保留的 catch-all**（`Goldenhandmaidens.py=3`、`pata.py=2`），原因写在基线注释里。
 - 改动 `.md` 后跑 `markdownlint README.md CHANGELOG.md CLAUDE.md doc\*.md`（规则配置见 `.markdownlint.json`，
   中文长行 MD013 已关闭），要求零 error。
-- 测试基线以 `python -m pytest -q` 实际结果为准（2026-11-14 GUI 重排收尾为 **402** 条；
+- 测试基线以 `python -m pytest -q` 实际结果为准（2026-11-14 复盘第二批为 **410** 条；
   新增用例后同步更新本行）。
 - **子进程一律走 `proc_util.run_hidden` / `popen_hidden`**：成品是 GUI 子系统（无控制台），
   裸调 `subprocess` 启动控制台子程序会给它新建一个黑框。`tests/test_20261114_hidden_console.py`
@@ -108,6 +108,9 @@ Don't checklist all four every time — pick the one most relevant to the change
   `--distpath dist`，打包后校验「dist 有成品」并在根目录仍有同名 exe 时**告警**（不自动删：
   环境的删除守卫会拦截，导致整次 build 假失败）。直接调 PyInstaller 或把产物
   放根目录都会造成「已修复的代码在实机上不生效」。详见 `doc/LIVE-DEBUGGING.md` §10。
+- **增量构建会静默复用旧包**：PyInstaller 的 `.toc` 缓存按 mtime 判新旧，源码改动时间早于
+  `.toc` 时直接跳过重建（表现：build 只跑 5 秒就 Complete，成品时间戳还是上一次的）。
+  所以打包前先删 `dist/goldenhandmaidens.exe` 强制重建，完成后再核一次时间戳。
 - 新增用例必须做负验证：故意改坏被测逻辑，用例必须失败。
 
 ## 动实机之前先读这几份

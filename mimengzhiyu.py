@@ -19,7 +19,6 @@ from common import (
     random_sleep,
     recover_to_main_interface,
     send_coord,
-    try_auto_configure_lineup,
     wait_and_click,
 )
 from flow_enter import flow_return_main
@@ -43,6 +42,13 @@ tpl_lingqu            = get_template_path("lingqu.png")
 tpl_yijianlingqu      = get_template_path("yijianlingqu.png")
 tpl_mimeng_rank       = get_template_path("mimengpaiming.png")
 tpl_huodejiangli      = get_template_path("huodejiangli.png")
+# 推荐阵容：入口 / 一键采用 / 「下一套」右箭头（与推图流程共用同一套模板）
+tpl_rank_lineup       = get_template_path("tongguanzhenrong.png")
+tpl_rank_adopt        = get_template_path("yijiancaiyong.png")
+tpl_lineup_next       = get_template_path("right.png")
+
+# 推荐阵容最多轮换到第几套：每场换一套，避免连续几场死磕同一套
+LINEUP_ROTATION_MAX = 3
 
 # 迷梦之域界面右上角的奖励入口（客户区相对坐标，按 1600×900 给出；实机截图后可校准）
 MIMENG_TOP_RIGHT_REGION = (1200, 0, 400, 300)
@@ -301,8 +307,52 @@ def handle_battle():
         _recover_to_main()
     return ok
 
+def lineup_index_for_round(completed, rotate=True, span=LINEUP_ROTATION_MAX):
+    """第 completed 场（从 0 起）该用第几套推荐阵容。
+
+    关掉轮换时固定用第 1 套（index 0），与旧行为一致。
+    """
+    if not rotate or span <= 0:
+        return 0
+    return int(completed) % int(span)
+
+def _adopt_ranked_lineup(index=0):
+    """打开「通关阵容」并按 index 切到第 N 套推荐阵容后一键采用。
+
+    index=0 与旧行为一致（直接采用当前可见的推荐阵容）。切换用 right.png（下一套），
+    与推图流程同一套模板；点不到 right 说明可选阵容不足，按当前这套采用即可——
+    宁可继续打，也不要因为「切不到第 N 套」把整条任务判失败。
+
+    2026-11-14 用户反馈：迷梦每场都用同一套推荐阵容，遇到打不过的阵容不会换。
+    这里按轮次轮换，连续几场自然覆盖不同推荐阵容。
+    """
+    if not wait_and_click(tpl_rank_lineup, "tongguanzhenrong(推荐阵容)", 0.8, timeout=6):
+        # 部分界面直接把「一键采用」挂在挑战页，没有入口按钮
+        adopt_pos = find_center_silent(tpl_rank_adopt, 0.8)
+        if not adopt_pos:
+            print("【迷梦之域】未检测到通关阵容入口，跳过自动配置。")
+            return False
+        send_coord(*adopt_pos)
+        random_sleep()
+        return True
+    random_sleep()
+    for step in range(max(0, int(index))):
+        if not wait_and_click(tpl_lineup_next, f"right(切到第 {step + 2} 套)", 0.8,
+                              timeout=1.5):
+            print(f"【迷梦之域】可选推荐阵容只有 {step + 1} 套，采用当前这套。")
+            break
+        time.sleep(0.5)
+    if not wait_and_click(tpl_rank_adopt, "yijiancaiyong(采用)", 0.8, timeout=4):
+        print("【迷梦之域】未找到「一键采用」，退出阵容视图。")
+        if not wait_and_click(tpl_dianjikongbaichuguanbi, "点击空白处关闭", 0.8, timeout=1):
+            click_blank_to_exit()
+        return False
+    random_sleep()
+    return True
+
+
 def flow_mimengzhiyu(challenge_count=None, auto_configure_lineup=False,
-                     claim_reward=True):
+                     claim_reward=True, rotate_lineup=True):
     """
     功能：迷梦之域挑战
 
@@ -310,6 +360,9 @@ def flow_mimengzhiyu(challenge_count=None, auto_configure_lineup=False,
 
     参数：
         challenge_count: 挑战次数，None表示无限循环直到次数不足
+        auto_configure_lineup: 是否在每场挑战前采用推荐阵容
+        claim_reward: 是否顺带领排行榜礼包
+        rotate_lineup: 每场换一套推荐阵容（打不过时不会死磕同一套）
 
     - 先点 wanfamulu 进入玩法目录界面
     - 再点 mimengzhiyu 进入迷梦之域界面
@@ -362,12 +415,13 @@ def flow_mimengzhiyu(challenge_count=None, auto_configure_lineup=False,
             return True
 
         # 3. 点击 tiaozhan 挑战
-        # 可选：挑战前先尝试自动配置通关阵容（检测并点击 tongguanzhenrong / yijiancaiyong）
+        # 可选：挑战前先自动配置通关阵容（按轮次轮换，避免每场都用同一套推荐阵容）
         if auto_configure_lineup:
-            if try_auto_configure_lineup():
-                print("【迷梦之域】已自动采用通关阵容。")
+            lineup_index = lineup_index_for_round(completed_count, rotate_lineup)
+            if _adopt_ranked_lineup(lineup_index):
+                print(f"【迷梦之域】已采用第 {lineup_index + 1} 套推荐阵容。")
             else:
-                print("【迷梦之域】未检测到通关阵容入口，跳过自动配置。")
+                print("【迷梦之域】未采用推荐阵容，按当前阵容挑战。")
         if not _ensure_mimeng_main():
             print("无法回到迷梦主界面（挑战按钮未出现），流程结束。")
             return False

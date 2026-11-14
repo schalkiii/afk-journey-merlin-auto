@@ -25,8 +25,13 @@
 
 `scripts.<任务名>.params` 的常见键（由各任务配置面板写入）：
 `challenges`、`floors`、`formation_name`、`shenceng_formation_name`、`challenge_count`、
-`fail_limit`、`max_rounds`、`paid_times`、`quick_upgrade_times`、`retry_count`。
+`rotate_lineup`、`fail_limit`、`max_rounds`、`paid_times`、`quick_upgrade_times`、`retry_count`。
 新增参数时同步在 `Goldenhandmaidens.py` 的 `ScriptConfig(...)` 默认值与配置面板控件里登记。
+
+- `challenge_count`（迷梦之域）：单轮最多打几场。迷梦**通关当前难度会升难度并重置进度**，
+  吃满一整轮要跑多场，设成 2 会表现为「任务 ✔ 但次数还剩 10/10」。
+- `rotate_lineup`（迷梦之域）：每场是否换一套推荐阵容。`true` 时按场次轮换（最多 3 套循环），
+  `false` 时始终采用当前可见的那套（与加该开关之前的行为一致）。
 
 ## 其它运行时文件（不是用户配置）
 

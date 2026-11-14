@@ -187,8 +187,7 @@ def flow_pujing():
             time.sleep(1.0)
             battle_hit = find_leftmost([tpl_pujingzhandou, tpl_zhandou], threshold=0.8)
             if battle_hit is None:
-                print("未找到战斗按钮，普晶流程结束。")
-                return False
+                return _finish_without_battle()
             battle_tpl, battle_name, battle_pos = battle_hit
             if not _battle_then_continue(battle_tpl, battle_name, battle_pos):
                 return False
@@ -209,8 +208,7 @@ def flow_pujing():
             time.sleep(1.0)
             battle_hit = find_leftmost([tpl_pujingzhandou, tpl_zhandou], threshold=0.8)
             if battle_hit is None:
-                print("未找到战斗按钮，普晶流程结束。")
-                return False
+                return _finish_without_battle()
             battle_tpl, battle_name, battle_pos = battle_hit
             if not _battle_then_continue(battle_tpl, battle_name, battle_pos):
                 return False
@@ -247,8 +245,7 @@ def flow_pujing():
                 time.sleep(1.0)
                 battle_hit = find_leftmost([tpl_pujingzhandou, tpl_zhandou], threshold=0.8)
                 if battle_hit is None:
-                    print("未找到战斗按钮，普晶流程结束。")
-                    return False
+                    return _finish_without_battle()
                 battle_tpl, battle_name, battle_pos = battle_hit
                 if not _battle_then_continue(battle_tpl, battle_name, battle_pos):
                     return False
@@ -281,6 +278,27 @@ def flow_pujing():
             else:
                 print(f"未知情况：{hit_name}，普晶流程结束。")
                 return False
+
+
+def _finish_without_battle():
+    """点完「开始挑战」却找不到战斗按钮：分清「次数用尽」和真异常。
+
+    2026-11-14 实跑：连打 5 场全胜（08:03:28~08:05:11 五次结算），第 6 次点
+    「开始挑战」后界面既没有战斗按钮、也没有免费门票提示（付费门票那张图不在这一屏），
+    旧实现走到 `return False`，整条任务被记成失败——次数打完是正常结果，不是故障。
+    判据按可靠性排序：门票提示 → 挑战入口仍在 → 都认不出才判失败。
+    """
+    if (find_center_silent(tpl_mianfeimenpiao, 0.8, timeout=2.0)
+            or find_center_silent(tpl_fufeimenpiao, 0.8, timeout=0)):
+        print("出现门票提示，竞技场次数已用尽，普竞正常结束。")
+        return True
+    if (find_center_silent(tpl_kaishitiaozhan, 0.8, timeout=2.0)
+            or find_center_silent(tpl_pujingjixutiaozhan, 0.8, timeout=0)):
+        print("找不到战斗按钮但挑战入口仍在，判定次数已用尽，普竞正常结束。")
+        return True
+    print("未找到战斗按钮，且认不出当前界面，普竞流程结束。")
+    return False
+
 
 def _battle_then_continue(battle_tpl, battle_name, battle_pos):
     """打一场普竞；单场失败但挑战按钮仍在时返回 True（继续下一场）。

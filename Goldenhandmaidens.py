@@ -1135,6 +1135,16 @@ class GameBotGUI:
                              self.save_config())
         ).grid(row=row + 1, column=0, columnspan=2, sticky=tk.W, pady=2)
 
+        # 每场换一套推荐阵容：打不过时不至于连续几场死磕同一套
+        self.mimeng_rotate_var = tk.BooleanVar(value=script.params.get("rotate_lineup", True))
+        self._checkbutton(
+            self.param_frame,
+            text="每场轮换推荐阵容",
+            variable=self.mimeng_rotate_var,
+            command=lambda: (script.params.__setitem__("rotate_lineup", self.mimeng_rotate_var.get()),
+                             self.save_config())
+        ).grid(row=row + 2, column=0, columnspan=2, sticky=tk.W, pady=2)
+
     def create_dianfeng_params(self, script, row=0):
         """巅峰竞技场参数：单次运行最多挑战几场。"""
         ttk.Label(self.param_frame, text="挑战场数 (1-10):").grid(
@@ -2221,6 +2231,7 @@ class GameBotGUI:
             challenge_count=challenge_count,
             auto_configure_lineup=self.auto_configure_lineup,
             claim_reward=script.params.get("claim_reward", True),
+            rotate_lineup=script.params.get("rotate_lineup", True),
         )
 
     def _run_dianfeng(self, script):
@@ -2459,6 +2470,18 @@ class GameBotGUI:
         self.root.after(0, self.update_script_panel)
         return True
 
+    def _preflight_game_window(self):
+        """任务开始前确认游戏窗口仍在；不在就记原因并让调用方结束本轮。
+
+        与「click_from_file.exe 是否存活」同级的前置条件：缺窗口时每条任务都要白等
+        数十秒到三分钟才失败，还会各存一份失败现场，把真正需要排查的现场挤出去。
+        返回 False 表示本轮不该继续；调用方负责把状态标成「已停止」（不是任务失败）。
+        """
+        if is_game_running():
+            return True
+        self.log("未检测到游戏窗口（游戏可能已关闭或不在当前会话），已中止本轮剩余任务")
+        return False
+
     def run_scripts_thread(self, scripts_to_run, respect_enabled=True):
         # 单运行循环假设：log_format._task 是模块级全局，两个并行循环会互相覆盖任务上下文，
         # 日志归组随之错乱。断言放在任何 set_task 之前，确保同一时刻只有一个循环在跑。
@@ -2532,6 +2555,14 @@ class GameBotGUI:
             if not common.clicker_alive():
                 script.status = "失败"
                 self.log("click_from_file.exe 未在消费坐标（可能已退出或被拦截），已中止后续任务")
+                break
+
+            # 游戏窗口不存在时，所有模板匹配都要等 30~180 秒才会失败，而且每个任务都会
+            # 存一份失败现场——2026-11-14 实跑里 5 个失败名额被 5 条「未取到游戏窗口」的
+            # 巅峰竞技场占满，把普竞/愿望单的真实现场挤掉了。这里一次性判掉：
+            # 记一条明确原因并结束本轮，不把「游戏没开」算成任务失败。
+            if not self._preflight_game_window():
+                script.status = "已停止"
                 break
 
             # 任务切换兜底：
