@@ -344,7 +344,7 @@ tasklist /FO CSV /NH | findstr /I "autohotkey click_from"   # 有没有、在哪
   绿色用例不等于有效用例（日志落盘那条就是这样确认不是空跑的）。
   每个测试文件的模块 docstring 都写有「负验证留痕」——列明改坏哪一处、哪条用例会变红；
   新增或改动用例时同步更新该清单，让「绿色是否有效」可核对。
-  全仓用例不得出现无 `assert` / `pytest.raises` 的空跑用例（当前 305 条均有断言）。
+  全仓用例不得出现无 `assert` / `pytest.raises` 的空跑用例（2026-11-14 起 402 条均有断言）。
 
 ## 8. 发布收尾链（顺序不能换）
 
@@ -393,10 +393,14 @@ tasklist /FO CSV /NH | findstr /I "autohotkey click_from"   # 有没有、在哪
 改指 `dist/goldenhandmaidens.exe`，根目录 exe 删除，且 `build` 每次会主动清掉根目录
 同名残留。`build.ps1 clean` 也不再删除 `dist/`（它现在是唯一成品目录，不是缓存）。
 
-四条纪律：
+五条纪律：
 
-1. **只走** `powershell -NoProfile -File build.ps1 build -Python <Python3.13 解释器>`。
+1. **只走** `pwsh -NoProfile -File build.ps1 build -Python <Python3.13 解释器>`
+   （无 pwsh 时 `powershell` 亦可：脚本带 UTF-8 BOM，5.1 才能正确解码里面的中文注释）。
    脚本用 `--distpath dist`，打包后校验「dist 有成品、根目录无成品」并打印 SHA256。
+   若 `dist\goldenhandmaidens.exe` 正被运行中的进程占用（PyInstaller 覆盖时删除失败），
+   把它**同卷改名**移到 `build\_stale\` 再打包即可；真正的删除要等占用进程退出——
+   环境的删除守卫不会替你绕过占用。
 2. **每次运行先看构建标识**：`_begin_run()` 打印 `构建版本: … · 打包于 …`（打包版）
    或 `运行方式: Python 源码`。排查任何「修了没生效」，先拿这一行与 `git log -1` 对时间。
 3. **改了代码没重打包 = 没改**。测试跑源码、实机跑 exe，两者不是一回事。

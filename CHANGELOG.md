@@ -464,7 +464,9 @@
 
 #### 隐藏启动/关闭时的黑色控制台窗口
 
-- 根因：PyInstaller 控制台模式会为 `print()` 分配一个 Windows 控制台窗口（启动/关闭时闪现）。
+> **本节结论已于 2026-11-14 更正**：黑框不是「PyInstaller 控制台模式 / `sys.stdout` 重定向」造成的——成品 PE 本就是 GUI 子系统（`Subsystem=2`），真因是它**没有控制台**，启动任何控制台子程序时 Windows 必须新建一个控制台窗口。修法与证据见下方「2026-11-14」一节及 `doc/GUI.md`；成品也已统一到 `dist/`，不再放根目录。
+
+- 根因（当时判断，已被推翻）：PyInstaller 控制台模式会为 `print()` 分配一个 Windows 控制台窗口（启动/关闭时闪现）。
   `goldenhandmaidens.spec` 本就是 `console=False`（窗口模式），但原 `sys.stdout` 重定向仅在点击「开始」后的
   `run_scripts_thread` 内设置，窗口模式下启动期 `sys.stdout` 为 `None`，存在早期 `print` 写入 `None` 崩溃隐患。
 - 修复：将 stdout 重定向提前到 `main()` 启动最早期（`sys.stdout = _StdoutTee(...)`）；启动前的 `print` 先缓冲到
@@ -477,7 +479,9 @@
 
 #### 隐藏启动/关闭时的黑色控制台窗口（补充记录）
 
-- 根因：PyInstaller 控制台模式为 `print()` 分配 Windows 控制台。`goldenhandmaidens.spec` 本就是
+> **本节结论已于 2026-11-14 更正**：黑框不是「PyInstaller 控制台模式 / `sys.stdout` 重定向」造成的——成品 PE 本就是 GUI 子系统（`Subsystem=2`），真因是它**没有控制台**，启动任何控制台子程序时 Windows 必须新建一个控制台窗口。修法与证据见下方「2026-11-14」一节及 `doc/GUI.md`；成品也已统一到 `dist/`，不再放根目录。
+
+- 根因（当时判断，已被推翻）：PyInstaller 控制台模式为 `print()` 分配 Windows 控制台。`goldenhandmaidens.spec` 本就是
   `console=False`，但原 `sys.stdout` 重定向仅在点击「开始」后设置，窗口模式启动期 `sys.stdout=None` 有崩溃隐患。
 - 修复（`Goldenhandmaidens.py`）：`main()` 首行即接管 stdout（`_StdoutTee`），启动前 print 缓冲、GUI 建好后
   灌入面板；退出重置改为 `_StdoutTee(self._enqueue_log)`。

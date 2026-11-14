@@ -62,7 +62,9 @@
 
 ### 2. 一键全选 / 全不选（批量勾选功能）
 
-- 功能列表每行行首是一个**启用勾选框**（`tk.Checkbutton`，直接读写该脚本的 `enabled` 并立即落盘）；
+- 功能列表每行行首是一个**启用勾选框**（自绘 `_ToggleBox`，直接读写该脚本的 `enabled` 并立即落盘；
+  不用 `tk.Checkbutton` 是因为本机 Tk 8.6 只填 `selectcolor`、不画对勾，clam 主题的 ttk 勾选标记
+  又是个 ✗，看着像「禁用 / 出错」，详见 `doc/GUI.md`）；
   配置面板与之并排提供「一键全选」`GameBotGUI.enable_all_scripts()` 与「一键全不选」
   `GameBotGUI.disable_all_scripts()`，一次性把全部功能置为启用 / 停用，刷新各行勾选框并持久化。
 - 启用状态**只有用户能改**：运行成功后不再自动取消勾选（旧的 `daily_reset`「完成即停用」会把
@@ -300,9 +302,11 @@
 ## 项目结构
 
 ```text
-Goldenhandmaidens.py      主程序：tkinter GUI、热键、定时/立即运行、配置持久化、日志汇聚、协作式停止
+Goldenhandmaidens.py      主程序：tkinter GUI、热键、定时/启动游戏并运行、配置持久化、日志汇聚、协作式停止
 bot_runtime.py            从主文件拆出的独立工具：stdout 接管、配置读写、ScriptConfig、桌面快捷方式 / 游戏窗口聚焦
 log_format.py             日志行的统一格式：任务归组缩进、高频行压缩、任务边界行
+proc_util.py              子进程封装：run_hidden / popen_hidden，给所有控制台子程序加 CREATE_NO_WINDOW
+                          （成品是 GUI 子系统、没有控制台，裸调 subprocess 会弹出黑框）
 common.py                 基础能力：模板匹配(find_center/find_center_silent)、坐标 IPC、协作式停止、日志汇聚、自动配置阵容
 template_names.py         模板 / 动作拼音名的中文标注表（从 common 抽出的纯数据模块，由 common re-export）
 start.py                  启动任务：登录、月卡/礼包弹窗处理（被「运行登录」调用）
@@ -338,7 +342,7 @@ updater.py                检查更新与自更新
 version.py                本地版本号
 requirements.txt          运行时依赖（按本机 Python 3.13 实测版本 pin）
 requirements-dev.txt      开发依赖（pytest / ruff / pyinstaller）
-build.ps1                 统一构建入口：build / check / clean（需 PowerShell 7+）
+build.ps1                 统一构建入口：build / check / clean（pwsh 7 优先；5.1 亦可，脚本带 UTF-8 BOM）
 .ruff_baseline            ruff 存量基线（每行 `文件=条数`，由 build.ps1 check 消费）
 launch_game.py            命令行启动游戏并可联动启动本项目脚本（新增）
 click_from_file.exe       AHK 注入器（读取坐标文件执行点击）
@@ -348,6 +352,7 @@ doc/                      规范与方法学：
   doc/TEMPLATE-AUTHORING.md        模板采集与标定规范（新增/替换模板前必读）
   doc/LIVE-DEBUGGING.md            实机开发与调试方法学（怎么发起实跑、怎么校验点击生效、收尾链）
   doc/CONFIG.md                    用户配置字段清单与读写位置
+  doc/GUI.md                       界面结构与视觉规范（布局/缩放/配色/控件自绘理由/定时提示/框架评估）
   doc/CLIENT-RESOLUTION.md         客户区 1600×900 假设与偏移常量登记表
   doc/AUDIT-REPORT-2026-11-07.md   2026-11-07 全面审计快照（问题清单 / 改进建议，行号与计数为当时值）
 game_bot_config.json      用户配置（运行时生成，字段见 doc/CONFIG.md）
