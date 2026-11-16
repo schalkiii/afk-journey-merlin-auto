@@ -75,6 +75,12 @@ from warehouse import ALL_HERO_NAMES, WAREHOUSE_TXT_PATH
 # 把游戏拉起两次）；正常「每天循环」的间隔至少一天，不会误伤。
 FIRE_GUARD_SECONDS = 10.0
 
+# 连续多少项因「无法回到主界面」被跳过就提前结束本轮。
+# 2026-11-16 定时运行实测：登录失败后游戏停在错界面，15 项任务逐项
+# 「开始前未回到主界面」各空转约 25 秒，合计 6 分钟，既烧时间又把
+# 失败现场挤满，真正需要排查的那一屏反被覆盖。
+MAIN_GATE_CIRCUIT_BREAK = 3
+
 # 自带入口保障的任务：开始前**不**强制要求「已回到主界面」。
 # 「登录」压根没有主界面概念；「家园愿望单」的 `_ensure_panel` 既能从主界面点家园入口，
 # 也能在面板已开着时直接接管（模板 `xinyuandanbiaoti` 实测 0.999）。
@@ -1997,7 +2003,20 @@ class GameBotGUI:
                 note = f"登录流程异常: {exc!s}"
                 self.root.after(0, lambda: self.log(note))
             if not ok:
-                self.root.after(0, lambda: self.log("登录流程未确认到达主界面，仍继续执行任务列表"))
+                self.root.after(0, lambda: self.log(
+                    "登录流程未确认到达主界面，尝试强制恢复到主界面"))
+                try:
+                    recovered = bool(common.ensure_main_interface())
+                except (OSError, RuntimeError, ValueError) as exc:
+                    note = f"强制恢复主界面时出错: {exc!s}"
+                    self.root.after(0, lambda: self.log(note))
+                    recovered = False
+                if not recovered:
+                    note = "登录失败且无法恢复主界面，本轮停止（避免后续任务在错位界面连败）"
+                    self.root.after(0, lambda: self.log(note))
+                    self.root.after(0, self.stop_all)
+                    return
+                self.root.after(0, lambda: self.log("已强制恢复到主界面，继续执行任务列表"))
             self.root.after(0, self.start_all)
 
         threading.Thread(target=worker, daemon=True).start()
@@ -2630,6 +2649,7 @@ class GameBotGUI:
         # self.scripts 生成，因此顺序就是功能列表里拖出来的顺序——不再维护独立的
         # script_order 常量（那样按钮顺序和执行顺序是两份数据，拖动改了也不生效）。
         total = len(scripts_to_run)
+        consecutive_main_gate_failures = 0
         for index, script in enumerate(list(scripts_to_run), 1):
             if self.stop_event.is_set():
                 break
@@ -2667,7 +2687,14 @@ class GameBotGUI:
             try:
                 common.dismiss_popup()
                 if self._skip_task_when_not_at_main(script, index, total, task_started):
+                    consecutive_main_gate_failures += 1
+                    if consecutive_main_gate_failures >= MAIN_GATE_CIRCUIT_BREAK:
+                        self.log(
+                            f"连续 {consecutive_main_gate_failures} 项因无法回到主界面被跳过，"
+                            "提前结束本轮，避免继续空耗")
+                        break
                     continue
+                consecutive_main_gate_failures = 0
 
                 # 检查是否需要停止
                 if self.stop_event.is_set():

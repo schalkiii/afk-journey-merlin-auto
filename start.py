@@ -2,7 +2,7 @@
 
 被「运行登录」功能调用。逻辑分四阶段：
 1. 等游戏窗口出现且画面不再是加载态（冷启动时这一步最容易被跳过，后果也最大）；
-2. 等待开始界面点击 start 进入游戏；若游戏已越过开始界面（直接出现月卡/礼包）则跳过；
+2. 等待开始界面点击 start 进入游戏；若游戏已越过开始界面（月卡/礼包或可交互弹窗）则跳过；
 3. 循环处理月卡奖励、礼包与「点击空白处关闭」类弹窗，直到连续一段时间无弹窗；
 4. 确认已经落在主界面，返回是否真的登录成功。
 
@@ -60,6 +60,14 @@ def _wait_for_start(start_path, yuekajiangli_path, libao_path, timeout=START_WAI
             wait_and_click(start_path, "start")
             time.sleep(2)
             wait_until_loaded(30.0)
+            return True
+        # 2026-11-16 实机：冷启动可能已越过 start 界面，直接停在
+        # 「点击空白处关闭」弹窗上（wait_for_game_ready 已按 GAME_READY_MARKERS
+        # 把它判为「可交互」）。旧实现只认 start/月卡/礼包/主界面，于是每轮
+        # 都落空、白等满 180 秒才误判登录失败，后续任务跟着在错界面连败。
+        # 弹窗说明已经越过开始界面，交给 _dismiss_popups 清理即可。
+        if _find(get_template_path("dianjikongbaichuguanbi.png")):
+            log("检测到可交互弹窗（已越过开始界面），转弹窗清理")
             return True
         now = time.time()
         if now - last_note >= 15.0:
