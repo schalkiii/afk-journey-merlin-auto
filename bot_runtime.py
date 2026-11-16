@@ -9,6 +9,7 @@ import ctypes
 import json
 import os
 import shlex
+import subprocess
 import sys
 import threading
 import time
@@ -345,3 +346,67 @@ def focus_game_window():
         return True, "已将游戏窗口切换到前台"
     except (OSError, AttributeError) as e:
         return False, f"聚焦游戏窗口失败: {e}"
+
+
+# 关游戏时先请窗口自己退出，等不到消失再强杀。2026-11-16 实测：发 WM_CLOSE 后客户端
+# 3.2 秒干净退出（PID 与窗口都消失，走的是正常退出分支）；12 秒留了近 4 倍余量，
+# 等太短会把「还在保存设置」的正常退出误判成需要强杀。
+CLOSE_GAME_TIMEOUT = 12.0
+WM_CLOSE = 0x0010
+
+
+def game_window_pid():
+    """返回游戏窗口所属进程的 PID；没有窗口或取不到时返回 None。"""
+    hwnd = _find_game_window()
+    if hwnd is None:
+        return None
+    try:
+        pid = wintypes.DWORD(0)
+        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        return int(pid.value) or None
+    except (OSError, AttributeError):
+        return None
+
+
+def _post_close_message(hwnd):
+    """给游戏窗口发 WM_CLOSE，返回是否发出（发不出不抛，交由调用方按强杀兜底）。"""
+    try:
+        ctypes.windll.user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
+        return True
+    except (OSError, AttributeError):
+        return False
+
+
+def close_game(timeout=CLOSE_GAME_TIMEOUT):
+    """关闭游戏客户端，返回 (是否已关闭, 说明)。
+
+    先给窗口发 `WM_CLOSE` 让它走正常退出流程：游戏是 Unity 客户端，直接 `taskkill /F`
+    会把它按在保存/清理的中途。但只发消息不够——有的版本会弹「确认退出」把窗口留在
+    原地，无人值守场景会一直挂着，所以等窗口消失超时后补一次 `/F /T` 强杀整棵进程树。
+
+    `WM_CLOSE` 与本项目「PostMessage 点不动游戏」的结论不冲突：那说的是**点击**依赖
+    Unity 的 Raw Input；`WM_CLOSE` 是窗口生命周期消息，由系统分发，游戏拦不到。
+    """
+    hwnd = _find_game_window()
+    if hwnd is None:
+        return True, "游戏未在运行，无需关闭"
+    # PID 必须在关窗之前取：窗口没了就查不到进程了
+    pid = game_window_pid()
+    _post_close_message(hwnd)
+    deadline = time.time() + max(0.0, float(timeout))
+    while time.time() < deadline:
+        if _find_game_window() is None:
+            return True, "已关闭游戏（正常退出）"
+        time.sleep(0.4)
+    if pid is None:
+        return False, "关闭游戏失败：取不到游戏进程号，窗口仍在"
+    try:
+        res = run_hidden(["taskkill", "/F", "/T", "/PID", str(pid)],
+                         capture_output=True, timeout=20, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return False, f"关闭游戏失败：无法执行 taskkill（PID {pid}）"
+    # taskkill 在中文 Windows 下输出 GBK，只认返回码，不解析文本
+    if res.returncode == 0:
+        return True, f"已强制关闭游戏（PID {pid} 未响应正常退出）"
+    return False, (f"关闭游戏失败：taskkill 返回 {res.returncode}"
+                   f"（PID {pid} 可能以管理员运行，需提权才能结束）")

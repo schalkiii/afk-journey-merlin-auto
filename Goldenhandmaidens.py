@@ -44,6 +44,7 @@ from bot_runtime import (
     _notify_file_write_error,
     _StdoutTee,
     append_log_file,
+    close_game,
     focus_game_window,
     is_game_running,
     launch_game_by_shortcut,
@@ -222,6 +223,20 @@ class _ToggleBox(tk.Canvas):
 # 属于可接受的取舍。
 HOTKEY_REGISTER_DELAY_MS = 200
 
+
+def _shutdown_app(app):
+    """唯一的退出路径：摘热键 → 回收注入器 → 销毁窗口。
+
+    「点窗口 X」（`on_closing`）与「跑完自动退出」（`_quit_now`）必须走同一份实现：
+    漏回收注入器会留下长期残留进程，把坐标读走、点击却打到别的桌面。
+    做成模块级函数而不是方法，是为了让退出动作不依赖具体实例类型——
+    挂到类上时，任何替身宿主都得先补一个同名属性才能被调用（用例踩过）。
+    """
+    app._unregister_hotkeys()
+    app._stop_clicker()
+    app.root.destroy()
+
+
 class GameBotGUI:
     def __init__(self, root):
         _ensure_config_files()
@@ -292,6 +307,14 @@ class GameBotGUI:
         self.restore_cursor_after_click = self.config.get("restore_cursor_after_click", True)
         self.restore_cursor_var = tk.BooleanVar(value=self.restore_cursor_after_click)
         common.set_restore_cursor(self.restore_cursor_after_click)
+
+        # 跑完一轮后的收尾动作。默认都关：这两个开关是给「定时无人值守」用的，
+        # 手动跑的人多半还想看日志/接着点别的。只在**自然跑完**时执行；按 F9 停止
+        # 说明用户就在跟前，此时关游戏会打断他正要看的东西，故不触发。
+        self.quit_after_run = self.config.get("quit_after_run", False)
+        self.quit_after_run_var = tk.BooleanVar(value=self.quit_after_run)
+        self.close_game_after_run = self.config.get("close_game_after_run", False)
+        self.close_game_after_run_var = tk.BooleanVar(value=self.close_game_after_run)
 
         # 定时开始（每天循环）：存储为 "HH:MM" 或 None
         self.schedule_time = self.config.get("schedule_time", None)
@@ -717,6 +740,17 @@ class GameBotGUI:
             options.frame, text="点击后归还鼠标位置",
             variable=self.restore_cursor_var, command=self.on_restore_cursor_changed)
         options.add(self.restore_cursor_check)
+
+        self.quit_after_run_check = self._checkbutton(
+            options.frame, text="跑完退出工具",
+            variable=self.quit_after_run_var, command=self.on_quit_after_run_changed)
+        options.add(self.quit_after_run_check)
+
+        self.close_game_after_run_check = self._checkbutton(
+            options.frame, text="跑完关闭游戏",
+            variable=self.close_game_after_run_var,
+            command=self.on_close_game_after_run_changed)
+        options.add(self.close_game_after_run_check)
 
         # ---- 第三层：等待时长 + 定时（按宽度折行，「设定定时」永不掉出可视区）----
         schedule = _FlowRow(card)
@@ -1618,6 +1652,23 @@ class GameBotGUI:
         state = "开启" if self.restore_cursor_after_click else "关闭"
         self.log(f"点击后归还鼠标位置已{state}")
 
+    def on_quit_after_run_changed(self):
+        """切换「跑完退出工具」。"""
+        self.quit_after_run = self.quit_after_run_var.get()
+        self.save_config()
+        state = "开启" if self.quit_after_run else "关闭"
+        self.log(f"跑完退出工具已{state}")
+        if self.quit_after_run and self.schedule_active:
+            self.log("注意：定时由本工具自己在跑，退出后明天的定时不会再触发；"
+                     "要每天自动跑请保持工具常驻（关掉本项）")
+
+    def on_close_game_after_run_changed(self):
+        """切换「跑完关闭游戏」。"""
+        self.close_game_after_run = self.close_game_after_run_var.get()
+        self.save_config()
+        state = "开启" if self.close_game_after_run else "关闭"
+        self.log(f"跑完关闭游戏已{state}")
+
     def on_game_wait_changed(self):
         try:
             val = int(self.game_wait_var.get())
@@ -1692,7 +1743,7 @@ class GameBotGUI:
             messagebox.showwarning("提示", "已有任务在运行中，请先停止 (F9)。")
             return
         script = self.scripts[self.current_script_index]
-        self._begin_run([script], respect_enabled=False)
+        self._begin_run([script], respect_enabled=False, auto_cleanup=False)
         self.log(f"单独运行: {script.name}")
 
     def _prepare_run_statuses(self, scripts_to_run, respect_enabled=True):
@@ -1737,8 +1788,14 @@ class GameBotGUI:
         else:
             self.log("运行方式: Python 源码（非打包 exe）")
 
-    def _begin_run(self, scripts_to_run, respect_enabled=True):
-        """启动运行线程的公共入口：置运行态、复位状态标记、拉起工作线程。"""
+    def _begin_run(self, scripts_to_run, respect_enabled=True, auto_cleanup=True):
+        """启动运行线程的公共入口：置运行态、复位状态标记、拉起工作线程。
+
+        `auto_cleanup=False` 用于「只运行当前功能」：跑完关游戏/退工具是给一整轮无人值守
+        准备的，手动补跑单个任务时把工具关掉会打断用户接下来的操作。
+        """
+        if not auto_cleanup and (self.quit_after_run or self.close_game_after_run):
+            self.log("本次是单独运行，不触发「跑完关游戏 / 跑完退出工具」")
         self.is_running = True
         self.stop_event.clear()
         self.update_master_button()
@@ -1749,7 +1806,7 @@ class GameBotGUI:
 
         thread = threading.Thread(
             target=self.run_scripts_thread,
-            args=(scripts_to_run, respect_enabled),
+            args=(scripts_to_run, respect_enabled, auto_cleanup),
         )
         thread.daemon = True
         self._run_thread = thread
@@ -1784,17 +1841,55 @@ class GameBotGUI:
         self.update_script_panel()
         
         self.log("所有脚本已停止")
-        
+
+    # ===== 跑完一轮后的收尾（关游戏 / 退工具） =====
+    def _should_run_cleanup(self, auto_cleanup):
+        """本轮跑完是否执行收尾动作。
+
+        三个条件同时成立才做：① 不是「单独运行当前功能」；② 不是被 F9 主动停止；
+        ③ 至少勾了一个收尾开关。把判定单独拎出来是因为它恰好是三个「看起来都像跑完」
+        的场景的分界线，散在运行循环尾部没人敢改。
+        """
+        if not auto_cleanup or self.stop_event.is_set():
+            return False
+        return self.quit_after_run or self.close_game_after_run
+
+    def _after_run_cleanup(self):
+        """一轮任务自然跑完后的收尾入口（主线程）：按配置关游戏、退工具。
+
+        关游戏要等窗口真的消失（最长十几秒），放主线程会把界面连同 F9 一起冻住，
+        所以交给后台线程；只有「退出工具」这一步必须回主线程做。
+        """
+        self.log("按设置执行跑完收尾（关闭游戏 / 退出工具）")
+        if self.quit_after_run and self.schedule_active:
+            # 定时循环活在工具进程里，进程没了就没有下一次——这是本功能最容易踩的坑，
+            # 用户第二天看不到脚本跑，只能靠这行日志解释清楚。
+            self.log("注意：已设定定时，退出后明天的定时不会再自动触发")
+        threading.Thread(target=self._after_run_cleanup_worker, daemon=True).start()
+
+    def _after_run_cleanup_worker(self):
+        """后台线程：先关游戏再退工具——反过来的话进程都退出了，关游戏的日志没人看得见。"""
+        if self.close_game_after_run:
+            ok, msg = close_game()
+            self.log(msg)
+            if not ok:
+                self.log("游戏可能仍在运行，退出后请手动确认")
+        if self.quit_after_run:
+            self.log("按设置退出工具")
+            with contextlib.suppress(Exception):
+                self.root.after(0, self._quit_now)
+
+    def _quit_now(self):
+        """跑完自动退出：不弹「脚本正在运行中」确认（此时已跑完，开关是用户自己勾的）。"""
+        _shutdown_app(self)
+
     def on_closing(self):
-        self._unregister_hotkeys()
         if self.is_running:
             if messagebox.askokcancel("退出", "脚本正在运行中，确定要停止并退出吗？"):
                 self.stop_all()
-                self._stop_clicker()
-                self.root.destroy()
+                _shutdown_app(self)
             return
-        self._stop_clicker()
-        self.root.destroy()
+        _shutdown_app(self)
         
     def launch_game_then_start(self, launch_game=True):
         """按需启动游戏，等游戏就绪后开始脚本流程。
@@ -2482,7 +2577,7 @@ class GameBotGUI:
         self.log("未检测到游戏窗口（游戏可能已关闭或不在当前会话），已中止本轮剩余任务")
         return False
 
-    def run_scripts_thread(self, scripts_to_run, respect_enabled=True):
+    def run_scripts_thread(self, scripts_to_run, respect_enabled=True, auto_cleanup=True):
         # 单运行循环假设：log_format._task 是模块级全局，两个并行循环会互相覆盖任务上下文，
         # 日志归组随之错乱。断言放在任何 set_task 之前，确保同一时刻只有一个循环在跑。
         assert log_format.current_task() is None, (
@@ -2643,7 +2738,14 @@ class GameBotGUI:
         self._clear_pending_statuses()
         self.root.after(0, self._set_current_task, "无")
         self.save_config()
+        # 「跑完关游戏 / 跑完退工具」只在自然跑完时触发：按 F9 停止说明用户就在跟前，
+        # 这时把游戏关掉正好打断他要看的界面。判定必须在调度 stop_all **之前**取，
+        # stop_all 自己会把 stop_event 置位。
+        cleanup = self._should_run_cleanup(auto_cleanup)
         self.root.after(0, self.stop_all)
+        if cleanup:
+            # 稍等一拍：让日志队列先把「所有脚本已停止」刷进面板，再动手拆窗口
+            self.root.after(300, self._after_run_cleanup)
         
     def _enqueue_log(self, message):
         """日志汇聚回调（工作线程调用）：仅把消息放入队列，线程安全、零 Tk 操作。"""
@@ -2719,6 +2821,8 @@ class GameBotGUI:
         self.config["auto_configure_lineup"] = self.auto_configure_lineup
         self.config["remote_desktop_compat"] = self.remote_desktop_compat
         self.config["restore_cursor_after_click"] = self.restore_cursor_after_click
+        self.config["quit_after_run"] = self.quit_after_run
+        self.config["close_game_after_run"] = self.close_game_after_run
         
         # 保存到文件
         if save_config(self.config):

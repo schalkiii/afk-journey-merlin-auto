@@ -146,6 +146,8 @@ def test_minimum_width_keeps_every_toolbar_control(app, root):
         app.clear_log_btn, app.help_btn, app.sponsor_btn, app.update_btn,
         app.version_label, app.game_wait_spin, app.sched_hour_spin,
         app.sched_min_spin, app.sched_set_btn, app.schedule_status_label,
+        # 2026-11-16 新增的收尾开关也属于控制栏，缩到最小尺寸同样不许被裁
+        app.quit_after_run_check, app.close_game_after_run_check,
     )
     for widget in controls:
         assert widget.winfo_manager() in ("grid", "pack"), f"{widget} 没有被布局"

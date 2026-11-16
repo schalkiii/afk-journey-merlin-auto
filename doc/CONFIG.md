@@ -20,6 +20,8 @@
 | `schedule_time` | string | `""` | 定时开始，格式 `HH:MM`；解析失败时忽略，不中断启动 |
 | `remote_desktop_compat` | bool | 见 GUI 控制栏 | 后台截图 + 点击前自动激活游戏窗口 |
 | `restore_cursor_after_click` | bool | 见 GUI 控制栏 | 每次注入点击后把光标放回原处 |
+| `quit_after_run` | bool | `false` | 一整轮任务跑完后退出本工具；「只运行当前功能」与 F9 停止不触发 |
+| `close_game_after_run` | bool | `false` | 一整轮任务跑完后关闭游戏客户端（先 `WM_CLOSE`，12 秒未退出再 `taskkill /F /T`） |
 | `push_settings` | object | `{}` | 推图类任务的参数集合（连续失败上限、轮次等） |
 | `first_run_completed` | bool | `false` | 首次运行标记 |
 
@@ -51,3 +53,5 @@
 2. `script_order` 只存任务名；重命名任务会让旧顺序项失效（按「新功能补到末尾」处理）。
 3. 配置解析失败时 `load_config()` 返回 `{}`，程序按默认值启动，不会弹错——排查「设置没生效」
    时先确认文件本身是合法 JSON。
+4. `quit_after_run=true` 与 `schedule_time` **互斥使用**：定时循环活在工具进程里，进程退出后
+   第二天的定时不会再触发。需要每天自动跑就保持工具常驻；只在「手动跑完想让它收摊」时开它。
