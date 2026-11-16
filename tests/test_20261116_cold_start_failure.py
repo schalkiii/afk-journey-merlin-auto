@@ -62,11 +62,12 @@ def test_wait_for_start_still_waits_without_popup(monkeypatch):
 def test_wait_for_start_prefers_real_start(monkeypatch):
     """start 与弹窗同时可见时优先点 start，避免跳过还没真正开始的会话。"""
     clicked = []
+    state = {"start_visible": True}
 
     def fake_find(path, *_a, **_k):
         p = str(path)
         if p == "start":
-            return (100, 200)
+            return (100, 200) if state["start_visible"] else None
         if "dianjikongbaichuguanbi" in p:
             return (1129, 902)
         return None
@@ -74,13 +75,17 @@ def test_wait_for_start_prefers_real_start(monkeypatch):
     monkeypatch.setattr(start, "_find", fake_find)
     monkeypatch.setattr(start, "at_main_interface", lambda: False)
     monkeypatch.setattr(start, "log", lambda *_a, **_k: None)
-    monkeypatch.setattr(start, "wait_and_click",
-                        lambda _path, name, *_a, **_k: clicked.append(name))
+
+    def fake_click(pos, *_a, **_k):
+        clicked.append(pos)
+        state["start_visible"] = False  # 模拟点击生效：start 消失
+
+    monkeypatch.setattr(start, "click_position", fake_click)
     monkeypatch.setattr(start, "wait_until_loaded", lambda *_a, **_k: None)
     monkeypatch.setattr(start.time, "sleep", lambda _s: None)
 
     assert start._wait_for_start("start", "yueka", "libao", timeout=30) is True
-    assert clicked == ["start"]
+    assert clicked == [(100, 200)]
 
 
 # ---------- 登录失败后的熔断 ----------
@@ -124,6 +129,9 @@ def _login_stub(monkeypatch, *, login_ok, recover_ok):
 
         def log(self, msg):
             self.logs.append(msg)
+
+        def _ensure_clicker_ready(self):
+            return True
 
         def start_all(self):
             self.started = True

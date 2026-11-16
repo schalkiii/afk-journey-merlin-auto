@@ -16,6 +16,7 @@ import time
 
 from common import (
     at_main_interface,
+    click_position,
     get_template_path,
     log,
     wait_and_click,
@@ -38,6 +39,53 @@ def _find(template_path, threshold=0.8, timeout=0):
     return find_center_silent(template_path, threshold, timeout=timeout)
 
 
+def _click_start_with_confirm(start_path, attempts=3):
+    """点击 start 并校验界面真的离开开始界面；没离开就补点，最多 attempts 轮。
+
+    2026-11-16 定时实测：注入器未启动时 `send_coord` 前两次未消费是静默的，而
+    `wait_and_click` 只看「模板命中 + 坐标已写」就返回 True——于是 start 点击落空
+    却被当成「已进入」，登录白等两分半、游戏始终停在「点击开始游戏」。
+
+    这里按「点击 → 轮询确认 start 消失 → 未生效补点」来判，与
+    `common.click_and_confirm` 同构；每次只点一下（twice=False），避免跳转型按钮
+    连点造成「进入后又退出」。返回 True 表示确认已进入（start 消失且加载完成）。
+    """
+    for attempt in range(1, attempts + 1):
+        pos = _find(start_path)
+        if pos is None:
+            # 没找到 start：要么上一次点击已生效，要么游戏正在切场景。
+            # 等加载结束再看是否落到主界面/弹窗，避免把加载误判成失败。
+            wait_until_loaded(20.0)
+            if (at_main_interface()
+                    or _find(get_template_path("dianjikongbaichuguanbi.png"))
+                    or _find(get_template_path("yuekajiangli.png"))
+                    or _find(get_template_path("libao.png"))):
+                log("start 已消失且已进入游戏/弹窗，视为点击生效")
+                return True
+            log(f"第 {attempt} 轮未找到 start，也未确认进入游戏，继续尝试")
+            continue
+
+        log(f"点击 start（第 {attempt}/{attempts} 次），坐标 {pos}")
+        click_position(pos, wait=0.6, twice=False)
+
+        # 轮询确认 start 消失（点击生效后页面必然离开开始界面）
+        deadline = time.time() + 8.0
+        left_start = False
+        while time.time() < deadline:
+            if _find(start_path) is None:
+                left_start = True
+                break
+            time.sleep(0.5)
+        if left_start:
+            log("start 点击已生效，等待加载完成")
+            wait_until_loaded(20.0)
+            return True
+        log(f"第 {attempt} 次点击 start 后仍停在开始界面，补点")
+
+    log(f"连续 {attempts} 次点击 start 后仍停在开始界面，登录流程放弃")
+    return False
+
+
 def _wait_for_start(start_path, yuekajiangli_path, libao_path, timeout=START_WAIT_TIMEOUT):
     """等待开始界面并点击 start 进入游戏。
 
@@ -57,10 +105,7 @@ def _wait_for_start(start_path, yuekajiangli_path, libao_path, timeout=START_WAI
             return True
         if _find(start_path):
             log("检测到 start，点击进入")
-            wait_and_click(start_path, "start")
-            time.sleep(2)
-            wait_until_loaded(30.0)
-            return True
+            return _click_start_with_confirm(start_path)
         # 2026-11-16 实机：冷启动可能已越过 start 界面，直接停在
         # 「点击空白处关闭」弹窗上（wait_for_game_ready 已按 GAME_READY_MARKERS
         # 把它判为「可交互」）。旧实现只认 start/月卡/礼包/主界面，于是每轮

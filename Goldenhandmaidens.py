@@ -1991,6 +1991,19 @@ class GameBotGUI:
         def worker():
             import start
 
+            # 2026-11-16 定时实测的关键缺口：前置登录跑在独立线程、且在
+            # run_scripts_thread（唯一初始化注入器的地方）之前，导致 start 点击时
+            # 根本没有注入器消费坐标。先在这里确保注入器就绪再登录。
+            try:
+                clicker_ok = self._ensure_clicker_ready()
+            except (OSError, RuntimeError, ValueError) as exc:
+                note = f"注入器就绪检查出错: {exc!s}"
+                self.root.after(0, lambda: self.log(note))
+                clicker_ok = False
+            if not clicker_ok:
+                self.root.after(0, lambda: self.log(
+                    "警告: 点击注入器未能启动，start 点击可能无法生效"))
+
             try:
                 ok = start.main()
             except common.StopRequested:
@@ -2289,6 +2302,39 @@ class GameBotGUI:
         self.log("警告: 本工具未以管理员身份运行。若游戏以管理员启动，所有点击都会被"
                  "系统拦截（表现为任务全部超时失败但日志无异常），请以管理员身份重新运行")
         return True
+
+    def _ensure_clicker_ready(self):
+        """确保点击注入器可用：清陈旧坐标 → 会话比对 → 自证 → 提权告警。
+
+        2026-11-16 定时实测发现的关键缺口：注入器原先**只在** `run_scripts_thread()`
+        里初始化，而冷启动前置登录 `_run_login_before_flow()` 是在那之前用独立线程
+        直接跑 `start.main()` 的——于是定时拉起游戏后点 start 时根本没有注入器，
+        `send_coord` 前两次未消费又被静默吞掉，`wait_and_click` 只看「模板命中」就
+        返回成功，结果登录白等两分半、游戏始终停在「点击开始游戏」。
+
+        现在把注入器就绪检查收敛成一处，冷启动登录与脚本主循环都先走这里。
+        返回 True 表示已有可用注入器（复用或新起）；False 表示启动失败。
+        """
+        # 清掉残留坐标：新注入器一上线就会消费它，若那是上次调试留下的 start 坐标，
+        # 游戏会被误点。清理必须先于任何复用/启动。
+        common.clear_stale_coord()
+
+        mismatch = common.clicker_session_mismatch()
+        if mismatch:
+            self.log(f"现有注入器与游戏不在同一会话：{mismatch}。清掉后重新启动")
+            ok = self._launch_clicker(kill_ahk=True)
+        elif self.is_click_from_file_running() and common._click_title_bar():
+            self.log("点击注入器已在运行且能消费本目录坐标，复用现有进程")
+            ok = True
+        else:
+            if self.is_click_from_file_running():
+                self.log("现有注入器没有消费坐标（工作目录可能已失效），改为重新启动")
+            ok = self._launch_clicker()
+
+        # 权限一致性：游戏以管理员运行时，非提权进程的 SendInput 会被 UIPI 静默丢弃，
+        # 坐标照样被消费、画面却一动不动（2026-11-12 实测确认）。
+        self._warn_if_not_elevated()
+        return ok
 
     @staticmethod
     def _taskkill(args):
@@ -2616,35 +2662,12 @@ class GameBotGUI:
                 "识别可能失败；请把游戏窗口恢复为 1600×900"
             )
 
-        # 点击注入器：优先 AHK v2 明文脚本（按下有保持时长、动作完成后才删 IPC 文件，
-        # 2026-11-10 修复「点击过短 / 鼠标来回横跳」）；未安装 AHK v2 时回退编译 exe。
-        #
-        # 2026-11-11 实机回归：旧逻辑只判断「有 AHK 进程在跑」就复用。跨天重启程序时，
-        # 复用的可能是上一天留下的进程——它绑定的工作目录未必是当前仓库（例如已被清理的
-        # _MEI 临时目录），于是坐标无人消费、点击全部落空，表现为「从第一个任务起点击都不准」。
-        # 现在复用前先用一次「点标题栏」自证：能消费本目录坐标才复用，否则重启注入器。
-        #
-        # 2026-11-12 冷启动实测补充：还有比工作目录更隐蔽的一种失效——**会话不同**。
-        # RDP 会话里留下的注入器会照常读走坐标文件（所以「点标题栏自证」也过），
-        # 但 SendInput 打在自己会话的桌面上，游戏在 Console 会话里毫无反应。
-        # 因此复用前先比一次会话号，不一致就带着 AHK 一起清掉、在当前会话重启。
-        mismatch = common.clicker_session_mismatch()
-        if mismatch:
-            self.log(f"现有注入器与游戏不在同一会话：{mismatch}。清掉后重新启动")
-            self._launch_clicker(kill_ahk=True)
-        elif self.is_click_from_file_running() and common._click_title_bar():
-            self.log("点击注入器已在运行且能消费本目录坐标，复用现有进程")
-        else:
-            if self.is_click_from_file_running():
-                self.log("现有注入器没有消费坐标（工作目录可能已失效），改为重新启动")
-            self._launch_clicker()
+        # 点击注入器就绪：清陈旧坐标 → 会话比对 → 自证 → 提权告警。
+        # 与冷启动前置登录共用同一实现（_ensure_clicker_ready），避免两处逻辑分叉——
+        # 2026-11-16 定时实测的 start 点击落空正是因为登录那条路径漏了这一步。
+        self._ensure_clicker_ready()
 
-        # 权限一致性：游戏以管理员运行时，非提权进程的 SendInput 会被 UIPI 静默丢弃。
-        # 注入器照样读走坐标文件，于是「点击成功」的判据全都成立、画面却一动不动，
-        # 最终每个任务都超时失败，日志里看不出任何异常（2026-11-12 实测确认）。
-        self._warn_if_not_elevated()
 
-        
         # 按调用方给定的脚本列表依次执行。列表由 start_all / run_single_script 从
         # self.scripts 生成，因此顺序就是功能列表里拖出来的顺序——不再维护独立的
         # script_order 常量（那样按钮顺序和执行顺序是两份数据，拖动改了也不生效）。

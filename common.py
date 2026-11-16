@@ -1358,6 +1358,23 @@ def clicker_alive():
     return clicker_process_alive()
 
 
+def clear_stale_coord():
+    """删除残留的坐标 IPC 文件，避免新注入器一上线就点一个陈旧位置。
+
+    2026-11-16 实测：调试探针写下的坐标（如 start 的 2940 811）若无人消费，会一直
+    留在 shared/target_coord.txt；下一次启动新注入器时它第一件事就是把这条旧坐标
+    点掉——游戏可能因此误触开始界面之外的按钮。启动注入器前统一清一次最稳妥。
+    返回是否真的删掉了文件；无文件或删除失败都不抛异常（清理是尽力而为）。
+    """
+    try:
+        if os.path.exists(coord_path):
+            os.remove(coord_path)
+            return True
+    except OSError:
+        pass
+    return False
+
+
 # ===== 会话一致性：注入器必须和游戏在同一个 Windows 会话 =====
 # 2026-11-12 冷启动实测：注入器被上一个会话（RDP-Tcp#1，session 3）启动并留在那里，
 # 而游戏在 Console（session 1）。注入器照常读走坐标文件、SendInput 却打在自己会话的
@@ -1556,6 +1573,12 @@ def send_coord(x, y):
 
     if not consumed:
         _clicker_miss["streak"] += 1
+        # 2026-11-16 定时实测：注入器压根没启动时，前 CLICKER_MISS_LIMIT-1 次未消费是
+        # 静默的，wait_and_click 又只看「模板命中」就返回成功，于是 start 点击落空
+        # 却被当成「已进入」，白等两分半才在别的调用处抛错。第一次未消费就出声，
+        # 让「注入器没起来」当场可见，不必等累计到阈值。
+        if _clicker_miss["streak"] == 1:
+            log("警告: 点击坐标无人消费（注入器可能未启动或已退出），正在重试")
         if _clicker_miss["streak"] >= CLICKER_MISS_LIMIT:
             _clicker_miss["streak"] = 0
             log("点击注入未生效：click_from_file.exe 可能已退出，请重启程序或检查杀软拦截")
