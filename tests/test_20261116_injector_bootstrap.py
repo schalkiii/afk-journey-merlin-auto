@@ -161,20 +161,18 @@ def test_click_start_succeeds_when_start_disappears(monkeypatch):
 
 # ---------- 注入器失效尽早暴露 ----------
 
-def test_send_coord_warns_on_first_miss(monkeypatch):
-    """第一次坐标无人消费就出声，不再连续两次静默到阈值才报。"""
+def test_send_coord_warns_when_sendinput_fails(monkeypatch):
+    """2026-11-17 进程内注入后，SendInput 失败要当场记日志（替代旧「坐标无人消费」告警）。"""
     messages = []
     monkeypatch.setattr(common, "log", lambda m: messages.append(m))
-    monkeypatch.setattr(common, "_clicker_miss", {"streak": 0}, raising=False)
     monkeypatch.setattr(common, "_restore_cursor", {"enabled": False})
     monkeypatch.setattr(common, "check_stop", lambda: None)
-    monkeypatch.setattr(common, "log_clicker_session_warning", lambda: None)
     monkeypatch.setattr(common, "ensure_game_clickable", lambda: True)
     monkeypatch.setattr(common, "point_owned_by_game", lambda *_a: True)
     monkeypatch.setattr(common, "_write_coord_raw", lambda *_a, **_k: False)
 
     common.send_coord(100, 200)
-    assert any("无人消费" in m for m in messages), messages
+    assert any("注入失败" in m for m in messages), messages
 
 
 def test_clear_stale_coord_removes_ipc_file(tmp_path, monkeypatch):

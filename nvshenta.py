@@ -190,6 +190,20 @@ def _tower_page_open():
             or find_center_silent(tpl_nvshentiaozhan, 0.8) is not None)
 
 
+def _tower_page_open_stable(settle=0.8):
+    """重进女神塔的稳定判据：页面标志连续两次可见（间隔 settle 秒）。
+
+    2026-11-17 实机：从玩法目录点「女神试炼」后，页面在切换瞬间会短暂露出
+    挑战按钮，单击判据 `_tower_page_open` 当场返回 True 让 click_and_confirm
+    误以为「已重进」，结果停在玩法目录（现场 nvshenta 卡片 0.99、扫荡/挑战均 <0.4）。
+    要求隔 settle 秒后仍可见，滤掉切换中的单帧假阳性。
+    """
+    if not _tower_page_open():
+        return False
+    time.sleep(settle)
+    return _tower_page_open()
+
+
 def _back_to_tower_page(max_attempts=3):
     """登顶后回退到女神塔页面（该页面才有一键扫荡按钮）。
 
@@ -219,7 +233,7 @@ def _back_to_tower_page(max_attempts=3):
         # 里找扫荡按钮失败 → 整任务判失败。改为点击后校验「塔页面已打开」再判扫荡。
         if attempt == 2 and open_wanfamulu(threshold=0.7, timeout=8):
             print("回退后已到主界面，重新进入女神塔确认扫荡按钮")
-            if not click_and_confirm(tpl_nvshenta, "nvshenta(重进)", _tower_page_open,
+            if not click_and_confirm(tpl_nvshenta, "nvshenta(重进)", _tower_page_open_stable,
                                      attempts=2, find_timeout=6.0, confirm_timeout=10.0):
                 print("重进女神塔未生效（仍停在玩法目录）")
             elif _wait_saodang(8.0):

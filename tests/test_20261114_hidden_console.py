@@ -63,10 +63,15 @@ def test_run_hidden_merges_flags_and_lets_caller_override(monkeypatch):
 
 
 def test_probe_paths_run_without_console(monkeypatch):
-    """真实调用路径：注入器探测（tasklist）必须带隐藏标志。"""
+    """真实调用路径：进程探测若存在，必须走隐藏控制台封装。
+
+    2026-11-17 起点击改为进程内 SendInput，clicker_process_alive() 恒 True、不再跑
+    tasklist；保留本用例验证「真要探测时（如 is_process_elevated 之外的 tasklist）
+    仍走 run_hidden」，即 hidden_kwargs 本身在所有调用上生效。
+    """
     calls = _capture_run(monkeypatch, stdout=b"")
     common.clicker_process_alive()
-    assert calls, "探测注入器至少要跑一次 tasklist"
+    # 进程内注入不产生探测调用；若未来恢复探测，则必须对每一条调用校验隐藏标志。
     assert all(call["creationflags"] == proc_util.subprocess.CREATE_NO_WINDOW
                for call in calls)
 

@@ -247,7 +247,10 @@ def _enter_homestead():
     return click_and_confirm(
         tpl_jiayuan, "家园入口",
         lambda: _find(tpl_entry, timeout=1) is not None,
-        find_timeout=2.0,
+        # 2026-11-17 实机：上一任务切回主界面后，家园图标约需 3~5 秒才渲染稳定，
+        # 原 find_timeout=2.0 首轮就判「没找到」，但失败现场 15 秒后图标分数 0.99。
+        find_timeout=6.0,
+        confirm_timeout=8.0,
     )
 
 
@@ -267,10 +270,13 @@ def _ensure_panel():
     # 愿望单入口只在家园视图出现：公会大厅/玩法目录等界面底部同样有「玩法目录」按钮，
     # 上一步任务可能把游戏停在那里。先试一次「点家园入口进家园」——这是主界面唯一的
     # 正路（主界面没有返回箭头可点）；进去之后再走下面的多轮搜索兜底。
+    # 2026-11-17 实机：上一任务（推图）刚把界面切回主界面，首轮 2 秒 find_timeout 太短，
+    # 家园图标当时还没渲染出来（失败现场 15 秒后图标分数 0.99）。故延长首轮等待，
+    # 并在多轮循环里每轮都重试家园入口，不再只在开头点一次就放弃。
     if _find(tpl_entry) is None and _enter_homestead():
         log("【家园愿望单】已从主界面点「家园」入口进入家园视图")
 
-    # 找不到入口时先逐层返回家园再重试。
+    # 找不到入口时先逐层返回家园再重试；停留主界面则重试点家园入口。
     # 2026-11-12 实机：入口是**场景内的立牌**，镜头位置变了就整块落在画面之外（实测
     # 模板最高分只有 0.57）；旧实现找不到返回箭头时只搜 5 秒就放弃，一次就记任务失败。
     # 现在无论有没有返回箭头都搜满 3 轮（≈15 秒），并且把「当时是不是在主界面」写进日志，
@@ -294,6 +300,9 @@ def _ensure_panel():
         if back_pos is not None:
             log("【家园愿望单】当前不在家园视图，点击返回箭头后重试")
             _click_once(back_pos, SETTLE_DELAY)
+            continue
+        if at_main_interface() and _enter_homestead():
+            log(f"【家园愿望单】第 {attempt}/3 轮在主界面，重试点「家园」入口")
             continue
         log(f"【家园愿望单】第 {attempt}/3 轮未找到入口（"
             f"{'在主界面，镜头可能没带到愿望单立牌' if at_main_interface() else '界面未知'}）")

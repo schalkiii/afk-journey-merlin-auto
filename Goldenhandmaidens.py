@@ -2304,37 +2304,20 @@ class GameBotGUI:
         return True
 
     def _ensure_clicker_ready(self):
-        """确保点击注入器可用：清陈旧坐标 → 会话比对 → 自证 → 提权告警。
+        """确保点击可用：清历史残留坐标 + 提权告警（进程内注入无需启动任何进程）。
 
-        2026-11-16 定时实测发现的关键缺口：注入器原先**只在** `run_scripts_thread()`
-        里初始化，而冷启动前置登录 `_run_login_before_flow()` 是在那之前用独立线程
-        直接跑 `start.main()` 的——于是定时拉起游戏后点 start 时根本没有注入器，
-        `send_coord` 前两次未消费又被静默吞掉，`wait_and_click` 只看「模板命中」就
-        返回成功，结果登录白等两分半、游戏始终停在「点击开始游戏」。
+        2026-11-17 改造前，这里是「会话比对 → 标题栏自证 → 启动 AHK 注入器进程」，
+        全是为一个独立的 txt 坐标消费进程服务的。现在 send_coord 直接在 Python 进程内
+        调 SendInput，没有中间进程/文件，就绪检查只剩两件仍有意义的事：
+        1. 清掉旧版本残留的 shared/target_coord.txt（若还有残留 AHK 进程在读，避免误点）；
+        2. 提权告警——进程内 SendInput 对提权游戏仍受 UIPI 限制，这是唯一真实的前置条件。
 
-        现在把注入器就绪检查收敛成一处，冷启动登录与脚本主循环都先走这里。
-        返回 True 表示已有可用注入器（复用或新起）；False 表示启动失败。
+        保留方法名与返回值，冷启动登录与主循环都先走这里（负验证见
+        test_20261116_injector_bootstrap.py）。恒返回 True：进程内注入始终就绪。
         """
-        # 清掉残留坐标：新注入器一上线就会消费它，若那是上次调试留下的 start 坐标，
-        # 游戏会被误点。清理必须先于任何复用/启动。
         common.clear_stale_coord()
-
-        mismatch = common.clicker_session_mismatch()
-        if mismatch:
-            self.log(f"现有注入器与游戏不在同一会话：{mismatch}。清掉后重新启动")
-            ok = self._launch_clicker(kill_ahk=True)
-        elif self.is_click_from_file_running() and common._click_title_bar():
-            self.log("点击注入器已在运行且能消费本目录坐标，复用现有进程")
-            ok = True
-        else:
-            if self.is_click_from_file_running():
-                self.log("现有注入器没有消费坐标（工作目录可能已失效），改为重新启动")
-            ok = self._launch_clicker()
-
-        # 权限一致性：游戏以管理员运行时，非提权进程的 SendInput 会被 UIPI 静默丢弃，
-        # 坐标照样被消费、画面却一动不动（2026-11-12 实测确认）。
         self._warn_if_not_elevated()
-        return ok
+        return True
 
     @staticmethod
     def _taskkill(args):
@@ -2688,12 +2671,6 @@ class GameBotGUI:
             log_format.set_task(script.name)
             self.log(log_format.task_start_line(index, total, script.name))
             task_started = time.time()
-
-            # 点击器退出后所有任务都只会空转，逐轮跑下去毫无意义：开局先确认它还活着
-            if not common.clicker_alive():
-                script.status = "失败"
-                self.log("click_from_file.exe 未在消费坐标（可能已退出或被拦截），已中止后续任务")
-                break
 
             # 游戏窗口不存在时，所有模板匹配都要等 30~180 秒才会失败，而且每个任务都会
             # 存一份失败现场——2026-11-14 实跑里 5 个失败名额被 5 条「未取到游戏窗口」的

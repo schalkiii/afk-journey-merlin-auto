@@ -35,70 +35,63 @@ def _fake_tasklist(stdout):
     )
 
 
-def test_clicker_alive_false_when_coord_never_consumed(isolated_coord, monkeypatch):
-    """坐标文件残留时直接判死，且不产生任何新的点击副作用。"""
+def test_clear_stale_coord_removes_ipc_file(isolated_coord):
+    """兼容符号 clear_stale_coord 仍清掉旧版残留坐标，避免误点。"""
     with open(isolated_coord, "w", encoding="utf-8") as handle:
         handle.write("100 200")
-    monkeypatch.setattr(common.subprocess, "run", _fake_tasklist("click_from_file.exe"))
-    assert common.clicker_alive() is False
-    assert os.path.exists(isolated_coord), "残留坐标文件应由调用方处理，探测不得改动它"
+    assert common.clear_stale_coord() is True
+    assert not os.path.exists(isolated_coord)
+    assert common.clear_stale_coord() is False
 
 
-def test_clicker_alive_reads_process_list_without_writing_coord(isolated_coord, monkeypatch):
-    """负验证：把探测改回「写哨兵坐标」，本用例会因文件被创建而失败。"""
-    monkeypatch.setattr(common.subprocess, "run",
-                        _fake_tasklist("click_from_file.exe   1234 Console   1   10,000 K"))
+def test_clicker_alive_does_not_write_coord(isolated_coord, monkeypatch):
+    """负验证：clicker_alive 恒 True 且绝不产生点击副作用（不写坐标文件）。"""
+    monkeypatch.setattr(common.subprocess, "run", _fake_tasklist(b""))
     assert common.clicker_alive() is True
-    assert not os.path.exists(isolated_coord), "只读探测绝不能写坐标 IPC 文件"
+    assert not os.path.exists(isolated_coord), "就绪探测绝不能写坐标 IPC 文件"
 
 
-def test_clicker_alive_false_when_process_absent(isolated_coord, monkeypatch):
-    monkeypatch.setattr(common.subprocess, "run",
-                        _fake_tasklist("INFO: No tasks are running which match the specified criteria."))
-    assert common.clicker_alive() is False
+def test_clicker_alive_independent_of_process_list(isolated_coord, monkeypatch):
+    """2026-11-17 起进程内注入：无论 tasklist 报有/无进程，就绪判定都不变。"""
+    mono = _fake_tasklist("INFO: No tasks are running which match the specified criteria.")
+    monkeypatch.setattr(common.subprocess, "run", mono)
+    assert common.clicker_alive() is True
 
-
-def test_clicker_alive_assumes_alive_when_probe_fails(isolated_coord, monkeypatch):
-    """探测失败时按存活处理，交给 send_coord 的连续未消费计数兜底。"""
     def boom(*_args, **_kwargs):
         raise subprocess.SubprocessError("tasklist unavailable")
 
     monkeypatch.setattr(common.subprocess, "run", boom)
-    assert common.clicker_alive() is True
+    assert common.clicker_alive() is True, "进程内注入不依赖任何外部进程探测"
 
 
-def test_clicker_alive_tolerates_gbk_output(isolated_coord, monkeypatch):
-    """中文 Windows 的 tasklist 输出是 GBK：按 bytes 解析，不能因解码错误崩溃。
+def test_send_coord_warns_when_injection_fails(isolated_coord, monkeypatch):
+    """2026-11-17 进程内注入：SendInput 失败要记日志（不再抛 ClickerNotRunning）。
 
-    2026-11-08 实机踩过：`text=True` 用 UTF-8 解 GBK 抛 UnicodeDecodeError、
-    stdout 变 None，`in None` 直接 TypeError。
+    旧实现靠「坐标无人消费」判定注入器退出并抛 ClickerNotRunning；进程内方案没有
+    中间进程和坐标文件，失败模式变成 inject_click 返回 False，故改为记告警。
     """
-    gbk = "信息: 没有运行的任务匹配指定标准。\n".encode("gbk")
-    monkeypatch.setattr(common.subprocess, "run", _fake_tasklist(gbk))
-    assert common.clicker_alive() is False
+    messages = []
+    monkeypatch.setattr(common, "log", lambda m: messages.append(m))
+    monkeypatch.setattr(common, "_restore_cursor", {"enabled": False})
+    monkeypatch.setattr(common, "check_stop", lambda: None)
+    monkeypatch.setattr(common, "ensure_game_clickable", lambda: True)
+    monkeypatch.setattr(common, "point_owned_by_game", lambda *_a: True)
+    monkeypatch.setattr(common, "_write_coord_raw", lambda *_a, **_k: False)
+
+    common.send_coord(10, 20)
+    assert any("注入失败" in m for m in messages), messages
 
 
-def test_send_coord_raises_after_consecutive_misses(isolated_coord):
-    for _ in range(common.CLICKER_MISS_LIMIT - 1):
-        common.send_coord(10, 20)
-    with pytest.raises(common.ClickerNotRunning):
-        common.send_coord(10, 20)
+def test_clicker_alive_always_true_for_in_process_injection(isolated_coord, monkeypatch):
+    """进程内注入没有外部进程可探测；clicker_alive 恒 True（兼容旧调用点）。
 
-
-def test_send_coord_resets_streak_when_consumed(isolated_coord, monkeypatch):
-    """被正常消费时不应累计漏消费次数，更不应抛错。"""
-    real_wait = common.time.sleep
-
-    def consume_then_sleep(seconds):
-        # send_coord 写入后会在轮询中检查文件是否存在；这里在首次轮询前删掉它，模拟被读走
-        if os.path.exists(isolated_coord):
-            os.remove(isolated_coord)
-        real_wait(0)
-
-    monkeypatch.setattr(common.time, "sleep", consume_then_sleep)
-    for _ in range(common.CLICKER_MISS_LIMIT + 2):
-        common.send_coord(10, 20)
-    assert common._clicker_miss["streak"] == 0
+    负验证：若把它改回 tasklist 探测，无进程时会返回 False，本用例变红。
+    """
+    monkeypatch.setattr(common.subprocess, "run",
+                        _fake_tasklist("INFO: No tasks are running which match the specified criteria."))
+    with open(isolated_coord, "w", encoding="utf-8") as handle:
+        handle.write("100 200")
+    assert common.clicker_alive() is True
 
 
 def _textured_marker(height=20, width=30):

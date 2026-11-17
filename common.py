@@ -1270,12 +1270,65 @@ def try_auto_configure_lineup(threshold=0.8, retries=3):
     return False
 
 class ClickerNotRunning(RuntimeError):
-    """click_from_file.exe 已退出，坐标不再被消费——点击全部落空。"""
+    """保留的兼容符号：进程内注入后不再有「外部注入器退出」这一失败模式。
+
+    旧版 AHK + txt IPC 依赖独立进程消费坐标，进程退出会让所有点击静默落空。
+    2026-11-17 起点击改为 Python 进程内 SendInput，不再读坐标文件，故本异常
+    不再抛出；保留类定义只为兼容历史 import（`from common import ClickerNotRunning`）。
+    """
 
 
 
 CLICKER_MISS_LIMIT = 3
 _clicker_miss = {"streak": 0}
+
+# ===== 进程内鼠标注入（2026-11-17：替代 AHK 独立进程 + txt 坐标文件）=====
+# 原实现：Python 写 shared/target_coord.txt → AHK 进程轮询消费 → AHK SendInput。
+# 问题：注入器进程会自行退出/跨会话/非提权，坐标被消费却点不动（11-12/11-16 两次踩坑），
+# 且进程保活/PID 回收/会话比对/陈旧坐标清理都是为这个中间层服务的。
+# 现实现：直接在 Python 进程内用 SendInput 注入，删掉整个 IPC 与进程生命周期。
+# DOWN/UP 在**一次** SendInput 调用里原子提交（项目铁律：禁止 DOWN/UP 分离 + sleep，
+# 避免进程中断卡住左键）；SetCursorPos 只移动光标，不涉及按键状态。
+INPUT_MOUSE = 0
+MOUSEEVENTF_LEFTDOWN = 0x0002
+MOUSEEVENTF_LEFTUP = 0x0004
+
+
+class _MOUSEINPUT(ctypes.Structure):
+    _fields_ = [("dx", wintypes.LONG), ("dy", wintypes.LONG),
+                ("mouseData", wintypes.DWORD), ("dwFlags", wintypes.DWORD),
+                ("time", wintypes.DWORD),
+                ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong))]
+
+
+class _INPUT(ctypes.Structure):
+    class _I(ctypes.Union):
+        _fields_ = [("mi", _MOUSEINPUT)]
+
+    _anonymous_ = ("i",)
+    _fields_ = [("type", wintypes.DWORD), ("i", _I)]
+
+
+def _send_mouse_events(*flags):
+    """一次 SendInput 提交多个鼠标事件；返回实际注入的事件数。"""
+    events = (_INPUT * len(flags))()
+    for index, flag in enumerate(flags):
+        events[index].type = INPUT_MOUSE
+        events[index].mi = _MOUSEINPUT(0, 0, 0, flag, 0, None)
+    return ctypes.windll.user32.SendInput(len(flags), events, ctypes.sizeof(_INPUT))
+
+
+def inject_click(x, y):
+    """进程内点击：瞬移到目标 → 一次 SendInput 原子提交按下+松开。
+
+    返回是否注入成功（SendInput 返回的事件数等于提交数）。调用方 send_coord
+    负责窗口激活/遮挡校验/光标归位，这里只做纯粹的鼠标事件注入。
+    """
+    ctypes.windll.user32.SetCursorPos(int(x), int(y))
+    time.sleep(0.05)  # 光标到位 + hover 生效，与旧 AHK 的 pre-click delay 对齐
+    sent = _send_mouse_events(MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP)
+    time.sleep(0.05)  # post-delay：给游戏一帧处理抬起，避免与后续动作抢光标
+    return sent == 2
 # 会话不一致告警只检查一次：send_coord 每次调用都 Tasklist 开销大，且刷屏无意义
 _session_warn = {"checked": False, "done": False}
 
@@ -1328,34 +1381,22 @@ def _ahk_script_running():
 
 
 def clicker_process_alive():
-    """只读探测点击注入器进程是否在（编译 exe 或 AHK v2 明文脚本，二选一）。"""
-    try:
-        # 不用 text=True：中文 Windows 上 tasklist 输出 GBK，UTF-8 解码会抛错并让
-        # stdout 变成 None（2026-11-08 实机踩过）。进程名是 ASCII，直接比对 bytes。
-        result = run_hidden(["tasklist", "/NH"], capture_output=True,
-                            timeout=3, check=False)
-    except (OSError, subprocess.SubprocessError):
-        # 探测本身失败时按存活处理，交给 send_coord 判定，避免误中止整轮任务
-        return True
-    out = result.stdout or b""
-    if b"click_from_file.exe" in out:
-        return True
-    if b"AutoHotkey64.exe" in out:
-        return _ahk_script_running()
-    return False
+    """兼容符号：进程内注入没有外部注入器进程，恒返回 True。
+
+    2026-11-17 前这里用 tasklist 探测 click_from_file.exe / AutoHotkey64.exe；
+    改造后点击由本进程 SendInput 完成，探测外部进程已无意义。保留函数供历史调用。
+    """
+    return True
 
 
 def clicker_alive():
-    """只读探测 click_from_file.exe 是否仍在运行，不产生任何点击副作用。
+    """兼容符号：进程内注入永远就绪，恒返回 True。
 
-    旧实现把当前光标位置当哨兵写进坐标 IPC 文件、等点击器消费；消费本身是一次真实
-    点击，若用户光标停在别的窗口上就会被误点。改为 tasklist 进程探测，
-    `send_coord` 的连续未消费计数继续作为第二道保险。
-    2026-11-10 起兼容 AHK v2 明文脚本（click_from_file.ahk）注入器。
+    旧实现探测进程 + 坐标文件残留；进程内方案没有中间进程和坐标 IPC，
+    自然不存在「注入器没起来」的失败模式。真正的前置条件只剩提权，由
+    `is_process_elevated()` / GUI 的 `_warn_if_not_elevated()` 负责。
     """
-    if os.path.exists(coord_path):
-        return False   # 上一条坐标都没人取走，必然没在运行
-    return clicker_process_alive()
+    return True
 
 
 def clear_stale_coord():
@@ -1491,27 +1532,12 @@ def log_clicker_session_warning():
 
 
 def _write_coord_raw(x, y, wait_timeout=1.5):
-    """把坐标写入 IPC 并等注入器消费完成；返回 True 表示注入器已处理（点击已执行）。
+    """兼容包装：进程内注入一次点击，返回是否成功（原为写 txt 等 AHK 消费）。
 
-    只负责「写 + 等」，不含激活窗口、光标归位等前置动作，供 send_coord 与
-    `_click_title_bar` 共用（后者需要绕过 send_coord 自身的前置逻辑）。
+    函数名保留是因为 `_click_title_bar()` 与若干测试用它作接缝桩。2026-11-17 起
+    它不再碰任何坐标文件——`wait_timeout` 参数也保留以兼容旧调用方，但不再需要。
     """
-    wait_count = 0
-    while os.path.exists(coord_path) and wait_count < 20:
-        check_stop()  # 若 AHK 迟迟未消费上一条坐标，允许 F9 在此期间中断
-        time.sleep(0.05)
-        wait_count += 1
-
-    with open(coord_path, "w", encoding="utf-8") as f:
-        f.write(f"{x} {y}")
-
-    deadline = time.time() + wait_timeout
-    while os.path.exists(coord_path):
-        check_stop()
-        if time.time() >= deadline:
-            break
-        time.sleep(0.02)
-    return not os.path.exists(coord_path)
+    return inject_click(x, y)
 
 
 def _click_title_bar():
@@ -1544,24 +1570,18 @@ def _click_title_bar():
 
 
 def send_coord(x, y):
-    """将待点击坐标写入 IPC 文件，等待 AHK 消费完成后返回。
+    """点击全屏坐标 (x, y)——进程内 SendInput 注入，不再经过 AHK + txt IPC。
 
-    先自旋等待上一条坐标被消费（文件消失），避免 AHK 尚未读取就被覆盖；
-    写入后等待 AHK 读走本次坐标（文件被删除）再返回，替代原先无条件 0.5s 睡等——
-    既更快（命中即返回），又更稳健（确保点击已发生）。期间 check_stop 允许 F9 中断。
-
-    click_from_file.exe 会在长时间运行后自行退出，此后所有点击都会静默落空、界面表现为
-    「连续多轮无变化」。因此连续 CLICKER_MISS_LIMIT 次坐标无人消费即抛 ClickerNotRunning，
-    让调用方立即失败并报出真实原因，而不是空转到各流程自己的超时上限。
-
-    2026-11-11 增加两处前置校验（当天「点击全部不准」的直接原因是第 1 条）：
+    2026-11-17 改造：旧实现写 shared/target_coord.txt 等 AHK 进程消费，注入器退出/
+    跨会话/非提权都让「坐标已消费但点击没发生」，是 11-12、11-16 两次事故的根源。
+    现在直接在 Python 进程内调 inject_click()，没有中间进程和文件，也就不存在
+    「注入器没起来」这一失败模式。保留 check_stop / 前台激活 / 遮挡告警 / 光标归位
+    四道前置保障（11-11 实机确立）——这些校验在进程内方案下同样必要：
     1. `ensure_game_clickable()` 返回 False（前台锁没解开）时，先用标题栏点击激活，
        否则这一次点击会被系统用于激活而吞掉；
-    2. 点击点被其它窗口盖住时记日志（含遮挡窗口标题），便于事后定位，
-       不再悄悄把点击发给别的窗口。
+    2. 点击点被其它窗口盖住时记日志（含遮挡窗口标题）。
     """
     check_stop()
-    log_clicker_session_warning()
     if ensure_game_clickable() is False and _click_title_bar():
         log("前台锁未解开，已用标题栏点击激活窗口后再点目标")
     if not point_owned_by_game(x, y):
@@ -1569,32 +1589,14 @@ def send_coord(x, y):
         log(f"点击点被其它窗口遮挡：({x},{y}) 属于「{_window_title(root)}」")
 
     cursor_before = _read_cursor_pos() if _restore_cursor["enabled"] else None
-    consumed = _write_coord_raw(x, y)
-
-    if not consumed:
-        _clicker_miss["streak"] += 1
-        # 2026-11-16 定时实测：注入器压根没启动时，前 CLICKER_MISS_LIMIT-1 次未消费是
-        # 静默的，wait_and_click 又只看「模板命中」就返回成功，于是 start 点击落空
-        # 却被当成「已进入」，白等两分半才在别的调用处抛错。第一次未消费就出声，
-        # 让「注入器没起来」当场可见，不必等累计到阈值。
-        if _clicker_miss["streak"] == 1:
-            log("警告: 点击坐标无人消费（注入器可能未启动或已退出），正在重试")
-        if _clicker_miss["streak"] >= CLICKER_MISS_LIMIT:
-            _clicker_miss["streak"] = 0
-            log("点击注入未生效：click_from_file.exe 可能已退出，请重启程序或检查杀软拦截")
-            raise ClickerNotRunning("click_from_file.exe 未在消费坐标")
-    else:
-        _clicker_miss["streak"] = 0
-
-    if cursor_before is not None:
-        # 旧 exe 在读走坐标后还要 MouseMove + Sleep(80~260ms) + Click 才真正完成，
-        # 过早归位会和它抢光标（用户看到的「鼠标来回横跳」，偶发点击落空）。
-        # 等 0.35s 覆盖旧实现的最坏时序；新脚本虽已完成，多等也无害。
-        time.sleep(0.35)
-        # 目标点本来就贴近原位时不必再动一次光标，减少一次可见跳动
-        if abs(cursor_before[0] - x) > 3 or abs(cursor_before[1] - y) > 3:
-            _restore_cursor_pos(cursor_before)
-
+    # 经 _write_coord_raw 接缝调用（现为 inject_click 的包装），保持测试桩兼容
+    if not _write_coord_raw(x, y):
+        log(f"警告: SendInput 注入失败（x={x}, y={y}），本次点击可能未生效")
+    # inject_click 内部已等 post-delay，光标此刻停在目标点；立即归位不与注入抢光标。
+    # 目标点本来就贴近原位时不必再动一次，减少一次可见跳动。
+    if (cursor_before is not None
+            and (abs(cursor_before[0] - x) > 3 or abs(cursor_before[1] - y) > 3)):
+        _restore_cursor_pos(cursor_before)
 
 
 def click_position(pos, wait=1.5, twice=True):
