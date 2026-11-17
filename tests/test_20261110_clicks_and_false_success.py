@@ -1,8 +1,6 @@
 """2026-11-10 实机失败修复回归：点击稳定性 + 「误报成功」治理。
 
 负验证留痕：
-- 把 AHK 注入器脚本改回「读走坐标即删文件 + Click 瞬时 down/up + 慢速 MouseMove」，
-  `test_ahk_script_has_steady_click` 必须失败；
 - 把狩猎悬赏 `main()` 改回无条件 `return True`，`test_hunt_reports_false_when_blocked` 必须失败；
 - 把好友奖励 `main()` 改回无条件 `return True`，`test_friend_reports_false_when_gift_unfinished` 必须失败；
 - 删掉翻翻乐的「点任务后确认面板打开」，`test_fanfanle_retries_task_entry` 必须失败；
@@ -14,6 +12,9 @@
   `test_friend_falls_back_to_hud_when_social_never_opens` 必须失败；
 - 去掉推图 `_clear_occluder` 的 autocha/guajijixian 误点保护，
   `test_push_clears_popup_without_close_hint` 必须失败。
+
+（注：本文件早期还有 3 条钉 AHK 注入器脚本与启动器的用例，2026-11-17 点击改进程内
+SendInput 后随脚本一起删除，现由 tests/test_20261117_in_process_injection.py 接管。）
 """
 import os
 import time
@@ -30,28 +31,6 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def _read_source(relative_path):
     """读源码文本（用作源码级断言，避免 import GUI 依赖）。"""
     return (Path(ROOT) / relative_path).read_text(encoding="utf-8")
-
-
-# ---------- 点击注入器 ----------
-
-def test_ahk_script_has_steady_click():
-    """新 AHK 脚本必须：瞬移、按下保持、动作完成后才删 IPC 文件。"""
-    path = os.path.join(ROOT, "click_from_file.ahk")
-    assert os.path.exists(path), "缺少明文 AHK 注入器脚本"
-    text = _read_source("click_from_file.ahk")
-    # AHK v2 合法写法：Click "Down"/"Up" 作用于当前光标位置，先 MouseMove 到目标点
-    assert 'Click "Down"' in text
-    assert "Sleep clickHoldDelay" in text
-    assert 'Click "Up"' in text
-    # FileDelete 必须在 Up 之后（文件消失 == 点击完成），不能像旧 exe 那样读走就删
-    assert text.index("FileDelete coordPath") > text.index('Click "Up"')
-    assert "MouseMove x, y, 0" in text, "慢速滑动会让光标漂，必须瞬移"
-    assert "OnExit ReleaseLeft" in text, "退出时必须释放可能按下的左键"
-
-
-def test_spec_bundles_ahk_script():
-    spec = _read_source("goldenhandmaidens.spec")
-    assert "('click_from_file.ahk', '.')" in spec
 
 
 # ---------- 误报成功治理 ----------
@@ -110,14 +89,6 @@ def test_pata_scrolls_one_step_at_a_time():
     text = _read_source("pata.py")
     assert 'scroll_in_client_region("down", times=1)' in text
     assert 'scroll_in_client_region("down", times=2)' not in text
-
-
-def test_ahk_launcher_priority_configured():
-    """启动器优先 AHK v2 明文脚本，且保留 exe 回退。"""
-    text = _read_source("Goldenhandmaidens.py")
-    assert "def _resolve_clicker_launcher" in text
-    assert "AutoHotkey64.exe" in text
-    assert 'get_resource_path("click_from_file.exe")' in text
 
 
 @pytest.mark.parametrize("module_name", ["push", "hongbaolingqu"])

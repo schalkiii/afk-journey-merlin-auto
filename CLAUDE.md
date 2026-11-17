@@ -84,8 +84,8 @@ Don't checklist all four every time — pick the one most relevant to the change
 
 ## 项目速览
 
-- 一句话：AFK Journey（剑与远征：启程）日常任务自动化 —— tkinter GUI + 模板匹配点击 + 坐标注入器，
-  成品是 Windows 单文件 GUI exe（无控制台）。
+- 一句话：AFK Journey（剑与远征：启程）日常任务自动化 —— tkinter GUI + 模板匹配 + 进程内
+  SendInput 鼠标注入，成品是 Windows 单文件 GUI exe（无控制台）。
 - 跑起来：源码 `python Goldenhandmaidens.py`；实机自动化需**管理员**权限、游戏窗口标题含
   「剑与远征：启程」、客户区 1600×900。用法与功能表见 `README.md`。
 - 门禁 / 打包见下一节；界面结构与视觉规范见 `doc/GUI.md`，实机方法学见 `doc/LIVE-DEBUGGING.md`。
@@ -99,9 +99,10 @@ Don't checklist all four every time — pick the one most relevant to the change
 - 改动 `.md` 后跑 `markdownlint README.md CHANGELOG.md CLAUDE.md doc\*.md`（规则配置见 `.markdownlint.json`，
   中文长行 MD013 已关闭），要求零 error。
 - 测试基线以 `python -m pytest -q` 实际结果为准（2026-11-16 定时冷启动熔断批为 **451** 条；
-  2026-11-16 定时 start 点击落空修复批新增 7 条，当前 **458** 条；
-  2026-11-17 进程内 SendInput 改造 + 失败项调试批新增，当前 **466** 条；
-  新增用例后同步更新本行）。
+  2026-11-16 定时 start 点击落空修复批新增 7 条，为 **458** 条；
+  2026-11-17 进程内 SendInput 改造 + 失败项调试批为 **466** 条；
+  2026-11-17 收尾清理（退役 AHK 中间层，删 19 条随机制退场的用例、补 5 条拖拽注入用例）
+  当前 **446** 条；新增用例后同步更新本行）。
 - **子进程一律走 `proc_util.run_hidden` / `popen_hidden`**：成品是 GUI 子系统（无控制台），
   裸调 `subprocess` 启动控制台子程序会给它新建一个黑框。`tests/test_20261114_hidden_console.py`
   用 AST 扫描全仓拦新增裸调用（`proc_util.py` 自身除外），不要绕过。

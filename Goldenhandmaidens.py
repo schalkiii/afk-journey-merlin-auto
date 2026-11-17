@@ -9,7 +9,7 @@
 - 脚本运行前自动将游戏窗口切换到前台（模板匹配依赖前台截图）。
 
 主要分区（见下方 # ===== 分区注释 =====）：
-- 路径与配置初始化（_ensure_config_files / load_config / save_config）
+- 路径与配置初始化（load_config / save_config）
 - GUI 构建（create_* 系列方法）
 - 运行控制（update_master_button / start_all / stop_all）
 - 定时开始（set_schedule / _schedule_loop / _fire_schedule）
@@ -17,12 +17,10 @@
 - 运行循环（run_scripts_thread）
 """
 
-import atexit
 import contextlib
 import json
 import os
 import queue
-import subprocess
 import sys
 import threading
 import time
@@ -40,7 +38,6 @@ from bot_runtime import (
     ScriptConfig,
     _early_stdout_buffer,
     _early_stdout_sink,
-    _ensure_config_files,
     _notify_file_write_error,
     _StdoutTee,
     append_log_file,
@@ -55,7 +52,7 @@ from bot_runtime import (
 
 # updater 只在检查更新 / 下载 / 安装重启路径使用，延迟到用到时再导入以缩短启动
 # 路径解析统一复用 common 的实现，避免与底层模块重复定义（见 common.get_resource_path / get_work_path）
-from common import get_resource_path, get_work_path
+from common import get_resource_path
 from hero_metadata import (
     HERO_CN_NAMES,
     HERO_JOB,
@@ -64,10 +61,6 @@ from hero_metadata import (
     PUSH_COMMON_HEROES,
     RACE_NAMES,
 )
-
-# 注入器拉起 / tasklist / taskkill 都走隐藏封装：本进程是 GUI 子系统（无控制台），
-# 裸调控制台子程序会各自弹一个黑色 cmd 框（见 proc_util）。
-from proc_util import popen_hidden, run_hidden
 from version import __version__
 from warehouse import ALL_HERO_NAMES, WAREHOUSE_TXT_PATH
 
@@ -231,21 +224,18 @@ HOTKEY_REGISTER_DELAY_MS = 200
 
 
 def _shutdown_app(app):
-    """唯一的退出路径：摘热键 → 回收注入器 → 销毁窗口。
+    """唯一的退出路径：摘热键 → 销毁窗口。
 
-    「点窗口 X」（`on_closing`）与「跑完自动退出」（`_quit_now`）必须走同一份实现：
-    漏回收注入器会留下长期残留进程，把坐标读走、点击却打到别的桌面。
-    做成模块级函数而不是方法，是为了让退出动作不依赖具体实例类型——
-    挂到类上时，任何替身宿主都得先补一个同名属性才能被调用（用例踩过）。
+    「点窗口 X」（`on_closing`）与「跑完自动退出」（`_quit_now`）必须走同一份实现，
+    避免两条路径各自漏一步。做成模块级函数而不是方法，是为了让退出动作不依赖具体
+    实例类型——挂到类上时，任何替身宿主都得先补一个同名属性才能被调用（用例踩过）。
     """
     app._unregister_hotkeys()
-    app._stop_clicker()
     app.root.destroy()
 
 
 class GameBotGUI:
     def __init__(self, root):
-        _ensure_config_files()
         self.root = root
         set_file_write_error_callback(self._schedule_file_write_error)
         self.root.title("梅林初号机")
@@ -308,7 +298,7 @@ class GameBotGUI:
         common.set_background_capture(self.remote_desktop_compat)
         common.set_auto_activate(self.remote_desktop_compat)
 
-        # 点击后归还鼠标位置：click_from_file 会把光标留在目标点，开着就每次点击后立即归位。
+        # 点击后归还鼠标位置：注入会把光标留在目标点，开着就每次点击后立即归位。
         # 窗口消息注入实测被本游戏忽略，无法做到完全后台点击，这是能做到的最小打扰。
         self.restore_cursor_after_click = self.config.get("restore_cursor_after_click", True)
         self.restore_cursor_var = tk.BooleanVar(value=self.restore_cursor_after_click)
@@ -336,12 +326,7 @@ class GameBotGUI:
         # 本轮是不是「从关闭状态把游戏拉起来的」：冷启动才需要前置登录
         # （「登录」不在任务列表里时没有任何一步负责把游戏送进主界面）。
         self._cold_launch = False
-        # 自己启动的注入器 PID：退出时按 PID 精确回收。
-        # 只按镜像名杀会漏 —— 本机装了 AHK v2 时注入器进程叫 AutoHotkey64.exe，
-        # 旧实现 taskkill click_from_file.exe 一个都杀不到，注入器于是长期残留。
-        self._clicker_pid = None
-        atexit.register(self._stop_clicker)
-        
+
         # 启用状态只由用户在左侧列表勾选，运行结束后不再自动改（原 daily_reset
         # 「完成即停用」会让第二天的任务被静默跳过，且改动会被持久化覆盖用户设置）。
         self.scripts = [
@@ -1780,7 +1765,7 @@ class GameBotGUI:
         2026-11-13 事故：根目录 goldenhandmaidens.exe 是用户习惯双击的成品，
         `build.ps1 build` 也用 `--distpath .` 固定写这里；但某次打包直接调了
         PyInstaller（默认写 dist/），根目录成品便停留在 11-11 的旧版。于是
-        「昨天刚修好的注入器回收，今天又残留」看起来像代码回归，实际跑的是旧包。
+        「昨天刚修好的点击、今天又失效」看起来像代码回归，实际跑的是旧包。
         打包版用 exe 自身的 mtime 自证版本；源码运行明确标注，避免同类误判。
         """
         if getattr(sys, "frozen", False):
@@ -1992,17 +1977,17 @@ class GameBotGUI:
             import start
 
             # 2026-11-16 定时实测的关键缺口：前置登录跑在独立线程、且在
-            # run_scripts_thread（唯一初始化注入器的地方）之前，导致 start 点击时
-            # 根本没有注入器消费坐标。先在这里确保注入器就绪再登录。
+            # run_scripts_thread 之前，登录里的 start 点击走不到主循环那套前置检查。
+            # 先在这里过一次就绪检查（现在只剩提权告警，见 _ensure_clicker_ready）再登录。
             try:
                 clicker_ok = self._ensure_clicker_ready()
             except (OSError, RuntimeError, ValueError) as exc:
-                note = f"注入器就绪检查出错: {exc!s}"
+                note = f"点击就绪检查出错: {exc!s}"
                 self.root.after(0, lambda: self.log(note))
                 clicker_ok = False
             if not clicker_ok:
                 self.root.after(0, lambda: self.log(
-                    "警告: 点击注入器未能启动，start 点击可能无法生效"))
+                    "警告: 点击未就绪，start 点击可能无法生效"))
 
             try:
                 ok = start.main()
@@ -2214,88 +2199,12 @@ class GameBotGUI:
             self.stop_all()
 
     # ===== 运行循环（在线程内依次执行各脚本） =====
-    def is_click_from_file_running(self):
-        """检测点击注入器是否已在运行（编译 exe 或 AHK v2 明文脚本），避免重复启动。"""
-        return common.clicker_process_alive()
-
-    @staticmethod
-    def _resolve_clicker_launcher():
-        """返回启动命令：优先 AHK v2 明文脚本，未安装 AHK 或脚本缺失时回退编译 exe。
-
-        AHK v2 明文脚本可维护且修正了点击时序；打包 exe 在无 AHK 环境的机器上仍需可用。
-        """
-        script = get_resource_path("click_from_file.ahk")
-        if os.path.exists(script):
-            program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
-            candidates = (
-                os.path.join(program_files, "AutoHotkey", "v2", "AutoHotkey64.exe"),
-                r"C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe",
-            )
-            for ahk in candidates:
-                if os.path.exists(ahk):
-                    return [ahk, script]
-        exe = get_resource_path("click_from_file.exe")
-        return [exe] if os.path.exists(exe) else None
-
-    def _launch_clicker(self, kill_ahk=False):
-        """（重新）启动点击注入器：先清掉本进程启动过的旧注入器，再按 launcher 起一个。
-
-        `kill_ahk=True` 时连同类 AutoHotkey64.exe 一起清掉，用于「旧注入器残留在别的
-        会话」的情形（2026-11-12 实测：RDP 会话里留下的注入器会读走坐标却把点击打到
-        另一个桌面，游戏毫无反应，而坐标文件消失让所有既有判据都显示「点击成功」）。
-        默认不清 AHK：用户可能自己开着别的 AHK 脚本。
-        """
-        self._stop_clicker(kill_ahk=kill_ahk)
-        try:
-            work_dir = get_work_path("")
-            launcher = self._resolve_clicker_launcher()
-            if launcher is None:
-                self.log("错误: 未找到点击注入器（click_from_file.ahk / click_from_file.exe）")
-                return False
-            self.log(f"点击注入器: {launcher}")
-            self.log(f"工作目录: {work_dir}")
-            # 隐藏控制台：注入器是 AHK 的控制台子系统程序，直接起会闪一个黑框
-            proc = popen_hidden(launcher + [work_dir])
-            self._clicker_pid = proc.pid
-            self.log(f"点击注入器启动成功（PID {proc.pid}）")
-        except (OSError, ValueError) as e:
-            self.log(f"运行点击注入器失败: {e!s}")
-            self.log("警告: 点击注入器未启动，部分功能可能无法正常工作")
-            return False
-        time.sleep(2)
-        return True
-
-    def _stop_clicker(self, kill_ahk=False):
-        """停掉自己启动的点击注入器；`kill_ahk=True` 时再清同名 AHK 进程。
-
-        为什么必须记 PID：本机装了 AHK v2 时 `_resolve_clicker_launcher()` 优先走
-        明文脚本，注入器进程名是 **AutoHotkey64.exe**，而 `on_closing` 原先只
-        `taskkill /IM click_from_file.exe` —— 名字对不上，一个都杀不到，注入器
-        因此长期残留。2026-11-12 的实证：session 3（RDP）里留下的注入器一直活到
-        手动清理，期间所有点击都「成功消费坐标但游戏毫无反应」。
-        """
-        pid = self._clicker_pid
-        self._clicker_pid = None
-        if pid and self._pid_is_clicker(pid) and not self._taskkill(["/F", "/T", "/PID", str(pid)]):
-            # 提权启动的注入器普通权限杀不掉（实测报「拒绝访问」）。静默失败最危险：
-            # 下一次启动会以为「已有注入器可用」而复用它，实际坐标全落在别处。
-            with contextlib.suppress(Exception):
-                self.log(f"警告: 无法结束注入器 PID {pid}（可能以管理员权限运行），"
-                         "请手动关闭，否则它会继续读走坐标却把点击打到别处")
-        # click_from_file.exe 一定是本工具自己的，按名字清安全
-        self._taskkill(["/F", "/IM", "click_from_file.exe"])
-        if kill_ahk:
-            time.sleep(0.3)
-            self._taskkill(["/F", "/IM", "AutoHotkey64.exe"])
-            time.sleep(0.5)
-
     def _warn_if_not_elevated(self):
         """非管理员运行时告警，返回是否打出了告警。
 
-        游戏以管理员启动时，非提权进程的 `SendInput` 会被 UIPI 静默丢弃：注入器照样
-        读走坐标文件（「点击成功」的判据全部成立），游戏画面一动不动，最后每个任务
-        都超时失败而日志里毫无异常。2026-11-12 实测：同一份代码，普通权限跑愿望单
-        连续 8 轮「界面无变化」判卡死，以管理员重跑立刻正常交付。
+        游戏以管理员启动时，非提权进程的 `SendInput` 会被 UIPI 静默丢弃：画面一动不动，
+        最后每个任务都超时失败而日志里毫无异常。2026-11-12 实测：同一份代码，普通权限
+        跑愿望单连续 8 轮「界面无变化」判卡死，以管理员重跑立刻正常交付。
         """
         if common.is_process_elevated():
             return False
@@ -2304,41 +2213,18 @@ class GameBotGUI:
         return True
 
     def _ensure_clicker_ready(self):
-        """确保点击可用：清历史残留坐标 + 提权告警（进程内注入无需启动任何进程）。
+        """确保点击可用：只需提权（进程内注入不启动任何进程、不写任何文件）。
 
-        2026-11-17 改造前，这里是「会话比对 → 标题栏自证 → 启动 AHK 注入器进程」，
-        全是为一个独立的 txt 坐标消费进程服务的。现在 send_coord 直接在 Python 进程内
-        调 SendInput，没有中间进程/文件，就绪检查只剩两件仍有意义的事：
-        1. 清掉旧版本残留的 shared/target_coord.txt（若还有残留 AHK 进程在读，避免误点）；
-        2. 提权告警——进程内 SendInput 对提权游戏仍受 UIPI 限制，这是唯一真实的前置条件。
+        2026-11-17 改造前这里是「会话比对 → 标题栏自证 → 启动 AHK 注入器进程」，
+        全是为一个独立的 txt 坐标消费进程服务的。现在 `common.send_coord` 直接在
+        Python 进程内调 SendInput，没有中间进程和文件，就绪检查只剩提权告警——
+        进程内 SendInput 对提权游戏仍受 UIPI 限制，这是唯一真实的前置条件。
 
-        保留方法名与返回值，冷启动登录与主循环都先走这里（负验证见
-        test_20261116_injector_bootstrap.py）。恒返回 True：进程内注入始终就绪。
+        保留方法名与返回值：冷启动登录与主循环都先走这里（负验证见
+        test_20261116_injector_bootstrap.py）。恒返回 True。
         """
-        common.clear_stale_coord()
         self._warn_if_not_elevated()
         return True
-
-    @staticmethod
-    def _taskkill(args):
-        """跑一次 taskkill，返回是否成功（进程已不存在也算成功）。"""
-        try:
-            res = run_hidden(["taskkill", *args], capture_output=True,
-                             timeout=10, check=False)
-        except (OSError, subprocess.SubprocessError):
-            return False
-        return res.returncode == 0
-
-    @staticmethod
-    def _pid_is_clicker(pid):
-        """确认该 PID 现在仍是注入器进程（防 PID 复用后误杀无关程序）。"""
-        try:
-            # 中文 Windows 的 tasklist 输出是 GBK，这里只比对 ASCII 镜像名，按 bytes 处理
-            out = run_hidden(["tasklist", "/FI", f"PID eq {pid}", "/NH"],
-                             capture_output=True, timeout=5, check=False).stdout or b""
-        except (OSError, subprocess.SubprocessError):
-            return False
-        return b"AutoHotkey" in out or b"click_from_file" in out
 
     # ===== 任务分发（字典映射替代巨型 if/elif，降低维护成本）=====
     # 每个 _run_* 方法对应一个任务，返回 True 表示执行成功、False 表示失败；
@@ -2616,7 +2502,7 @@ class GameBotGUI:
     def _preflight_game_window(self):
         """任务开始前确认游戏窗口仍在；不在就记原因并让调用方结束本轮。
 
-        与「click_from_file.exe 是否存活」同级的前置条件：缺窗口时每条任务都要白等
+        与「本工具是否提权」同级的前置条件：缺窗口时每条任务都要白等
         数十秒到三分钟才失败，还会各存一份失败现场，把真正需要排查的现场挤出去。
         返回 False 表示本轮不该继续；调用方负责把状态标成「已停止」（不是任务失败）。
         """
@@ -2645,7 +2531,7 @@ class GameBotGUI:
                 "识别可能失败；请把游戏窗口恢复为 1600×900"
             )
 
-        # 点击注入器就绪：清陈旧坐标 → 会话比对 → 自证 → 提权告警。
+        # 点击就绪：提权告警（进程内注入不启动进程、不写文件）。
         # 与冷启动前置登录共用同一实现（_ensure_clicker_ready），避免两处逻辑分叉——
         # 2026-11-16 定时实测的 start 点击落空正是因为登录那条路径漏了这一步。
         self._ensure_clicker_ready()

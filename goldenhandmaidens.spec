@@ -7,7 +7,7 @@ a = Analysis(
     ['Goldenhandmaidens.py'],
     pathex=[],
     binaries=[],
-    datas=[('click_from_file.exe', '.'), ('click_from_file.ahk', '.'), ('templates', 'templates'), ('migong_config.json', '.'), ('formations.json', '.'), ('grid_offsets.json', '.')],
+    datas=[('templates', 'templates'), ('migong_config.json', '.'), ('formations.json', '.'), ('grid_offsets.json', '.')],
     # 自动收集项目内所有顶层脚本模块，新增 flow 脚本无需手改本清单；
     # certifi / keyboard 为第三方包，仍需显式列出。
     # windows_capture 由 common 内部按需 import，静态分析看不到，必须显式声明；
@@ -41,8 +41,8 @@ exe = EXE(
     runtime_tmpdir=None,
     console=False,
     # 必须要求管理员：游戏以管理员权限运行，非提权进程的 SendInput 会被 UIPI 直接拦掉。
-    # 症状极具欺骗性——注入器照常读走坐标文件（所有「点击成功」的判据都成立），
-    # 游戏画面一动不动，最后表现为每个任务都超时失败（2026-11-12 实测确认）。
+    # 症状极具欺骗性——注入调用全部成功返回、日志一句不报，游戏画面却一动不动，
+    # 最后表现为每个任务都超时失败（2026-11-12 实测确认）。
     uac_admin=True,
     disable_windowed_traceback=False,
     argv_emulation=False,

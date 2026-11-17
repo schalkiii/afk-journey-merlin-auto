@@ -1,9 +1,11 @@
-"""补齐此前测试全文未提及的模块：拖拽 IPC、阵容配置、商城/邮件/挂机入口决策。
+"""补齐此前测试全文未提及的模块：拖拽注入、阵容配置、商城/邮件/挂机入口决策。
 
 负验证留痕：
 - 把 `check_current_state` 的优先级顺序倒过来，`test_state_priority_prefers_highest_paid_state` 必须失败；
 - 删掉 `shangcheng.main()` 里第 2 步的失败返回，`test_shop_aborts_when_second_entry_missing` 必须失败；
-- 把 `deploy_formation` 的配置存在性检查删掉，`test_deploy_formation_missing_config` 必须失败。
+- 把 `deploy_formation` 的配置存在性检查删掉，`test_deploy_formation_missing_config` 必须失败；
+- 把 `drag_utils.send_drag` 改回写指令文件，
+  `test_drag_utils_has_no_ipc_surface` 必须失败。
 """
 
 import json
@@ -43,27 +45,25 @@ def stub_clock(monkeypatch):
     return monkeypatch
 
 
-def test_send_drag_writes_coordinates(tmp_path, monkeypatch):
-    path = tmp_path / "drag_coord.txt"
-    monkeypatch.setattr(drag_utils, "DRAG_COORD_PATH", str(path))
-    drag_utils.send_drag(10, 20, 30, 40)
-    assert path.read_text(encoding="utf-8") == "10 20 30 40"
-    drag_utils.send_drag(1, 2, 3, 4, hold_ms=500)
-    assert path.read_text(encoding="utf-8") == "1 2 3 4 500"
+def test_send_drag_goes_through_in_process_injection(monkeypatch):
+    """拖动指令必须直接注入，不再写任何指令文件（2026-11-17 去 AHK 中间层）。"""
+    calls = []
+    monkeypatch.setattr(drag_utils.common, "ensure_game_clickable", lambda: True)
+    monkeypatch.setattr(drag_utils.common, "inject_drag",
+                        lambda *a, **k: calls.append((a, k)) or True)
+
+    assert drag_utils.send_drag(10, 20, 30, 40) is True
+    assert drag_utils.send_drag(1, 2, 3, 4, hold_ms=500) is True
+    assert calls == [
+        ((10, 20, 30, 40), {"hold_ms": None}),
+        ((1, 2, 3, 4), {"hold_ms": 500}),
+    ]
 
 
-def test_wait_for_drag_complete_returns_true_when_file_gone(tmp_path, monkeypatch):
-    monkeypatch.setattr(drag_utils, "DRAG_COORD_PATH", str(tmp_path / "absent.txt"))
-    monkeypatch.setattr(drag_utils, "check_stop", lambda: None, raising=False)
-    assert drag_utils.wait_for_drag_complete(check_interval=0.01, timeout=0.1) is True
-
-
-def test_wait_for_drag_complete_times_out(tmp_path, monkeypatch):
-    path = tmp_path / "drag_coord.txt"
-    path.write_text("1 2 3 4", encoding="utf-8")
-    monkeypatch.setattr(drag_utils, "DRAG_COORD_PATH", str(path))
-    monkeypatch.setattr(drag_utils, "check_stop", lambda: None, raising=False)
-    assert drag_utils.wait_for_drag_complete(check_interval=0.05, timeout=0.1) is False
+def test_drag_utils_has_no_ipc_surface():
+    """drag_utils 不再暴露指令文件路径/等待函数：注入是同步完成的。"""
+    assert not hasattr(drag_utils, "DRAG_COORD_PATH")
+    assert not hasattr(drag_utils, "wait_for_drag_complete")
 
 
 def test_state_priority_prefers_highest_paid_state(monkeypatch):

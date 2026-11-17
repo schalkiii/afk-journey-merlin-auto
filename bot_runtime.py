@@ -211,15 +211,6 @@ class ScriptConfig:
         self.status = "就绪"
         self.last_run_time: str | None = None  # 最后执行时间
 
-def _ensure_config_files():
-    """首次运行时确保 shared 目录存在（坐标 IPC 等文件的工作目录）。
-
-    历史版本曾在此从打包资源复制配置文件到 exe 同目录；现改为 load_config 直接
-    读写 game_bot_config.json，无需复制，故仅保留建目录职责、移除空拷贝循环。
-    """
-    shared_dir = get_work_path("shared")
-    os.makedirs(shared_dir, exist_ok=True)
-
 
 # 桌面快捷方式候选名称（文件名包含其一即视为游戏快捷方式）
 GAME_SHORTCUT_KEYWORDS = ["剑与远征", "启程", "afk", "afkj"]

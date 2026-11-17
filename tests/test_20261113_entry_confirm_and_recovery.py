@@ -14,7 +14,6 @@
 5. `_st_limit` 去掉 `allow_occluder=False` → `test_ticket_wait_disables_occluder` 失败。
 """
 
-import common
 import dianfengjingjichang as df
 import Goldenhandmaidens as gh
 import mimengzhiyu as mimeng
@@ -235,13 +234,3 @@ def test_build_banner_marks_source_run(monkeypatch):
     host = _LogHost()
     gh.GameBotGUI._log_build_banner(host)
     assert any("Python 源码" in m for m in host.logs)
-
-
-def test_session_note_is_not_absolute(monkeypatch):
-    """11-13 实测跨会话仍可点击生效，会话不一致只能作线索、不能断言必然失效。"""
-    monkeypatch.setattr(common, "game_window_session_id", lambda: 1)
-    monkeypatch.setattr(common, "_clicker_session_ids", lambda: [3])
-    note = common.clicker_session_mismatch()
-    assert note is not None
-    assert "不会有任何反应" not in note
-    assert "提权" in note

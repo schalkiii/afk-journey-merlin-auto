@@ -14,6 +14,7 @@ from common import (
     get_template_path,
     get_templates_dir,
     get_work_path,
+    inject_drag,
     load_template,
     screenshot_bgr,
     wait_and_click,
@@ -254,9 +255,6 @@ DEBUG_SAVE_SLOTS = True
 # 可以适当设置得“粗暴”一点，只要拖过去即可，拖过头没关系
 DRAG_DISTANCE = 700   # 像素，向上拖动距离，需要你按实际屏幕微调
 
-# 给 AHK 发送拖动指令用的文件路径（由 AHK 完成实际鼠标拖动）
-DRAG_COORD_PATH = get_work_path("shared\\drag_coord.txt")
-
 # 从各个锚点到第一张卡片左上角的“微调”偏移。
 # 主要用于在已经按“左对齐、紧贴下边缘”计算出的基础上，再稍微修一点点。
 HAND_FIRST_OFFSET_X = 0      # rehand -> 共鸣之手第一张卡片左上角微调（正数往右，负数往左）
@@ -334,12 +332,8 @@ def _locate_scroll_anchor_y(img):
 
 
 def send_drag(x1: int, y1: int, x2: int, y2: int):
-    """
-    将一次拖动指令写入文件，交给 AHK 脚本执行：
-    AHK 会从 (x1, y1) 移动、按下左键，拖到 (x2, y2) 后松开。
-    """
-    with open(DRAG_COORD_PATH, "w", encoding="utf-8") as f:
-        f.write(f"{x1} {y1} {x2} {y2}")
+    """按住左键从 (x1, y1) 拖到 (x2, y2)。统一走 common 的进程内注入。"""
+    return inject_drag(x1, y1, x2, y2)
 
 
 def _extract_card_roi(img, row, col, x0, y0,
@@ -686,11 +680,11 @@ def enter_warehouse_scrolled_view(max_retry: int = 2) -> bool:
         # 按住往上拖：列表向下滚动（更符合“下移到三行半视图”的手势）
         end_y = _clamp(start_y - DRAG_DISTANCE, 5, ih - 5)
 
-        print(f"发送拖动指令: ({start_x}, {start_y}) -> ({end_x}, {end_y})")
+        print(f"拖动: ({start_x}, {start_y}) -> ({end_x}, {end_y})")
 
         send_drag(start_x, start_y, end_x, end_y)
 
-        time.sleep(0.8)  # 等待 AHK 执行拖动 + 动画结束
+        time.sleep(0.8)  # 等列表滚动动画停稳再取图
 
         img2 = screenshot_bgr()
         anchor2 = _locate_scroll_anchor_y(img2)

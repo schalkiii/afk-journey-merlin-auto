@@ -39,7 +39,6 @@
 
 | 路径 | 用途 |
 | --- | --- |
-| `shared/target_coord.txt` | 点击 IPC：Python `send_coord` 写入整屏绝对坐标，提权 `click_from_file.exe` 读取后删除并注入点击 |
 | `game_bot.log` | 运行日志（UTF-8，超过 5 MB 轮转为 `.1`） |
 | `warehouse_heroes.txt` | 仓库扫描结果，供 `flow_tower` 判断阵容练度 |
 | `debug/failures/<时间>_<任务名>/` | 任务失败/超时时留存的最近 5 帧截图 |

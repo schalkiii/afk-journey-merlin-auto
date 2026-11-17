@@ -20,7 +20,7 @@ _task = None
 # 只匹配「整行就是这个形状」的情况，避免误伤别的措辞。
 _RULES = (
     (re.compile(r"^(?P<name>.+?) 识别成功，第 (?P<times>\d+) 次，坐标: (?P<pos>\(\d+, \d+\))"
-                r"(?P<tail>，发送给 AHK 点击)?$"),
+                r"(?P<tail>，(?:注入点击|发送给 AHK 点击))?$"),
      lambda m: f"命中 {m['name']} {m['pos']} 第{m['times']}次"),
     (re.compile(r"^(?P<name>.+?) 第 (?P<times>\d+) 次未找到，0\.5 秒后重试"
                 r"（已等待 (?P<waited>[\d.]+) 秒）\.\.\.?$"),

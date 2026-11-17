@@ -1,14 +1,18 @@
-"""通用能力模块：模板匹配、坐标 IPC、游戏窗口管理。
+"""通用能力模块：模板匹配、鼠标输入注入、游戏窗口管理。
 
 关键接口：
 - find_center(template_path, threshold): 在截图中定位模板中心，未命中返回 None。
 - wait_and_click(template_path, name, ...): 轮询等待模板出现并点击，超时则跳过。
-- send_coord(x, y): 将坐标写入文件，由 click_from_file.exe(AHK) 读取并执行点击。
+- send_coord(x, y): 在**本进程内**用 SendInput 注入一次点击（2026-11-17 起）。
+- send_drag(x1, y1, x2, y2): 按住左键逐步拖动 / 原地长按，同样走进程内注入。
 
-设计动机（为什么用「写文件 + AHK 注入」而不是直接 pyautogui 点击）：
-本工具与 AutoHotkey 协同工作，点击动作统一交给 AHK 注入，Python 侧只负责
-「感知（截图匹配）」与「决策（写坐标）」。坐标文件作为两者间的解耦通道，
-避免 Python 内直接模拟输入带来的权限/兼容性抖动。
+设计动机（为什么不用 pyautogui / 窗口消息）：
+- 窗口消息注入（PostMessage/SendMessage 全家）被本游戏忽略（Unity Raw Input），
+  实测点不动；pyautogui 的 mouse_event 分离调用在进程中断时会卡住左键。
+  因此统一用 SendInput：按下与抬起在**一次**调用里原子提交。
+- 曾用「Python 写 txt 坐标 → AHK 独立进程消费并注入」解耦，但那个中间进程会
+  自行退出 / 跨会话 / 继承非提权权限，坐标被消费却点不动（11-12、11-16 两次踩坑）。
+  现改为进程内注入，链路只剩一个进程，前置条件只剩「本进程必须提权」。
 """
 
 import contextlib
@@ -17,16 +21,11 @@ import hashlib
 import os
 import random
 import shutil
-import subprocess
 import sys
 import threading
 import time
 from collections import OrderedDict, deque
 from ctypes import wintypes
-
-# 子进程一律走「隐藏控制台」封装：本进程是 GUI 子系统（无控制台），裸调
-# tasklist / taskkill / powershell 都会各自新建一个黑色 cmd 窗口，见 proc_util。
-from proc_util import run_hidden
 
 # 名称映射表已抽到 template_names（纯数据模块）；这里 re-export，保持
 # 全仓 `from common import display_name / TEMPLATE_CN` 的导入方式不变。
@@ -362,8 +361,6 @@ def get_config_path(relative_path):
     return get_resource_path(relative_path)
 
 
-# 坐标 IPC 文件：send_coord 写入、click_from_file.exe(AHK) 读取后执行点击
-coord_path = get_work_path("shared\\target_coord.txt")
 # 单步匹配超时（秒）与轮询间隔（秒），供 wait_and_click 使用
 MAX_WAIT = 15
 INTERVAL = 0.5
@@ -1269,18 +1266,6 @@ def try_auto_configure_lineup(threshold=0.8, retries=3):
 
     return False
 
-class ClickerNotRunning(RuntimeError):
-    """保留的兼容符号：进程内注入后不再有「外部注入器退出」这一失败模式。
-
-    旧版 AHK + txt IPC 依赖独立进程消费坐标，进程退出会让所有点击静默落空。
-    2026-11-17 起点击改为 Python 进程内 SendInput，不再读坐标文件，故本异常
-    不再抛出；保留类定义只为兼容历史 import（`from common import ClickerNotRunning`）。
-    """
-
-
-
-CLICKER_MISS_LIMIT = 3
-_clicker_miss = {"streak": 0}
 
 # ===== 进程内鼠标注入（2026-11-17：替代 AHK 独立进程 + txt 坐标文件）=====
 # 原实现：Python 写 shared/target_coord.txt → AHK 进程轮询消费 → AHK SendInput。
@@ -1329,11 +1314,56 @@ def inject_click(x, y):
     sent = _send_mouse_events(MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP)
     time.sleep(0.05)  # post-delay：给游戏一帧处理抬起，避免与后续动作抢光标
     return sent == 2
-# 会话不一致告警只检查一次：send_coord 每次调用都 Tasklist 开销大，且刷屏无意义
-_session_warn = {"checked": False, "done": False}
 
-# 点击后把鼠标放回原处：click_from_file 会把光标留在目标点，连续批处理会一直「拽着」
-# 用户的鼠标。窗口消息注入（PostMessage/SendMessage）实测被本游戏忽略，做不到零打扰，
+
+def _mouse_press(flag):
+    """单独提交一次按下或抬起（仅拖动/长按使用，必须配 try/finally）。"""
+    return _send_mouse_events(flag) == 1
+
+
+def inject_drag(x1, y1, x2, y2, steps=25, step_sleep=0.02, hold_ms=None):
+    """按住左键拖动：从 (x1,y1) 逐步移动到 (x2,y2)，或无位移长按 hold_ms 毫秒。
+
+    为什么必须「逐步」：Unity 的 ScrollRect 只认持续的指针移动事件，瞬移式拖拽
+    （旧 AHK 的 `send_drag` 就是这样）实测卡片列表纹丝不动（2026-11-08）。
+    长按（`hold_ms`）用于迷宫「长按 4 秒」这类操作，此时忽略终点坐标。
+
+    try/finally 保证 LEFTUP 一定发出：进程在这期间被中断会让左键永久卡住，
+    用户表现为「所有窗口被拖拽/最小化」（项目铁律，不可省）。
+    """
+    ctypes.windll.user32.SetCursorPos(int(x1), int(y1))
+    time.sleep(0.15)
+    if not _mouse_press(MOUSEEVENTF_LEFTDOWN):
+        return False
+    try:
+        if hold_ms is not None:
+            _sleep_interruptible(hold_ms / 1000.0)
+        else:
+            for step in range(1, steps + 1):
+                x = x1 + (x2 - x1) * step / steps
+                y = y1 + (y2 - y1) * step / steps
+                ctypes.windll.user32.SetCursorPos(int(x), int(y))
+                time.sleep(step_sleep)
+    finally:
+        released = _mouse_press(MOUSEEVENTF_LEFTUP)
+    time.sleep(0.3)
+    return released
+
+
+def _sleep_interruptible(seconds, tick=0.1):
+    """分段 sleep，让长按期间 F9 停止仍能尽快生效（但仍会先松开左键再退）。"""
+    deadline = time.time() + seconds
+    while True:
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            return
+        time.sleep(min(tick, remaining))
+        with contextlib.suppress(Exception):
+            check_stop()
+
+
+# 点击后把鼠标放回原处：注入会把光标留在目标点，连续批处理会一直「拽着」用户的
+# 鼠标。窗口消息注入（PostMessage/SendMessage）实测被本游戏忽略，做不到零打扰，
 # 因此这里至少让光标即刻归位；焦点仍会被 ensure_game_clickable 激活一次。
 _restore_cursor = {"enabled": True}
 
@@ -1357,178 +1387,18 @@ def _restore_cursor_pos(pos):
         ctypes.windll.user32.SetCursorPos(int(pos[0]), int(pos[1]))
 
 
-def _ahk_script_running():
-    """确认 AutoHotkey64.exe 跑的是本项目的 click_from_file.ahk（不是用户别的 AHK）。
-
-    tasklist 只看进程名会误判：用户自己开了 AHK 也会显示 AutoHotkey64.exe。
-    查一次命令行（仅启动时调用，开销可接受）；查询失败时保守认为在运行。
-    """
-    try:
-        result = run_hidden(
-            ["powershell", "-NoProfile", "-Command",
-             ("Get-CimInstance Win32_Process -Filter \"Name='AutoHotkey64.exe'\" "
-              "| Select-Object -ExpandProperty CommandLine")],
-            capture_output=True, timeout=3, check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return True
-    out = (result.stdout or b"").decode("utf-8", errors="ignore").strip()
-    if not out:
-        # 提权进程的 CommandLine 常读不到（实测 2026-11-10 为空）：保守按在跑处理，
-        # 避免把正常注入器误判成「已退出」。
-        return True
-    return "click_from_file.ahk" in out
-
-
-def clicker_process_alive():
-    """兼容符号：进程内注入没有外部注入器进程，恒返回 True。
-
-    2026-11-17 前这里用 tasklist 探测 click_from_file.exe / AutoHotkey64.exe；
-    改造后点击由本进程 SendInput 完成，探测外部进程已无意义。保留函数供历史调用。
-    """
-    return True
-
-
-def clicker_alive():
-    """兼容符号：进程内注入永远就绪，恒返回 True。
-
-    旧实现探测进程 + 坐标文件残留；进程内方案没有中间进程和坐标 IPC，
-    自然不存在「注入器没起来」的失败模式。真正的前置条件只剩提权，由
-    `is_process_elevated()` / GUI 的 `_warn_if_not_elevated()` 负责。
-    """
-    return True
-
-
-def clear_stale_coord():
-    """删除残留的坐标 IPC 文件，避免新注入器一上线就点一个陈旧位置。
-
-    2026-11-16 实测：调试探针写下的坐标（如 start 的 2940 811）若无人消费，会一直
-    留在 shared/target_coord.txt；下一次启动新注入器时它第一件事就是把这条旧坐标
-    点掉——游戏可能因此误触开始界面之外的按钮。启动注入器前统一清一次最稳妥。
-    返回是否真的删掉了文件；无文件或删除失败都不抛异常（清理是尽力而为）。
-    """
-    try:
-        if os.path.exists(coord_path):
-            os.remove(coord_path)
-            return True
-    except OSError:
-        pass
-    return False
-
-
-# ===== 会话一致性：注入器必须和游戏在同一个 Windows 会话 =====
-# 2026-11-12 冷启动实测：注入器被上一个会话（RDP-Tcp#1，session 3）启动并留在那里，
-# 而游戏在 Console（session 1）。注入器照常读走坐标文件、SendInput 却打在自己会话的
-# 桌面上——文件消失（判据说「点击成功」）、游戏毫无反应。**坐标文件的消费状态无法区分
-# 这两种情况**，只能比较进程所属会话。
-def _pid_session_id(pid):
-    """返回进程所属的 Windows 会话 ID；取不到返回 None。"""
-    if not pid:
-        return None
-    try:
-        sid = ctypes.c_ulong()
-        if not ctypes.windll.kernel32.ProcessIdToSessionId(int(pid), ctypes.byref(sid)):
-            return None
-        return int(sid.value)
-    except (AttributeError, OSError, ctypes.ArgumentError):
-        return None
-
-
-def current_session_id():
-    """当前进程所在的会话 ID。"""
-    return _pid_session_id(os.getpid())
-
-
 def is_process_elevated():
     """当前进程是否以管理员身份运行。
 
-    为什么必须查这一条：游戏以管理员启动时，非提权进程的 `SendInput` 会被 UIPI
-    静默丢弃——注入器照常读走坐标文件（「坐标被消费 == 点击成功」的判据全部成立），
-    游戏画面却一动不动，最后表现为**每个任务都超时失败**，日志里找不到任何异常
-    （2026-11-12 实测：同一份代码，普通权限跑全失败，管理员跑立刻正常交付）。
+    进程内 `SendInput` 对提权游戏仍受 UIPI 限制：非提权进程注入的鼠标事件会被系统
+    静默丢弃，游戏画面一动不动，最后表现为**每个任务都超时失败**而日志里找不到任何
+    异常（2026-11-12 实测：同一份代码，普通权限跑全失败，管理员跑立刻正常交付）。
+    这是进程内注入方案唯一剩下的硬前置条件。
     """
     try:
         return bool(ctypes.windll.shell32.IsUserAnAdmin())
     except (AttributeError, OSError):
         return False
-
-
-def game_window_session_id():
-    """游戏窗口所属进程的会话 ID；取不到返回 None。"""
-    hwnd = find_game_window()
-    if hwnd is None:
-        return None
-    try:
-        pid = wintypes.DWORD()
-        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-        return _pid_session_id(pid.value)
-    except (AttributeError, OSError, ctypes.ArgumentError):
-        return None
-
-
-def _clicker_session_ids():
-    """列出所有在跑的点击注入器进程的会话 ID。"""
-    try:
-        result = run_hidden(["tasklist", "/NH"], capture_output=True,
-                            timeout=3, check=False)
-    except (OSError, subprocess.SubprocessError):
-        return []
-    out = result.stdout or b""
-    names = []
-    if b"click_from_file.exe" in out:
-        names.append("click_from_file.exe")
-    if b"AutoHotkey64.exe" in out:
-        names.append("AutoHotkey64.exe")
-    sids = []
-    for name in names:
-        try:
-            listing = run_hidden(["tasklist", "/FI", f"IMAGENAME eq {name}", "/FO", "CSV", "/NH"],
-                                 capture_output=True, timeout=3, check=False)
-        except (OSError, subprocess.SubprocessError):
-            continue
-        # 逐行解析 "名字","PID","会话名","会话号","内存"
-        for raw in (listing.stdout or b"").decode("gbk", errors="ignore").splitlines():
-            parts = [p.strip('"') for p in raw.split('","')]
-            if len(parts) >= 4 and parts[1].isdigit():
-                try:
-                    sids.append(int(parts[3]))
-                except ValueError:
-                    continue
-    return sids
-
-
-def clicker_session_mismatch():
-    """注入器与游戏不在同一会话时返回说明文字，正常返回 None。
-
-    2026-11-13 修正结论强度：会话不一致**不是**点击失效的充分条件。11-12 那次
-    「游戏毫无反应」是同时改了「杀掉旧注入器 + 提权重启」两个变量，功劳被误记到
-    会话上；11-13 实测注入器在会话 3、游戏在会话 1，19 项任务里 17 项点击正常生效。
-    真正会让 SendInput 被静默丢弃的是**非提权进程对提权游戏**（UIPI），见
-    `is_process_elevated()`。这里只作为排查线索，不再断言「游戏不会有任何反应」。
-    """
-    game_sid = game_window_session_id()
-    if game_sid is None:
-        return None
-    sids = _clicker_session_ids()
-    if not sids:
-        return None
-    if game_sid in sids:
-        return None
-    return (f"点击注入器运行在会话 {','.join(str(s) for s in sorted(set(sids)))}，"
-            f"游戏在会话 {game_sid}：若出现点击不生效，请优先确认本工具与注入器"
-            f"均已提权，再考虑会话因素")
-
-
-def log_clicker_session_warning():
-    """会话不一致时记一条日志（每个进程只检查一次，避免每次点击都 Tasklist）。"""
-    if _session_warn["checked"]:
-        return
-    _session_warn["checked"] = True
-    note = clicker_session_mismatch()
-    if note is None:
-        return
-    _session_warn["done"] = True
-    log(f"提示: {note}")
 
 
 def _write_coord_raw(x, y, wait_timeout=1.5):
@@ -1654,47 +1524,13 @@ def click_and_confirm(template_path, name, confirm, *, attempts=2, threshold=0.8
 
 
 def _drag_scroll(x1, y1, x2, y2, steps=25, step_sleep=0.02):
-    """SendInput 逐步拖动（按住左键 + 逐步移动），用于 ScrollRect 类列表滚动。
+    """逐步拖动（按住左键 + 逐步移动），用于 ScrollRect 类列表滚动。
 
-    AHK 的 send_drag 是瞬移式拖拽，Unity 的 ScrollRect 不认（2026-11-08 实测：卡片
-    列表纹丝不动）；必须「按住 + 逐步移动 + 松开」才触发滚动。仅用于拖拽滚动，不用于
-    点击。try/finally 保证 LEFTUP 一定执行，避免进程中断卡住左键。
-    注意：目标窗口是管理员进程时，本进程也必须有管理员权限（项目本来就要求）。
+    瞬移式拖拽 Unity 的 ScrollRect 不认（2026-11-08 实测：卡片列表纹丝不动），
+    必须「按住 + 逐步移动 + 松开」。实现统一收敛在 `inject_drag`，这里的逐步参数
+    供滚动调到「手感合适」的步数/步间隔。
     """
-    INPUT_MOUSE = 0
-    MOUSEEVENTF_LEFTDOWN = 0x0002
-    MOUSEEVENTF_LEFTUP = 0x0004
-
-    class MOUSEINPUT(ctypes.Structure):
-        _fields_ = [("dx", wintypes.LONG), ("dy", wintypes.LONG),
-                    ("mouseData", wintypes.DWORD), ("dwFlags", wintypes.DWORD),
-                    ("time", wintypes.DWORD),
-                    ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong))]
-
-    class INPUT(ctypes.Structure):
-        class _I(ctypes.Union):
-            _fields_ = [("mi", MOUSEINPUT)]
-
-        _anonymous_ = ("i",)
-        _fields_ = [("type", wintypes.DWORD), ("i", _I)]
-
-    def _send(flags):
-        inp = INPUT(type=INPUT_MOUSE)
-        inp.mi = MOUSEINPUT(0, 0, 0, flags, 0, None)
-        return ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(inp))
-
-    ctypes.windll.user32.SetCursorPos(int(x1), int(y1))
-    time.sleep(0.15)
-    _send(MOUSEEVENTF_LEFTDOWN)
-    try:
-        for step in range(1, steps + 1):
-            x = x1 + (x2 - x1) * step / steps
-            y = y1 + (y2 - y1) * step / steps
-            ctypes.windll.user32.SetCursorPos(int(x), int(y))
-            time.sleep(step_sleep)
-    finally:
-        _send(MOUSEEVENTF_LEFTUP)
-    time.sleep(0.3)
+    return inject_drag(x1, y1, x2, y2, steps=steps, step_sleep=step_sleep)
 
 
 def scroll_in_client_region(direction="down", distance_ratio=0.35, times=1, region=None):
@@ -1704,7 +1540,7 @@ def scroll_in_client_region(direction="down", distance_ratio=0.35, times=1, regi
     region: 可选 (x, y, w, h) 全屏绝对坐标滚动区；缺省按玩法目录卡片列表比例取。
     2026-11-08 实测链路：①滚轮（mouse_event / SendInput）确实能滚，但滚到底后第三行
     标题被底部页签栏遮挡、模板匹配不到；②按住上拖能把列表拖到「标题露出」的位置，
-    但必须是逐步拖动（见 _drag_scroll），AHK 的瞬移式 send_drag 无效；③卡片图案区
+    但必须是逐步拖动（见 _drag_scroll），瞬移式拖拽无效；③卡片图案区
     不可点，按钮在标题区，所以必须拖到标题可见再点。
     拖拽后若目录标题消失（误入卡片详情），点返回箭头退回目录。
     """
@@ -2033,7 +1869,7 @@ def wait_and_click(template_path, name, threshold=0.8, timeout=None,
         pos = find_center(template_path, threshold=threshold,
                           region=region, client_region=client_region)
         if pos:
-            print(f"{display_name(name)} 识别成功，第 {attempt} 次，坐标: {pos}，发送给 AHK 点击")
+            print(f"{display_name(name)} 识别成功，第 {attempt} 次，坐标: {pos}，注入点击")
             send_coord(*pos)
             invalidate_screenshot_cache()
             return True

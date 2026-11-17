@@ -1,75 +1,24 @@
-"""点击链路的守护逻辑测试：点击器存活探测、坐标未消费告警、客户区限定匹配的坐标换算。
+"""点击链路的守护逻辑测试：注入失败的告警、客户区限定匹配的坐标换算。
 
-这三个功能都不依赖真实游戏窗口：
-- 存活探测打桩 `subprocess.run`，并断言探测过程不写坐标文件（不得产生真实点击）；
-- 未消费告警用临时目录里的假坐标文件模拟「无人消费」；
+这两块都不依赖真实游戏窗口：
+- 注入失败告警把 `_write_coord_raw` 打桩成失败，断言 send_coord 当场记日志；
 - 区域限定匹配用合成图片与合成模板，验证命中位置与偏移补偿。
+
+（2026-11-17 点击改进程内 SendInput 后，本文件原有的「注入器存活探测」「坐标文件
+未消费」两组用例随机制一起删除：没有中间进程，就没有可探测的进程和可残留的坐标文件。）
 """
 import os
-import subprocess
 import sys
 
 import numpy as np
-import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import common
 
 
-@pytest.fixture
-def isolated_coord(tmp_path, monkeypatch):
-    """把坐标文件指向临时目录，避免污染真实的 shared/target_coord.txt。"""
-    path = str(tmp_path / "target_coord.txt")
-    monkeypatch.setattr(common, "coord_path", path)
-    monkeypatch.setattr(common, "_clicker_miss", {"streak": 0})
-    return path
-
-
-def _fake_tasklist(stdout):
-    """tasklist 以 bytes 返回（中文 Windows 上 stdout 是 GBK，不能按 text 解析）。"""
-    return lambda *_args, **_kwargs: subprocess.CompletedProcess(
-        args=["tasklist"], returncode=0,
-        stdout=stdout if isinstance(stdout, bytes) else stdout.encode("ascii"),
-        stderr=b"",
-    )
-
-
-def test_clear_stale_coord_removes_ipc_file(isolated_coord):
-    """兼容符号 clear_stale_coord 仍清掉旧版残留坐标，避免误点。"""
-    with open(isolated_coord, "w", encoding="utf-8") as handle:
-        handle.write("100 200")
-    assert common.clear_stale_coord() is True
-    assert not os.path.exists(isolated_coord)
-    assert common.clear_stale_coord() is False
-
-
-def test_clicker_alive_does_not_write_coord(isolated_coord, monkeypatch):
-    """负验证：clicker_alive 恒 True 且绝不产生点击副作用（不写坐标文件）。"""
-    monkeypatch.setattr(common.subprocess, "run", _fake_tasklist(b""))
-    assert common.clicker_alive() is True
-    assert not os.path.exists(isolated_coord), "就绪探测绝不能写坐标 IPC 文件"
-
-
-def test_clicker_alive_independent_of_process_list(isolated_coord, monkeypatch):
-    """2026-11-17 起进程内注入：无论 tasklist 报有/无进程，就绪判定都不变。"""
-    mono = _fake_tasklist("INFO: No tasks are running which match the specified criteria.")
-    monkeypatch.setattr(common.subprocess, "run", mono)
-    assert common.clicker_alive() is True
-
-    def boom(*_args, **_kwargs):
-        raise subprocess.SubprocessError("tasklist unavailable")
-
-    monkeypatch.setattr(common.subprocess, "run", boom)
-    assert common.clicker_alive() is True, "进程内注入不依赖任何外部进程探测"
-
-
-def test_send_coord_warns_when_injection_fails(isolated_coord, monkeypatch):
-    """2026-11-17 进程内注入：SendInput 失败要记日志（不再抛 ClickerNotRunning）。
-
-    旧实现靠「坐标无人消费」判定注入器退出并抛 ClickerNotRunning；进程内方案没有
-    中间进程和坐标文件，失败模式变成 inject_click 返回 False，故改为记告警。
-    """
+def test_send_coord_warns_when_injection_fails(monkeypatch):
+    """SendInput 失败要当场记日志，而不是静默继续（那会变成「界面 8 轮无变化」）。"""
     messages = []
     monkeypatch.setattr(common, "log", lambda m: messages.append(m))
     monkeypatch.setattr(common, "_restore_cursor", {"enabled": False})
@@ -80,18 +29,6 @@ def test_send_coord_warns_when_injection_fails(isolated_coord, monkeypatch):
 
     common.send_coord(10, 20)
     assert any("注入失败" in m for m in messages), messages
-
-
-def test_clicker_alive_always_true_for_in_process_injection(isolated_coord, monkeypatch):
-    """进程内注入没有外部进程可探测；clicker_alive 恒 True（兼容旧调用点）。
-
-    负验证：若把它改回 tasklist 探测，无进程时会返回 False，本用例变红。
-    """
-    monkeypatch.setattr(common.subprocess, "run",
-                        _fake_tasklist("INFO: No tasks are running which match the specified criteria."))
-    with open(isolated_coord, "w", encoding="utf-8") as handle:
-        handle.write("100 200")
-    assert common.clicker_alive() is True
 
 
 def _textured_marker(height=20, width=30):

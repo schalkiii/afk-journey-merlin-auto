@@ -25,6 +25,13 @@ def setup_function(_func):
 
 def test_hit_line_is_compressed():
     assert lf.format_body(
+        "caidan 识别成功，第 1 次，坐标: (3541, 958)，注入点击") == \
+        "命中 菜单(caidan) (3541, 958) 第1次"
+
+
+def test_legacy_ahk_wording_still_compresses():
+    """旧日志里写的是「发送给 AHK 点击」，改措辞后仍要能压短历史日志。"""
+    assert lf.format_body(
         "caidan 识别成功，第 1 次，坐标: (3541, 958)，发送给 AHK 点击") == \
         "命中 菜单(caidan) (3541, 958) 第1次"
 
@@ -51,7 +58,7 @@ def test_other_wording_passes_through_unchanged():
 
 def test_detail_lines_indent_under_the_running_task():
     lf.set_task("好友奖励")
-    assert lf.format_body("菜单 识别成功，第 1 次，坐标: (3541, 958)，发送给 AHK 点击") == \
+    assert lf.format_body("菜单 识别成功，第 1 次，坐标: (3541, 958)，注入点击") == \
         "  · 命中 菜单 (3541, 958) 第1次"
 
 

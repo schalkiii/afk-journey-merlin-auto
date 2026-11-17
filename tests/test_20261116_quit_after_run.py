@@ -179,20 +179,17 @@ class _ShutdownHost:
     def _unregister_hotkeys(self):
         self.calls.append("hotkeys")
 
-    def _stop_clicker(self):
-        self.calls.append("clicker")
-
     def destroy(self):
         self.calls.append("destroy")
 
 
-def test_shutdown_unregisters_hotkeys_and_recycles_clicker():
-    """漏一步就留下长期残留：注入器会把坐标读走、点击却打到别的桌面。"""
+def test_shutdown_unregisters_hotkeys_then_destroys_window():
+    """退出必须摘热键再销毁窗口，否则热键回调会打到已销毁的控件上。"""
     host = _ShutdownHost()
 
     gui._shutdown_app(host)
 
-    assert host.calls == ["hotkeys", "clicker", "destroy"]
+    assert host.calls == ["hotkeys", "destroy"]
 
 
 def test_quit_after_run_never_asks_for_confirmation(monkeypatch):
@@ -205,7 +202,7 @@ def test_quit_after_run_never_asks_for_confirmation(monkeypatch):
     gui.GameBotGUI._quit_now(host)
 
     assert prompts == []
-    assert host.calls == ["hotkeys", "clicker", "destroy"]
+    assert host.calls == ["hotkeys", "destroy"]
 
 
 # ===== 收尾执行体 =====

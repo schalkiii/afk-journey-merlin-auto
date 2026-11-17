@@ -1,4 +1,4 @@
-"""成品移到 dist/ 后，数据目录必须仍在仓库根（不丢配置、不分裂日志与坐标 IPC）。
+"""成品移到 dist/ 后，数据目录必须仍在仓库根（不丢配置、不分裂日志与 debug 现场）。
 
 负验证：删掉 `get_work_path` 里的 dist 分支，
 `test_frozen_in_dist_keeps_data_at_repo_root` 必须失败。
@@ -23,8 +23,8 @@ def test_frozen_in_dist_keeps_data_at_repo_root(monkeypatch, tmp_path):
 
     assert common.get_work_path("game_bot_config.json") == str(repo / "game_bot_config.json")
     assert common.get_work_path("game_bot.log") == str(repo / "game_bot.log")
-    assert common.get_work_path(os.path.join("shared", "target_coord.txt")) == str(
-        repo / "shared" / "target_coord.txt")
+    assert common.get_work_path(os.path.join("debug", "failures")) == str(
+        repo / "debug" / "failures")
 
 
 def test_frozen_in_dist_without_parent_config_stays_portable(monkeypatch, tmp_path):

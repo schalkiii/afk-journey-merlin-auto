@@ -19,8 +19,6 @@ from types import SimpleNamespace
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import bot_runtime
-import common
-import Goldenhandmaidens as gui
 import proc_util
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -62,26 +60,22 @@ def test_run_hidden_merges_flags_and_lets_caller_override(monkeypatch):
     assert "startupinfo" in calls[0]
 
 
-def test_probe_paths_run_without_console(monkeypatch):
-    """真实调用路径：进程探测若存在，必须走隐藏控制台封装。
+def test_force_kill_path_runs_without_console(monkeypatch):
+    """真实调用路径：关游戏兜底强杀走 taskkill，必须带隐藏控制台标志。
 
-    2026-11-17 起点击改为进程内 SendInput，clicker_process_alive() 恒 True、不再跑
-    tasklist；保留本用例验证「真要探测时（如 is_process_elevated 之外的 tasklist）
-    仍走 run_hidden」，即 hidden_kwargs 本身在所有调用上生效。
+    2026-11-17 起点击改为进程内 SendInput，注入器探测（tasklist）整条链路已删除，
+    剩下真正会起子进程的业务路径只剩「关游戏 / 读快捷方式 / 拉起游戏」这三条，
+    这里钉住其中的 taskkill 兜底。
     """
-    calls = _capture_run(monkeypatch, stdout=b"")
-    common.clicker_process_alive()
-    # 进程内注入不产生探测调用；若未来恢复探测，则必须对每一条调用校验隐藏标志。
-    assert all(call["creationflags"] == proc_util.subprocess.CREATE_NO_WINDOW
-               for call in calls)
+    calls = _capture_run(monkeypatch)
+    monkeypatch.setattr(bot_runtime, "_find_game_window", lambda: 1001)
+    monkeypatch.setattr(bot_runtime, "game_window_pid", lambda: 4321)
+    monkeypatch.setattr(bot_runtime, "_post_close_message", lambda _hwnd: True)
+    # 窗口一直不消失 → 走满 timeout 后进强杀分支；把等待缩到 0 免得真等 12 秒
+    ok, _msg = bot_runtime.close_game(timeout=0)
 
-
-def test_taskkill_and_tasklist_in_gui_hide_window(monkeypatch):
-    calls = _capture_run(monkeypatch, stdout=b"AutoHotkey")
-    gui.GameBotGUI._taskkill(["/F", "/IM", "click_from_file.exe"])
-    gui.GameBotGUI._pid_is_clicker(4321)
-
-    assert [call["args"][0] for call in calls] == ["taskkill", "tasklist"]
+    assert ok is True
+    assert [call["args"][0] for call in calls] == ["taskkill"]
     assert all(call["creationflags"] == proc_util.subprocess.CREATE_NO_WINDOW
                for call in calls)
 

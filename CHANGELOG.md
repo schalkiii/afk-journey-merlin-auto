@@ -396,6 +396,37 @@
   中依赖旧 IPC 失败模式的断言。**负验证**：去掉 send_coord 失败告警 → 2 条用例红；已还原。
 - **门禁**：**466 passed**、ruff 基线一致、markdownlint 零 error。
 
+#### 2026-11-17 收尾清理：把 AHK 中间层的残留全部退场（含一处真实功能缺口）
+
+- **发现一处真实功能缺口（改造成 11-17 上午那批时漏的）**：`drag_utils.send_drag()` 与
+  `warehouse.send_drag()` 仍在往 `shared/drag_coord.txt` 写指令、等 AHK 消费。注入器删除后
+  这两个文件**再也不会有人读**，于是「迷宫长按 4 秒」「阵容编辑拖动」「仓库列表拖动」
+  三处会静默变成空操作——写文件成功、无异常、界面不动。修法：新增
+  `common.inject_drag(x1, y1, x2, y2, steps=, step_sleep=, hold_ms=)`（按住 → 逐步移动 /
+  原地长按 → 松开，try/finally 保证抬起），`drag_utils` 与 `warehouse` 改为薄包装；
+  `_drag_scroll` 也收敛到同一实现，删掉它自己抄的一份 ctypes 结构。
+- **删除为中间层服务的整条链路**（都已无调用方）：
+  `common._ahk_script_running` / `clicker_alive` / `clicker_process_alive` / `clear_stale_coord` /
+  `coord_path` / `_clicker_session_ids` / `clicker_session_mismatch` /
+  `log_clicker_session_warning` / `_pid_session_id` / `current_session_id` /
+  `game_window_session_id` / `CLICKER_MISS_LIMIT` / `_clicker_miss` / `ClickerNotRunning`；
+  GUI 的 `_launch_clicker` / `_stop_clicker` / `_pid_is_clicker` / `_taskkill` /
+  `_resolve_clicker_launcher` / `is_click_from_file_running` / `_clicker_pid` / `atexit` 注册。
+  退出路径随之简化为「摘热键 → 销毁窗口」，`_ensure_clicker_ready` 只剩提权告警。
+- **仓库文件**：`click_from_file.exe` / `click_from_file.ahk` 移出仓库（历史仍在 git 里），
+  `goldenhandmaidens.spec` 的 `datas` 不再打包它们。
+- **日志措辞**：点击行由「发送给 AHK 点击」改为「注入点击」；`log_format` 的压缩规则同时接受
+  新旧两种措辞，历史日志仍能压短。
+- **文档对账**：README（依赖/目录树/清理/打包说明/§5 启动优化/§9 坐标 IPC 段）、
+  `doc/CONFIG.md`（删 `shared/target_coord.txt` 行）、`doc/GUI.md`（隐藏控制台的触发点）、
+  `doc/LIVE-DEBUGGING.md`（§1 前置条件改为「只查提权」、§5.2 拖动实现、§5.3 改写为
+  「为什么现在没有注入器进程」的历史结论）、`CLAUDE.md`（一句话定位 + 测试基线）全部同步。
+- **用例**：删 19 条随机制退场的用例（注入器生命周期 6、会话一致性 5、AHK 脚本/启动器 3、
+  坐标文件 4、GUI taskkill/pid 1），补 5 条拖拽注入用例（逐步移动+松开 / 异常必抬键 /
+  长按不移位 / 滚动委托 / 调用方接入），并把「退出路径」「就绪检查」「日志措辞」三条用例
+  改成新语义。**负验证**：把 `inject_drag` 的 LEFTUP 移出 finally → 对应用例红；已还原。
+- **门禁**：**446 passed**、ruff 基线一致（5 条）、markdownlint 零 error。
+
 #### 2026-11-16 实机复盘：定时冷启动 start 点击落空（注入器未启动）
 
 - **现象**：23:10 定时准点拉起游戏、23:11 判「已出现开始界面」，日志打出

@@ -1,51 +1,27 @@
-"""拖拽 / 滑动工具模块：封装基于坐标的拖拽与长按操作。
+"""拖拽 / 长按工具模块：把「按住左键拖」和「原地长按」收敛成一处。
 
 关键接口：
-- send_drag(x1, y1, x2, y2, ...): 将拖拽起止坐标写入 IPC 文件，交由 AHK 执行。
-拖拽动作同样走「写文件 + AHK 注入」的解耦通道（见 common.send_coord 说明）。
+- send_drag(x1, y1, x2, y2, hold_ms=None): 按住左键从起点拖到终点；给了 hold_ms
+  就变成「在起点按住 hold_ms 毫秒再松开」（迷宫长按场景）。
+
+实现走 `common.inject_drag` 的进程内 SendInput（2026-11-17 起）：按下与抬起都在本
+进程内提交，不再经过「写 txt 等外部注入器消费」的中间层，因此也没有需要等待的外部
+消费者（旧的 `wait_for_drag_complete` 已随之删除）。
 """
 
-import os
-import time
-
-from common import check_stop, get_work_path
-
-# ============================================================
-# 常量
-# ============================================================
-
-DRAG_COORD_PATH = get_work_path("shared\\drag_coord.txt")
-
-# 确保 shared 目录存在
-os.makedirs(os.path.dirname(DRAG_COORD_PATH), exist_ok=True)
+import common
 
 # ============================================================
 # 通用拖拽函数
 # ============================================================
 
 def send_drag(x1: int, y1: int, x2: int, y2: int, hold_ms: int | None = None):
-    """
-    将一次拖拽指令写入文件，交给 AHK 脚本执行。
-    AHK 从 (x1, y1) 按下左键，拖到 (x2, y2) 后松开。
-    hold_ms: 可选，按住时长(ms)，不传则使用 AHK 默认值
-    """
-    with open(DRAG_COORD_PATH, "w", encoding="utf-8") as f:
-        if hold_ms is not None:
-            f.write(f"{x1} {y1} {x2} {y2} {hold_ms}")
-        else:
-            f.write(f"{x1} {y1} {x2} {y2}")
+    """按住左键拖动 / 长按，返回是否注入成功。
 
-
-def wait_for_drag_complete(check_interval: float = 0.05, timeout: float = 10.0) -> bool:
+    hold_ms 不为 None 时只在起点长按（忽略 x2/y2），用于「长按 4 秒」这类操作。
+    短按拖动逐步移动才能触发 Unity 的 ScrollRect（见 common.inject_drag）。
     """
-    等待 AHK 处理完拖拽指令（文件被删除即为处理完毕）。
-    """
-    elapsed = 0.0
-    while os.path.exists(DRAG_COORD_PATH):
-        check_stop()
-        time.sleep(check_interval)
-        elapsed += check_interval
-        if elapsed > timeout:
-            print("⚠️ 等待拖拽完成超时，请检查 AHK 是否在运行")
-            return False
-    return True
+    # 非前台时第一次按下会被系统吞掉去激活窗口，与点击同理：先确保游戏可点。
+    if common.ensure_game_clickable() is False:
+        common._click_title_bar()
+    return common.inject_drag(x1, y1, x2, y2, hold_ms=hold_ms)

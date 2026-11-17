@@ -102,14 +102,14 @@ padding，界面永远是系统灰；clam 能吃配色，代价是要把默认�
 就是每次启动/关闭工具时一闪的黑色 cmd 框。实测触发点：
 
 - 启动游戏前读桌面 `.lnk` 目标：`powershell`；
-- 探测/回收点击注入器：`tasklist` / `taskkill`；
+- 关游戏兜底强杀：`taskkill`；
 - 安装更新：`cmd /c update.bat`。
 
 结论：改 spec 没用，只能在创建子进程时带上隐藏标志。全仓统一走 `proc_util.py`：
 
 ```python
 run_hidden(["tasklist", "/NH"], capture_output=True)   # 等价 subprocess.run + 隐藏控制台
-popen_hidden([ahk_exe, script, work_dir])              # 等价 subprocess.Popen + 隐藏控制台
+popen_hidden([exe, "--flag"])                          # 等价 subprocess.Popen + 隐藏控制台
 ```
 
 `CREATE_NO_WINDOW` 让子进程完全不带控制台，`STARTF_USESHOWWINDOW + SW_HIDE` 是双保险。

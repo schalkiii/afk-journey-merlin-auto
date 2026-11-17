@@ -9,6 +9,9 @@
   `test_login_reports_failure_when_not_at_main` 必须失败；
 - `start._dismiss_popups` 去掉通用「点击空白处关闭」分支 →
   `test_login_dismisses_generic_popup` 必须失败。
+
+（会话一致性那组用例已随「注入器独立进程」一起退场：进程内注入不再有第二个进程，
+不可能出现「注入器在别的会话」这种失败模式，见 tests/test_20261117_in_process_injection.py。）
 """
 import common
 import start
@@ -149,49 +152,6 @@ def test_login_dismisses_generic_popup(monkeypatch):
 
     start._dismiss_popups("a", "b", "c")
     assert clicked, "通用「点击空白处关闭」弹窗必须被处理，否则主界面一直被挡"
-
-
-# ---------- 会话一致性：注入器必须和游戏在同一个 Windows 会话 ----------
-# 负验证：把 `clicker_session_mismatch` 改成恒返回 None（即恢复「只判进程存在」），
-# `test_clicker_session_mismatch_detected` 必须失败。
-
-def test_clicker_session_mismatch_detected(monkeypatch):
-    """注入器在 RDP 会话、游戏在 Console：必须报出来。"""
-    monkeypatch.setattr(common, "game_window_session_id", lambda: 1)
-    monkeypatch.setattr(common, "_clicker_session_ids", lambda: [3])
-    note = common.clicker_session_mismatch()
-    assert note is not None
-    assert "会话 3" in note and "会话 1" in note
-
-
-def test_clicker_session_match_is_ok(monkeypatch):
-    monkeypatch.setattr(common, "game_window_session_id", lambda: 1)
-    monkeypatch.setattr(common, "_clicker_session_ids", lambda: [1])
-    assert common.clicker_session_mismatch() is None
-
-
-def test_clicker_session_unknown_is_ok(monkeypatch):
-    """取不到会话号时不能误报——宁可放过也不能把正常环境判成故障。"""
-    monkeypatch.setattr(common, "game_window_session_id", lambda: None)
-    monkeypatch.setattr(common, "_clicker_session_ids", lambda: [3])
-    assert common.clicker_session_mismatch() is None
-
-    monkeypatch.setattr(common, "game_window_session_id", lambda: 1)
-    monkeypatch.setattr(common, "_clicker_session_ids", list)
-    assert common.clicker_session_mismatch() is None
-
-
-def test_session_warning_logged_only_once(monkeypatch):
-    lines = []
-    monkeypatch.setitem(common._session_warn, "checked", False)
-    monkeypatch.setitem(common._session_warn, "done", False)
-    monkeypatch.setattr(common, "game_window_session_id", lambda: 1)
-    monkeypatch.setattr(common, "_clicker_session_ids", lambda: [3])
-    monkeypatch.setattr(common, "log", lambda msg, *_a, **_k: lines.append(msg))
-
-    common.log_clicker_session_warning()
-    common.log_clicker_session_warning()
-    assert len(lines) == 1, "同一条告警不应每次点击都刷一遍"
 
 
 # ---------- 定时触发：改时间不能留下两条循环 ----------

@@ -3,7 +3,7 @@ build/
 dist/
 *.spec.bak
 *.pyz
-# 打包产物（click_from_file.exe 是运行依赖、需入库，故只忽略本项目的输出 exe）
+# 打包产物（成品唯一在 dist/，且已被上面忽略；根目录同名 exe 不入库）
 goldenhandmaidens.exe
 
 # Python cache
@@ -16,7 +16,6 @@ __pycache__/
 # User data - not part of source
 game_bot_config.json
 warehouse_heroes.txt
-shared/
 game_bot.log
 game_bot.log.*
 # 2026-11-07 已删除的孤儿文件：从未被代码读取，防止误加回仓库
@@ -41,9 +40,6 @@ test-single-drag.py
 test-formation.py
 click_ab.py
 main0hao.py
-
-# AHK source (only need the compiled exe)
-*.ahk
 
 # Debug screenshots
 debug/

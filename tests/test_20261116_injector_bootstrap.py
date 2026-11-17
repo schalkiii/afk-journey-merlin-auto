@@ -6,9 +6,12 @@
 - 把 `_click_start_with_confirm` 改回裸 `wait_and_click` →
   `test_click_start_retries_when_screen_unchanged` / `test_click_start_fails_after_all_attempts`
   必须失败；
-- 把 `send_coord` 首次未消费的告警删掉 → `test_send_coord_warns_on_first_miss` 必须失败；
-- 把 `_ensure_clicker_ready` 里的 `clear_stale_coord()` 删掉 →
-  `test_ensure_clicker_ready_clears_stale_coord_first` 必须失败。
+- 把 `send_coord` 注入失败的告警删掉 → `test_send_coord_warns_when_sendinput_fails` 必须失败；
+- 把 `_ensure_clicker_ready` 里的提权告警删掉 →
+  `test_ensure_clicker_ready_only_warns_about_elevation` 必须失败。
+
+（2026-11-17 点击改进程内 SendInput 后，「清陈旧坐标 / 复用已在跑的注入器」这两条
+用例随机制一起删除：没有中间进程，也就没有陈旧坐标会被误点。）
 """
 import common
 import Goldenhandmaidens as gh
@@ -75,13 +78,9 @@ def test_login_bootstraps_clicker_before_main(monkeypatch):
     assert order == ["clicker", "main", "start_all"], order
 
 
-def test_ensure_clicker_ready_clears_stale_coord_first(monkeypatch):
-    """复用/启动注入器之前先清掉陈旧坐标，避免新注入器上线误点旧位置。"""
+def test_ensure_clicker_ready_only_warns_about_elevation(monkeypatch):
+    """进程内注入没有「启动注入器」这一步：就绪检查只剩提权告警，且恒为就绪。"""
     calls = []
-    monkeypatch.setattr(common, "clear_stale_coord",
-                        lambda: calls.append("clear") or True)
-    monkeypatch.setattr(common, "clicker_session_mismatch", lambda: None)
-    monkeypatch.setattr(common, "_click_title_bar", lambda: True)
 
     class Stub:
         _ensure_clicker_ready = gh.GameBotGUI._ensure_clicker_ready
@@ -89,19 +88,12 @@ def test_ensure_clicker_ready_clears_stale_coord_first(monkeypatch):
         def log(self, _msg):
             pass
 
-        def is_click_from_file_running(self):
-            return True
-
-        def _launch_clicker(self, kill_ahk=False):
-            calls.append("launch")
-            return True
-
         def _warn_if_not_elevated(self):
             calls.append("warn")
+            return False
 
     assert Stub()._ensure_clicker_ready() is True
-    assert calls[0] == "clear", calls
-    assert "warn" in calls
+    assert calls == ["warn"]
 
 
 # ---------- start 点击必须校验界面变化并补点 ----------
@@ -173,14 +165,3 @@ def test_send_coord_warns_when_sendinput_fails(monkeypatch):
 
     common.send_coord(100, 200)
     assert any("注入失败" in m for m in messages), messages
-
-
-def test_clear_stale_coord_removes_ipc_file(tmp_path, monkeypatch):
-    """清理陈旧坐标：存在则删除并返回 True，不存在则返回 False。"""
-    path = tmp_path / "target_coord.txt"
-    path.write_text("2940 811", encoding="utf-8")
-    monkeypatch.setattr(common, "coord_path", str(path))
-
-    assert common.clear_stale_coord() is True
-    assert not path.exists()
-    assert common.clear_stale_coord() is False
