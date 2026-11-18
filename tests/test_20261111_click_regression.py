@@ -209,7 +209,12 @@ def test_fanfanle_retries_before_declaring_exhausted(monkeypatch):
         return True
 
     # 按钮一直在（钥匙耗尽前它都在），但点了始终没变化 → 必须重试到 CLICK_RETRIES 次
-    monkeypatch.setattr(fanfanle, "find_center_silent", lambda *_a, **_k: (100, 200))
+    monkeypatch.setattr(
+        fanfanle, "find_center_silent",
+        lambda template_path, *_a, **_k: (
+            None if template_path == fanfanle.tpl_trigger_event else (100, 200)
+        ),
+    )
     monkeypatch.setattr(fanfanle, "click_position", fake_click)
     monkeypatch.setattr(fanfanle, "_wait_keys_change", lambda *_a, **_k: False)
 
@@ -225,7 +230,12 @@ def test_fanfanle_counts_round_when_change_detected(monkeypatch):
     monkeypatch.setattr(fanfanle, "invalidate_screenshot_cache", lambda: None)
     monkeypatch.setattr(fanfanle, "_keys_region_crop", lambda: b"k")
     monkeypatch.setattr(fanfanle, "_region_crop", lambda _r: b"p")
-    monkeypatch.setattr(fanfanle, "find_center_silent", lambda *_a, **_k: (100, 200))
+    monkeypatch.setattr(
+        fanfanle, "find_center_silent",
+        lambda template_path, *_a, **_k: (
+            None if template_path == fanfanle.tpl_trigger_event else (100, 200)
+        ),
+    )
     monkeypatch.setattr(fanfanle, "click_position", lambda *_a, **_k: True)
 
     hits = {"n": 0}

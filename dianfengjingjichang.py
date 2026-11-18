@@ -15,6 +15,7 @@
 import time
 
 from common import (
+    at_main_interface,
     capture_failure_context,
     check_stop,
     click_position,
@@ -51,8 +52,11 @@ SETTLEMENT_DISMISS_POS = (1300, 200)
 # 选择对手界面里三张对手卡片的固定点位（客户区 1600×900，取最左侧/最弱的一张）
 OPPONENT_CLIENT_POS = (672, 422)
 
-# 一场战斗最长等待多久（秒）
-MAX_BATTLE_TIME = 180
+# 一场战斗最长等待多久（秒）。
+# 2026-11-18 实机：三队赛制整场打完会超过 180 秒——日志在 180 秒整放弃，18 秒后
+# 失败现场却已经是主界面（战斗正常结束并被带回）。180 秒偏短，放宽到 300 秒；
+# 同时下面把「已回到主界面」也当成结束信号，正常结束不必再等满。
+MAX_BATTLE_TIME = 300
 # 单次运行最多挑战几场（每场消耗一次挑战次数）
 DEFAULT_CHALLENGE_COUNT = 3
 MAX_CHALLENGE_COUNT = 10
@@ -66,6 +70,10 @@ OUTCOME_STALL_LIMIT = 4
 # 界面长时间不变是对的，绝不能套用 20 秒上限把正在打的战斗误杀。上限取满
 # MAX_BATTLE_TIME，且每轮仍做补点 / 关弹窗 / 等加载，不是一次性盲等。
 BATTLE_STALL_LIMIT = int(MAX_BATTLE_TIME / OUTCOME_POLL)
+
+# 「已回到主界面」这一结束信号的占位模板名（主界面没有单一锚点模板，
+# 用 at_main_interface() 判定；返回值沿用 (template, pos) 结构便于上层分支）。
+MAIN_INTERFACE_SIGNAL = "__main_interface__"
 
 
 def _wait_for_any(templates, timeout, interval=0.5, quiet=False):
@@ -227,7 +235,7 @@ def _recover_during_battle(phase, retry_template, retry_pos=None):
 
 
 def _poll_until_outcome(signals, phase, retry_template, retry_pos=None,
-                        stall_limit=OUTCOME_STALL_LIMIT):
+                        stall_limit=OUTCOME_STALL_LIMIT, also_main=False):
     """短轮询等战斗结束信号；连续 stall_limit 轮毫无进展就存现场放弃。
 
     2026-11-12 的 180 秒空转发生在「跳过之后」，2026-11-13 又发生在「点战斗之后」
@@ -243,6 +251,12 @@ def _poll_until_outcome(signals, phase, retry_template, retry_pos=None,
         outcome = _wait_for_any(signals, timeout=OUTCOME_POLL, quiet=True)
         if outcome is not None:
             return outcome
+        # 战斗正常结束有时会被游戏直接带回主界面（不经过失败页，也不回挑战面板）：
+        # 2026-11-18 的 180 秒空转就是这样——放弃后 18 秒的失败现场已是主界面。
+        # 主界面不是任何结算模板，必须单独认，否则整场白等。
+        if also_main and at_main_interface():
+            log(f"{phase}：已回到主界面，判定这一场已结束。")
+            return MAIN_INTERFACE_SIGNAL, None
         if _recover_during_battle(phase, retry_template, retry_pos):
             stall = 0
             continue
@@ -263,6 +277,7 @@ def _settle_after_skip(skip_pos):
     return _poll_until_outcome(
         [(tpl_fail, "fail"), (tpl_jixutiaozhan, "jixutiaozhan")],
         phase="「跳过」后", retry_template=tpl_tiaoguo, retry_pos=skip_pos,
+        also_main=True,
     )
 
 
@@ -278,7 +293,7 @@ def _wait_for_battle_outcome():
         [(tpl_tiaoguo, "tiaoguo"), (tpl_fail, "fail"),
          (tpl_jixutiaozhan, "jixutiaozhan")],
         phase="「战斗」后", retry_template=tpl_zhandou,
-        stall_limit=BATTLE_STALL_LIMIT,
+        stall_limit=BATTLE_STALL_LIMIT, also_main=True,
     )
 
 
@@ -318,12 +333,19 @@ def _fight_once(index):
         log("战斗结束信号未出现，结束。")
         return False
     outcome_tpl, outcome_pos = outcome
+    if outcome_tpl == MAIN_INTERFACE_SIGNAL:
+        # 战斗结束被直接带回主界面：这一场已经打完，清掉可能的残留弹窗即可
+        dismiss_popup_away_from()
+        return True
     if outcome_tpl == tpl_tiaoguo:
         click_position(outcome_pos, wait=1.2, twice=False)
         outcome = _settle_after_skip(outcome_pos)
         if outcome is None:
             return False
         outcome_tpl, outcome_pos = outcome
+        if outcome_tpl == MAIN_INTERFACE_SIGNAL:
+            dismiss_popup_away_from()
+            return True
 
     if outcome_tpl == tpl_fail:
         # 失败页的「点击空白处关闭」提示模板在这里只有 0.41 分（实测），通用关弹窗无效；
@@ -359,6 +381,10 @@ def flow_dianfeng(challenge_count=DEFAULT_CHALLENGE_COUNT):
     times = max(1, min(int(challenge_count), MAX_CHALLENGE_COUNT))
     done = 0
     for index in range(1, times + 1):
+        # 上一场若被游戏直接带回主界面，这里重新进竞技场再打下一场
+        if index > 1 and at_main_interface() and not _enter_dianfeng():
+            log("重新进入巅峰竞技场失败，结束。")
+            break
         if not _fight_once(index):
             # 单场失败不等于次数用尽（2026-11-08：第 2 场失败页卡住导致第 3 场没打）：
             # 先回到挑战主页，「继续挑战」仍在就继续下一场；按钮消失才是真的打完。

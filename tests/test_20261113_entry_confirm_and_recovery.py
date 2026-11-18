@@ -188,7 +188,23 @@ def test_occluder_cleared_at_most_once(monkeypatch):
 
     用「第 12 次探测才命中目标」驱动固定轮数，不依赖真实时钟：早先用 20ms 时间窗
     凑轮数，全量负载下连 3 轮都没跑到就退出，用例自身变成了 flaky。
+
+    2026-11-18 起 `_wait_for_any_state` 前 3 秒不判遮挡（页面切换动画期间唯一的
+    exit 只是正常返回键），因此这里用假时钟：每睡一次推进 0.5 秒，让轮数驱动的同时
+    真正跨过 occluder_delay。
     """
+    class _Clock:
+        def __init__(self):
+            self.now = 0.0
+
+        def time(self):
+            return self.now
+
+        def sleep(self, seconds):
+            self.now += max(seconds, 0.5)
+
+    monkeypatch.setattr(push, "time", _Clock())
+
     flow = push.PushFlow()
     clears = []
     state = {"rounds": 0}

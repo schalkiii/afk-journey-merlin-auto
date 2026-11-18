@@ -33,6 +33,11 @@ tpl_task_tab = get_template_path("renwu.png")
 tpl_fanfanle_tab = get_template_path("fanfanle.png")
 tpl_fanfanle_tab_selected = get_template_path("fanfanle2.png")
 tpl_add_progress = get_template_path("zengjiajindu.png")
+tpl_trigger_event = get_template_path("chufashijian.png")   # 「触发事件」选择页标题
+
+# 「触发事件-灵魂石种族许愿」四个选项行的中心（客户区 1600×900，自上而下 73px 一行）。
+# 任一选项都能继续，逐行尝试只为容忍单次点击被吞；点中后该页会直接关闭。
+TRIGGER_OPTION_POS = ((815, 606), (815, 679), (815, 752), (815, 825))
 
 # 「当前剩余：🔑NNN」数字条在客户区的位置，用于点击前后的变化比对
 KEYS_REGION = (760, 762, 150, 28)
@@ -67,6 +72,28 @@ def _region_crop(region):
 def _keys_region_crop():
     """取当前钥匙余量区域的图像。"""
     return _region_crop(KEYS_REGION)
+
+
+def _handle_trigger_event():
+    """处理「触发事件-灵魂石种族许愿」选择页，返回是否处理过。
+
+    2026-11-18 实机：点「点击增加进度」后会弹出该页（标题模板 1.000，四个阵营选项
+    「不出现耀光/蛮血/绿裔/亡灵灵魂石」）。它盖住「点击增加进度」且**没有任何返回箭头
+    或空白关闭提示**，旧实现只会判「钥匙烧完」，随后 `recover_to_main_interface`
+    也退不出去，把游戏留在死界面——当天推图、家园愿望单、幻灵推图、循环推图四项
+    因此连锁失败。任选一个阵营即可继续，这里逐行尝试以容忍单次点击被吞。
+    """
+    if find_center_silent(tpl_trigger_event, 0.8) is None:
+        return False
+    log("检测到「触发事件」选择页，选择第一个阵营后继续。")
+    x0, y0, _w, _h = game_client_region()
+    for index, (cx, cy) in enumerate(TRIGGER_OPTION_POS, 1):
+        click_position((x0 + cx, y0 + cy), wait=1.6, twice=False)
+        if find_center_silent(tpl_trigger_event, 0.8) is None:
+            log(f"「触发事件」已处理（第 {index} 个选项）。")
+            return True
+        log(f"点第 {index} 个选项后选择页仍在，换下一个选项。")
+    return True
 
 
 def _enter_fanfanle():
@@ -113,6 +140,11 @@ def _enter_fanfanle():
         if find_center_silent(tpl_add_progress, threshold=0.8, timeout=4.0) is not None:
             time.sleep(0.8)
             return True
+        # 进页时也可能先弹出「触发事件」选择页：处理掉再看按钮
+        if (_handle_trigger_event()
+                and find_center_silent(tpl_add_progress, threshold=0.8, timeout=4.0) is not None):
+            time.sleep(0.8)
+            return True
         log(f"第 {attempt} 次点「翻翻乐」页签后没看到「点击增加进度」按钮")
         tab_pos = (find_center_silent(tpl_fanfanle_tab_selected, 0.8, timeout=2.0)
                    or find_center_silent(tpl_fanfanle_tab, 0.8, timeout=1.0))
@@ -149,6 +181,9 @@ def burn_keys(max_rounds=DEFAULT_MAX_ROUNDS):
     burned = 0
     for attempt in range(1, max_rounds + 1):
         check_stop()
+        # 上一轮点击可能弹出「触发事件」选择页：先处理掉，否则这里找不到按钮，
+        # 会被误判成「钥匙已烧完」把死界面留给后续任务。
+        _handle_trigger_event()
         # 上一轮（若有）的翻牌结算演出还没停稳时，基准帧本身就是动画帧，之后的比对
         # 既可能把「没点动」看成变化，也可能把「点动了」看成没变化。先等演出结束。
         time.sleep(ROUND_SETTLE)
@@ -158,10 +193,18 @@ def burn_keys(max_rounds=DEFAULT_MAX_ROUNDS):
         for retry in range(1, CLICK_RETRIES + 1):
             button_pos = find_center_silent(tpl_add_progress, 0.8)
             if button_pos is None:
+                # 按钮被「触发事件」选择页盖住时先处理该页，再重新找按钮（不消耗重试）
+                if _handle_trigger_event():
+                    continue
                 log(f"第 {attempt} 轮没找到「点击增加进度」按钮，结束。")
                 return burned
             click_position(button_pos, wait=2.0, twice=False)
             invalidate_screenshot_cache()
+            # 这一击如果直接换来「触发事件」页，同样算推进（翻牌已发生，只差选阵营）
+            if _handle_trigger_event():
+                progressed = True
+                log(f"第 {attempt} 轮已推进（触发事件已处理）。")
+                break
             if _wait_keys_change(before_keys, before_progress):
                 progressed = True
                 break
@@ -191,6 +234,9 @@ def main(max_rounds=DEFAULT_MAX_ROUNDS):
     burned = burn_keys(rounds)
     log(f"翻翻乐：完成 {burned} 轮推进（上限 {rounds} 轮）。")
 
+    # 收尾前再清一次选择页：否则 recover_to_main_interface 退不出去，
+    # 游戏会停在死界面上拖垮后面所有任务（2026-11-18 实机）。
+    _handle_trigger_event()
     recover_to_main_interface()
     return True
 

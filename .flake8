@@ -1,0 +1,11 @@
+[flake8]
+# 与 ruff 的默认规则集（E4/E7/E9/F）保持同一口径。
+# 本仓库的 lint 基线是 `build.ps1 check` 里的 ruff 比对（见 .ruff_baseline）；
+# 提交前钩子若用 flake8 的默认全规则（含 79 列 E501、E302 等历史风格项）会与
+# 仓库既有风格冲突，同一份代码在两套 linter 下得到相反结论。这里只保留
+# 与 ruff 默认一致的正确性规则，行宽交由 ruff 基线管理。
+select = E4,E7,E9,F
+# E402：仓库有意在 import cv2 之前做 DPI 感知初始化，测试也先插 sys.path 再 import；
+# ruff 默认规则同样不报这些位置，保持两边一致。
+extend-ignore = E402
+max-line-length = 100

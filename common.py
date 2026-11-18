@@ -1162,6 +1162,7 @@ def recover_to_main_interface(max_tries=8):
     tpl_tuichulibao = get_template_path("tuichulibao.png")
     tpl_exitck = get_template_path("exitck.png")
     tpl_promo = get_template_path("dianfengliansai.png")
+    tpl_trigger_event = get_template_path("chufashijian.png")
     # 退出按钮尝试顺序：先关弹窗（空白关闭 / 退出礼包 / exitck），再返回上一层
     exit_templates = [tpl_close, tpl_tuichulibao, tpl_exitck, tpl_exit]
     promo_outside_tried = False
@@ -1170,6 +1171,18 @@ def recover_to_main_interface(max_tries=8):
         check_stop()
         if at_main_interface():
             return True
+        # 翻翻乐「触发事件-灵魂石种族许愿」选择页：既没有返回箭头也没有空白关闭提示，
+        # 只能从四个阵营选项里选一个才能离开（2026-11-18 实测把它留在屏上，拖垮了
+        # 推图 / 家园愿望单 / 幻灵推图 / 循环推图四项）。选项行坐标见 fanfanle.py。
+        if find_center_silent(tpl_trigger_event, 0.8):
+            region = game_client_region()
+            origin_x, origin_y = (region[0], region[1]) if region else (0, 0)
+            for cx, cy in ((815, 606), (815, 679), (815, 752), (815, 825)):
+                click_position((origin_x + cx, origin_y + cy), wait=1.5, twice=False)
+                if find_center_silent(tpl_trigger_event, 0.8) is None:
+                    log("已离开「触发事件」选择页。")
+                    break
+            continue
         # 2026-11-06 失败现场：活动介绍页盖住主界面时模板全被遮挡，逐层退出点不到任何按钮。
         # 该页无关闭按钮，先试「点卡片外空白关闭」；仍在则点「进入巅峰联赛」进活动页，
         # 由后续轮次用 exitck/exit 退出活动页，避免停在介绍页让整个任务失败。
@@ -1198,7 +1211,11 @@ def recover_to_main_interface(max_tries=8):
             # 没有任何退出按钮：点击屏幕空白处兜底，尝试关闭遮挡弹窗
             click_blank_to_exit()
             time.sleep(1.0)
-    return at_main_interface()
+    if not at_main_interface():
+        # 静默失败会让调用方以为恢复过、继续派发后续任务，导致整轮连锁失败却看不出原因
+        log("未能回到主界面：屏上没有任何可用的退出入口，后续任务可能连锁失败，请人工确认。")
+        return False
+    return True
 
 
 def ensure_main_interface():
@@ -1456,7 +1473,17 @@ def send_coord(x, y):
         log("前台锁未解开，已用标题栏点击激活窗口后再点目标")
     if not point_owned_by_game(x, y):
         root = _window_root_at(x, y)
-        log(f"点击点被其它窗口遮挡：({x},{y}) 属于「{_window_title(root)}」")
+        log(f"点击点被其它窗口遮挡：({x},{y}) 属于「{_window_title(root)}」，尝试切回游戏前台")
+        # 遮挡时直接点会把鼠标事件送给别的程序（2026-11-18 实机：repeat 点落到了
+        # Docker Desktop 的 Dashboard 上，游戏毫无反应、整条推图流程误判失败）。
+        # 先重新激活游戏；仍然被盖住就跳过这一次点击，让调用方的等待/重试接管。
+        hwnd = find_game_window()
+        if hwnd is not None:
+            _activate_game_window(hwnd)
+            time.sleep(0.3)
+        if not point_owned_by_game(x, y):
+            log("切前台后点击点仍被其它窗口占用，跳过本次点击（避免误点其它程序）")
+            return
 
     cursor_before = _read_cursor_pos() if _restore_cursor["enabled"] else None
     # 经 _write_coord_raw 接缝调用（现为 inject_click 的包装），保持测试桩兼容

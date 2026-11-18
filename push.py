@@ -500,9 +500,14 @@ def claim_first_clear_reward():
     else:
         print("首通奖励没有可领项。")
 
-    # 原路返回：首通面板 → 赛季阶段排名 → 推图
+    # 原路返回：首通面板 → 赛季阶段排名 → 推图。
+    # 排名面板那一层必须**确认还开着**再点返回：2026-11-18 实机，这一击被吞后
+    # 面板留在屏上盖住入口，推图 24 秒就判「未检测到 tiaozhan」失败。
     wait_and_click(tpl_exit, "exit(shoutong)", 0.8, timeout=3.0)
-    wait_and_click(tpl_exitck, "exitck(rank)", 0.8, timeout=3.0)
+    for attempt in range(1, 3):
+        if find_center_silent(tpl_rank_title, 0.8, timeout=1.0) is None:
+            break
+        wait_and_click(tpl_exitck, f"exitck(rank)({attempt})", 0.8, timeout=3.0)
     return claimed
 
 
@@ -594,6 +599,10 @@ class PushFlow:
             return False
         if find_center_silent(tpl_guajijixian, 0.7, timeout=0):
             return False
+        # 失败页底部同样有返回箭头，不能当成「已达成玩家」面板：误点会把失败页关掉，
+        # 调用方随即找不到任何目标状态而提前结束整轮推图（2026-11-18 实机 09:39:38）。
+        if find_center_silent(tpl_fail, 0.8, timeout=0):
+            return False
         if find_center_silent(tpl_exit, 0.8, timeout=0) is None:
             return False
         print("检测到无提示的遮挡面板（已达成玩家等），点返回关闭后继续")
@@ -607,9 +616,14 @@ class PushFlow:
         `allow_occluder=False` 用于「刚点过确认购买门票」这类**已知过渡态**：此时
         autocha 与 guajijixian 都暂时不可见是正常现象，不该被当成无提示遮挡面板。
         """
-        deadline = time.time() + timeout
+        start = time.time()
+        deadline = start + timeout
         missed_rounds = 0
         occluder_clears = 0
+        # 刚进新页面的前几秒不判「遮挡面板」：页面切换动画期间 autocha/入口按钮都还没
+        # 渲染，此时唯一的 exit 箭头只是正常返回键。2026-11-18 实机：领完首通奖励回到
+        # 推图主界面，入口还没渲染就被当成遮挡面板点了返回，直接退出推图（43 秒即失败）。
+        occluder_delay = 3.0
         while time.time() < deadline:
             # 一轮必须完整检查所有候选模板；只有全部未命中才算一次未命中。
             for template_path, threshold in candidates:
@@ -626,18 +640,29 @@ class PushFlow:
                         continue
                 # 一次动作最多清一次遮挡：2026-11-13 实机买完门票的过渡态被误判成
                 # 「已达成玩家」，连点两次 exit 把界面一路退回玩法目录，推图判失败。
-                if allow_occluder and occluder_clears < 1 and self._clear_occluder():
+                if (allow_occluder and occluder_clears < 1
+                        and time.time() - start >= occluder_delay
+                        and self._clear_occluder()):
                     occluder_clears += 1
+                    # 面板关掉后底下那屏才重新渲染：给它一个完整的新等待窗口。
+                    # 2026-11-18 实机：repeat 后弹出「已达成玩家」面板，关掉时超时只剩
+                    # 1~2 秒，没等到备战界面就返回 None，推图在连续失败 1 次后整体结束。
+                    deadline = time.time() + timeout
                     continue
 
             time.sleep(interval)
         return None
 
     def _wait_for_entry(self, timeout=10.0):
-        """等待当前模式入口出现；普通推图允许两个入口模板。"""
+        """等待当前模式入口出现；普通推图允许两个入口模板。
+
+        这里**不允许**「清遮挡」：模式选择页本身就有底部返回箭头、也没有自动挑战按钮，
+        完全符合遮挡面板的判据；误点返回会把整轮推图退出（2026-11-18 实机 43 秒失败）。
+        入口等不到就交由调用方判失败，比误退整页安全。
+        """
         return self._wait_for_any_state(
             [(get_template_path(name), 0.8) for name in self.entry_templates],
-            timeout=timeout,
+            timeout=timeout, allow_occluder=False,
         )
 
     def _wait_after_action(self, candidates, action_name, timeout=10.0,

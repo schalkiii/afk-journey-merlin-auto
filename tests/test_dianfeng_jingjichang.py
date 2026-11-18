@@ -47,6 +47,38 @@ def test_fight_once_full_selection_flow(monkeypatch):
     ]
 
 
+def test_fight_once_counts_battle_that_returns_to_main(monkeypatch):
+    """战斗结束被游戏直接带回主界面时也要算完成。
+
+    2026-11-18 实机：三队赛制整场超过 180 秒，旧实现 180 秒整放弃，18 秒后的
+    失败现场却已经是主界面——战斗其实正常结束了，只是没有任何结算模板。
+    """
+    state = {"lineup": 0}
+
+    def fake_find(template_path, threshold=0.8, timeout=0, **kwargs):
+        if template_path == df.tpl_xuanzeduishou:
+            return (700, 120)
+        if template_path == df.tpl_tiaozhan:
+            return (800, 840)
+        if template_path == df.tpl_bianji:
+            state["lineup"] += 1
+            return (800, 840) if state["lineup"] <= 2 else None
+        if template_path == df.tpl_zhandou:
+            return (800, 840) if state["lineup"] >= 2 else None
+        return None
+
+    monkeypatch.setattr(df, "find_center_silent", fake_find)
+    monkeypatch.setattr(df, "wait_and_click", lambda *a, **k: True)
+    monkeypatch.setattr(df, "click_position", lambda *a, **k: True)
+    monkeypatch.setattr(df, "game_client_region", lambda *a, **k: (0, 0, 1600, 900))
+    monkeypatch.setattr(df, "random_sleep", lambda: None)
+    monkeypatch.setattr(df, "dismiss_popup_away_from", lambda: None)
+    monkeypatch.setattr(df, "at_main_interface", lambda *a, **k: True)
+    monkeypatch.setattr(df.time, "sleep", lambda _s: None)
+
+    assert df._fight_once(1) is True
+
+
 def test_fight_once_stops_when_no_continue_button(monkeypatch):
     """没有「继续挑战」时立即结束，不会盲点战斗/跳过。"""
     monkeypatch.setattr(df, "wait_and_click", lambda *a, **k: False)
@@ -130,4 +162,3 @@ def test_enter_dianfeng_closes_settlement_then_reconfirms(monkeypatch):
 
     assert df._enter_dianfeng() is True
     assert order == ["dismiss"]
-

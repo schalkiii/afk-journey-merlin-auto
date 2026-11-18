@@ -100,3 +100,33 @@ def test_login_is_exempt_from_main_interface_check(monkeypatch):
 
     assert gui.GameBotGUI._skip_task_when_not_at_main(fake, _fake_script("登录"), 1, 1, 0.0) is False
     assert calls == [], "登录任务不应触发主界面兜底"
+
+
+def test_recover_handles_trigger_event_page(monkeypatch):
+    """翻翻乐「触发事件」选择页必须能从通用回退里退出。
+
+    2026-11-18 实机：该页既没有返回箭头也没有空白关闭提示，通用回退空转 17 秒后
+    静默失败，后续 4 个任务全部「开始前未回到主界面」连锁失败。
+    """
+    clicks = []
+    state = {"shown": True, "main": False}
+
+    def fake_find(template_path, *args, **kwargs):
+        if state["shown"] and template_path.endswith("chufashijian.png"):
+            return (760, 120)
+        return None
+
+    def fake_click(pos, wait=1.5, twice=False):
+        clicks.append(pos)
+        state["shown"] = False
+        state["main"] = True
+
+    monkeypatch.setattr(common, "check_stop", lambda: None)
+    monkeypatch.setattr(common, "find_center_silent", fake_find)
+    monkeypatch.setattr(common, "at_main_interface", lambda *a, **k: state["main"])
+    monkeypatch.setattr(common, "click_position", fake_click)
+    monkeypatch.setattr(common, "game_client_region", lambda *a, **k: (100, 50, 1600, 900))
+    monkeypatch.setattr(common, "log", lambda *a, **k: None)
+
+    assert common.recover_to_main_interface(max_tries=2) is True
+    assert clicks == [(100 + 815, 50 + 606)]

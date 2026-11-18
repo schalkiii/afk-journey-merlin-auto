@@ -38,6 +38,7 @@ TEMPLATE_CN = {
     'fail': '战斗失败',
     'fanfanle': '翻翻乐',
     'fanfanle2': '翻翻乐(二)',
+    'chufashijian': '触发事件',
     'fanhui': '返回',
     'fs': '法师',
     'fufeimenpiao': '付费门票',

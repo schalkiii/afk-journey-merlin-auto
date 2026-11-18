@@ -16,7 +16,13 @@ def _patch_common(monkeypatch, button_pos=(1000, 750)):
     monkeypatch.setattr(ff, "check_stop", lambda: None)
     monkeypatch.setattr(ff, "invalidate_screenshot_cache", lambda: None)
     monkeypatch.setattr(ff.time, "sleep", lambda _s: None)   # 轮间稳定等待不占测试时间
-    monkeypatch.setattr(ff, "find_center_silent", lambda *args, **kwargs: button_pos)
+    # 只有「点击增加进度」按钮命中；「触发事件」选择页不在屏上
+    monkeypatch.setattr(
+        ff, "find_center_silent",
+        lambda template_path, *args, **kwargs: (
+            None if template_path == ff.tpl_trigger_event else button_pos
+        ),
+    )
     monkeypatch.setattr(ff, "click_position", lambda pos, **kwargs: clicks.append(pos))
     monkeypatch.setattr(ff, "_region_crop", lambda region: b"crop")
     return clicks
@@ -54,9 +60,16 @@ def test_burn_stops_when_button_disappears(monkeypatch):
     monkeypatch.setattr(ff.time, "sleep", lambda _s: None)
     monkeypatch.setattr(ff, "_region_crop", lambda region: b"crop")
     monkeypatch.setattr(ff, "_wait_keys_change", lambda before_keys, before_progress, timeout=6.0: True)
+    monkeypatch.setattr(ff, "game_client_region", lambda *a, **k: (0, 0, 1600, 900))
     positions = iter([(1000, 750), None])
     clicks = []
-    monkeypatch.setattr(ff, "find_center_silent", lambda *args, **kwargs: next(positions))
+
+    def fake_find(template_path, *args, **kwargs):
+        if template_path == ff.tpl_trigger_event:
+            return None
+        return next(positions)
+
+    monkeypatch.setattr(ff, "find_center_silent", fake_find)
     monkeypatch.setattr(ff, "click_position", lambda pos, **kwargs: clicks.append(pos))
 
     assert ff.burn_keys(10) == 1
@@ -75,6 +88,42 @@ def test_burn_uses_single_click_not_double(monkeypatch):
     monkeypatch.setattr(ff, "click_position", fake_click)
     ff.burn_keys(1)
     assert seen.get("twice") is False
+
+
+def test_trigger_event_page_picks_first_faction(monkeypatch):
+    """「触发事件」选择页出现时点第一个阵营，页消失即算处理完成。
+
+    2026-11-18 实机：该页没有任何返回箭头/空白关闭提示，不处理就会把游戏留在
+    死界面上，并让后续推图/愿望单/幻灵/循环推图四项连锁失败。
+    """
+    clicks = []
+    state = {"shown": True}
+
+    def fake_find(template_path, *args, **kwargs):
+        return (760, 120) if (template_path == ff.tpl_trigger_event and state["shown"]) else None
+
+    def fake_click(pos, **kwargs):
+        clicks.append(pos)
+        state["shown"] = False
+
+    monkeypatch.setattr(ff, "find_center_silent", fake_find)
+    monkeypatch.setattr(ff, "click_position", fake_click)
+    monkeypatch.setattr(ff, "game_client_region", lambda *a, **k: (100, 50, 1600, 900))
+    monkeypatch.setattr(ff, "log", lambda *a, **k: None)
+
+    assert ff._handle_trigger_event() is True
+    assert clicks == [(100 + ff.TRIGGER_OPTION_POS[0][0], 50 + ff.TRIGGER_OPTION_POS[0][1])]
+
+
+def test_trigger_event_absent_does_not_click(monkeypatch):
+    """没有选择页时不能盲点界面。"""
+    clicks = []
+    monkeypatch.setattr(ff, "find_center_silent", lambda *a, **k: None)
+    monkeypatch.setattr(ff, "click_position", lambda *a, **k: clicks.append(a))
+    monkeypatch.setattr(ff, "log", lambda *a, **k: None)
+
+    assert ff._handle_trigger_event() is False
+    assert clicks == []
 
 
 def test_threshold_sits_below_the_measured_transition_noise():
