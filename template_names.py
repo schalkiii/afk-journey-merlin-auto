@@ -18,6 +18,7 @@ TEMPLATE_CN = {
     'bs': '半神',
     'bumaifufeimenpiao': '不买付费门票',
     'caidan': '菜单',
+    'caiyongqueren': '采用确认',
     'catalog': '目录',
     'chengzhangtiaozhan': '成长挑战',
     'cishubugou': '次数不足',

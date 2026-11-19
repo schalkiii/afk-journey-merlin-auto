@@ -60,8 +60,23 @@ tpl_partial_team      = get_template_path("shangzhenbuman.png")
 # 弹窗文字中心 → 左侧「取消（✗）」按钮中心的偏移（实测 (803,441) → (843,585)）
 PARTIAL_TEAM_CANCEL_OFFSET = (40, 144)
 
+# 「采用对方阵容会盖当前队伍中的英雄、旧日回响和站位，是否确认采用？」确认框：
+# 2026-11-19 实机采集（标题同屏 1.000，玩法目录 0.268）。点「使用」后它盖住准备界面，
+# 不点「确定」就永远等不到战斗按钮。
+tpl_adopt_confirm     = get_template_path("caiyongqueren.png")
+# 确认框标题中心 → 右侧「确定」按钮中心的偏移（实测标题中心 (840,355) → 确定 (895,595)）
+ADOPT_CONFIRM_OK_OFFSET = (55, 240)
+
 # handle_battle() 的第三种返回值：弹了「上阵人数不满」并被取消，本场没打
 BATTLE_PARTIAL_TEAM = "partial_team"
+# 推荐阵容三套都不可用（半成品 / 面板打不开），本场没有可打的阵容
+BATTLE_LINEUP_EXHAUSTED = "lineup_exhausted"
+
+# 最近一次 flow_mimengzhiyu 的结束原因：""=未运行 / "challenge_limit"=次数达到设定或
+# 次数不足 / "lineup_exhausted"=推荐阵容全部不可用 / "completed"=已有战果但后续无法继续 /
+# "failed"=一次都没完成。供调用方与日志区分「正常收尾」与「真失败」。
+LAST_STOP_REASON = ""
+
 
 # 迷梦之域界面右上角的奖励入口（客户区相对坐标，按 1600×900 给出；实机截图后可校准）
 MIMENG_TOP_RIGHT_REGION = (1200, 0, 400, 300)
@@ -364,6 +379,27 @@ def _close_lineup_panel():
         return True
     return wait_and_click(tpl_exit, "exit(退出阵容推荐)", 0.8, timeout=3)
 
+
+def _confirm_adopt_dialog():
+    """处理「采用对方阵容会盖当前队伍…是否确认采用？」确认框，点「确定」继续。
+
+    2026-11-19 实机：点「使用」后弹该框（标题同屏 1.000），旧实现以为面板已关闭，
+    回到准备界面时战斗按钮被弹窗盖住，handle_battle 找不到按钮直接判整项失败。
+    返回是否检测到并处理了确认框（点完仍可见时补点一次）。
+    """
+    pos = find_center_silent(tpl_adopt_confirm, 0.8, timeout=2.0)
+    if pos is None:
+        return False
+    ok_pos = (pos[0] + ADOPT_CONFIRM_OK_OFFSET[0], pos[1] + ADOPT_CONFIRM_OK_OFFSET[1])
+    for attempt in range(1, 3):
+        click_position(ok_pos, wait=1.2, twice=False)
+        if find_center_silent(tpl_adopt_confirm, 0.8, timeout=1.5) is None:
+            print("【迷梦之域】已确认采用对方阵容。")
+            return True
+        print(f"【迷梦之域】「是否确认采用」确认框仍在，补点确定（第 {attempt} 次）。")
+    return True
+
+
 def _adopt_ranked_lineup(index=0):
     """在战斗准备界面采用第 index 套推荐阵容，成功后回到战斗准备界面。
 
@@ -395,6 +431,9 @@ def _adopt_ranked_lineup(index=0):
         # 跳转型按钮：单击 + 确认面板关闭；首次点击可能被窗口激活吞掉，故补点一次
         for _ in range(2):
             click_position(pos, 1.0, twice=False)
+            # 「使用」后面板可能先弹「采用对方阵容…是否确认采用？」确认框，
+            # 不点确定会一直盖在准备界面上（2026-11-19 实机：整项因此失败）。
+            _confirm_adopt_dialog()
             if _wait_gone(tpl_lineup_use, 3.0):
                 random_sleep()
                 return True
@@ -406,7 +445,8 @@ def _fight_with_lineup_rotation(completed_count, rotate_lineup, auto_configure_l
     """按轮次采用推荐阵容并开战；「上阵人数不满」时取消并换下一套。
 
     返回 True/False 语义与 handle_battle 一致（是否打完一场），BATTLE_PARTIAL_TEAM 只在
-    内部流转，不会透出去。三套都满员不了就放弃本次挑战——不能拿 2 个英雄去白烧次数。
+    内部流转，不会透出去；三套都满员不了时返回 BATTLE_LINEUP_EXHAUSTED——不能拿 2 个
+    英雄去白烧次数，但这属于「没有可用阵容」的正常收尾，不应让整条任务记失败。
     """
     if not auto_configure_lineup:
         return handle_battle()
@@ -422,7 +462,30 @@ def _fight_with_lineup_rotation(completed_count, rotate_lineup, auto_configure_l
             return outcome
         print(f"【迷梦之域】第 {index + 1} 套推荐阵容上阵人数不满，换下一套。")
     print("【迷梦之域】三套推荐阵容都不满员，本次不挑战（避免用残缺阵容白烧次数）。")
-    return False
+    return BATTLE_LINEUP_EXHAUSTED
+
+
+def _finish_without_fight(outcome, completed_count):
+    """「没能再打一场」时判断是否按正常完成收尾，返回 True 表示已收尾。
+
+    2026-11-19 用户反馈：迷梦已经用掉次数、打完 1 场，却因为后续阵容/界面问题整项报失败。
+    这里把两类结果收成正常结束（退出迷梦但仍记为完成）：
+    - 推荐阵容全部不可用（BATTLE_LINEUP_EXHAUSTED）；
+    - 已经完成过挑战，后续战斗界面/入口不可用。
+    一次都没完成时才返回 False，交由调用方按失败处理。
+    """
+    global LAST_STOP_REASON
+    if outcome == BATTLE_LINEUP_EXHAUSTED:
+        print("【迷梦之域】没有可用阵容，本次挑战结束。")
+        LAST_STOP_REASON = "lineup_exhausted"
+    elif completed_count > 0:
+        print(f"【迷梦之域】已完成 {completed_count} 次挑战，后续无法继续，本次挑战结束。")
+        LAST_STOP_REASON = "completed"
+    else:
+        return False
+    close_result_popups()
+    _exit_to_main()
+    return True
 
 
 def flow_mimengzhiyu(challenge_count=None, auto_configure_lineup=False,
@@ -456,8 +519,11 @@ def flow_mimengzhiyu(challenge_count=None, auto_configure_lineup=False,
             - 之后点击 pujingjieshu
     """
     # 1. 点击 wanfamulu 进入玩法目录界面（用面板标题自证，首次点击被吞时补点）
+    global LAST_STOP_REASON
+    LAST_STOP_REASON = ""
     if not open_wanfamulu(threshold=0.7, timeout=8):
         print("点击 wanfamulu 进入玩法目录界面失败。")
+        LAST_STOP_REASON = "failed"
         return False
     random_sleep()
 
@@ -477,6 +543,7 @@ def flow_mimengzhiyu(challenge_count=None, auto_configure_lineup=False,
         # 检查挑战次数限制
         if challenge_count is not None and completed_count >= challenge_count:
             print(f"已完成 {completed_count} 次挑战，达到设定次数，开始退出。")
+            LAST_STOP_REASON = "challenge_limit"
             if not wait_and_click(tpl_exit, "exit", 0.8):
                 print("点击 exit 失败，迷梦之域流程结束。")
                 return False
@@ -494,16 +561,25 @@ def flow_mimengzhiyu(challenge_count=None, auto_configure_lineup=False,
         # 注意：推荐阵容入口只在点过「挑战」之后的战斗准备界面出现，故不放在这里，
         # 由 `_fight_with_lineup_rotation()` 在进入战斗界面后处理（见下方大分支 1 / 2）。
         if not _ensure_mimeng_main():
+            if completed_count > 0:
+                print(f"【迷梦之域】已完成 {completed_count} 次挑战，无法回到迷梦主界面，按完成收尾。")
+                LAST_STOP_REASON = "completed"
+                close_result_popups()
+                _exit_to_main()
+                return True
             print("无法回到迷梦主界面（挑战按钮未出现），流程结束。")
+            LAST_STOP_REASON = "failed"
             return False
         if not wait_and_click(tpl_tiaozhan, "tiaozhan", 0.8):
             print("点击 tiaozhan 失败，迷梦之域流程结束。")
+            LAST_STOP_REASON = "failed"
             return False
 
         # 立即检查是否识别到次数不足提示（不等待，因为cishubugou会很快消失）
         pos_cishubugou = find_center_silent(tpl_cishubugou, threshold=0.8)
         if pos_cishubugou:
             print("识别到次数不足提示，点击exit退出。")
+            LAST_STOP_REASON = "challenge_limit"
             if not wait_and_click(tpl_exit, "exit", 0.8):
                 print("点击 exit 失败，迷梦之域流程结束。")
                 return False
@@ -528,7 +604,14 @@ def flow_mimengzhiyu(challenge_count=None, auto_configure_lineup=False,
         )
 
         if hit is None:
+            if completed_count > 0:
+                print(f"【迷梦之域】已完成 {completed_count} 次挑战，未再出现战斗界面，按完成收尾。")
+                LAST_STOP_REASON = "completed"
+                close_result_popups()
+                _exit_to_main()
+                return True
             print("未检测到战斗界面或购买提示，迷梦之域流程结束。")
+            LAST_STOP_REASON = "failed"
             return False
 
         hit_tpl, hit_name, _ = hit
@@ -537,12 +620,17 @@ def flow_mimengzhiyu(challenge_count=None, auto_configure_lineup=False,
         if hit_tpl in [tpl_zhandou, tpl_tiaoguozhandou]:
             print("进入大分支1：战斗界面。")
             # 战斗准备界面才有的推荐阵容入口：按轮次换一套再打
-            if not _fight_with_lineup_rotation(completed_count, rotate_lineup,
-                                               auto_configure_lineup):
+            outcome = _fight_with_lineup_rotation(completed_count, rotate_lineup,
+                                                  auto_configure_lineup)
+            if outcome is True:
+                # 点击pujingjieshu后，增加完成计数
+                completed_count += 1
+                print(f"已完成第 {completed_count} 次挑战。")
+            elif _finish_without_fight(outcome, completed_count):
+                return True
+            else:
+                LAST_STOP_REASON = "failed"
                 return False
-            # 点击pujingjieshu后，增加完成计数
-            completed_count += 1
-            print(f"已完成第 {completed_count} 次挑战。")
             # 点击pujingjieshu后会回到可以点击tiaozhan的界面，继续循环
         
         # 大分支2：检测到购买提示
@@ -567,16 +655,28 @@ def flow_mimengzhiyu(challenge_count=None, auto_configure_lineup=False,
                 timeout=30.0,
                 interval=1.0,
             ):
+                if completed_count > 0:
+                    print(f"【迷梦之域】已完成 {completed_count} 次挑战，购票后未出现战斗界面，按完成收尾。")
+                    LAST_STOP_REASON = "completed"
+                    close_result_popups()
+                    _exit_to_main()
+                    return True
                 print("未检测到战斗界面，迷梦之域流程结束。")
+                LAST_STOP_REASON = "failed"
                 return False
 
             # 买票后重进也是战斗准备界面，同样按轮次采用推荐阵容
-            if not _fight_with_lineup_rotation(completed_count, rotate_lineup,
-                                               auto_configure_lineup):
+            outcome = _fight_with_lineup_rotation(completed_count, rotate_lineup,
+                                                  auto_configure_lineup)
+            if outcome is True:
+                # 点击pujingjieshu后，增加完成计数
+                completed_count += 1
+                print(f"已完成第 {completed_count} 次挑战。")
+            elif _finish_without_fight(outcome, completed_count):
+                return True
+            else:
+                LAST_STOP_REASON = "failed"
                 return False
-            # 点击pujingjieshu后，增加完成计数
-            completed_count += 1
-            print(f"已完成第 {completed_count} 次挑战。")
             # 点击pujingjieshu后会回到可以点击tiaozhan的界面，继续循环
         
         # 其他情况

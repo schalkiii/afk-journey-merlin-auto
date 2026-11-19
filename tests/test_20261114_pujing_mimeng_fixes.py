@@ -56,10 +56,15 @@ def _stub_lineup_panel(monkeypatch, close_on_click):
     state = {"gone_calls": 0}
 
     monkeypatch.setattr(mimengzhiyu, "wait_and_click", lambda *a, **k: True)
-    monkeypatch.setattr(
-        mimengzhiyu, "find_center_silent",
-        lambda path, *a, **k: (1178, 370) if path == mimengzhiyu.tpl_lineup_use
-        else (493, 842))
+
+    def fake_find(path, *args, **kwargs):
+        if path == mimengzhiyu.tpl_lineup_use:
+            return (1178, 370)
+        if path == mimengzhiyu.tpl_adopt_confirm:
+            return None          # 该用例只验证「使用」行定位，不带采用确认框
+        return (493, 842)
+
+    monkeypatch.setattr(mimengzhiyu, "find_center_silent", fake_find)
     monkeypatch.setattr(mimengzhiyu, "click_position",
                         lambda pos, *a, **k: clicks.append(pos))
     monkeypatch.setattr(mimengzhiyu, "random_sleep", lambda *a, **k: None)
@@ -147,17 +152,19 @@ def test_fight_rotation_starts_from_round_index(monkeypatch):
     monkeypatch.setattr(mimengzhiyu, "handle_battle",
                         lambda: mimengzhiyu.BATTLE_PARTIAL_TEAM)
 
-    assert mimengzhiyu._fight_with_lineup_rotation(4, True, True) is False
+    assert mimengzhiyu._fight_with_lineup_rotation(4, True, True) == \
+        mimengzhiyu.BATTLE_LINEUP_EXHAUSTED
     assert adopted == [1, 2, 0]
 
 
 def test_fight_rotation_gives_up_when_all_lineups_partial(monkeypatch):
-    """三套都残缺时不许拿 2 个英雄去白烧次数。"""
+    """三套都残缺时不许拿 2 个英雄去白烧次数（返回阵容用尽的专用信号）。"""
     monkeypatch.setattr(mimengzhiyu, "_adopt_ranked_lineup", lambda index: True)
     monkeypatch.setattr(mimengzhiyu, "handle_battle",
                         lambda: mimengzhiyu.BATTLE_PARTIAL_TEAM)
 
-    assert mimengzhiyu._fight_with_lineup_rotation(0, True, True) is False
+    assert mimengzhiyu._fight_with_lineup_rotation(0, True, True) == \
+        mimengzhiyu.BATTLE_LINEUP_EXHAUSTED
 
 
 def test_fight_rotation_falls_back_to_current_lineup(monkeypatch):

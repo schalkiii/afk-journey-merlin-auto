@@ -1395,7 +1395,7 @@ class GameBotGUI:
         # 批量设置按钮
         for level in LEVELS:
             ttk.Button(filter_frame, text=f"全部→{LEVEL_LABELS[level]}",
-                       command=lambda l=level: self._set_all_hero_levels(l)).pack(side=tk.LEFT, padx=2)
+                       command=lambda lv=level: self._set_all_hero_levels(lv)).pack(side=tk.LEFT, padx=2)
 
         # === 可滚动英雄列表 ===
         canvas = tk.Canvas(container, width=550, height=400, highlightthickness=0,
@@ -2398,6 +2398,11 @@ class GameBotGUI:
                 )
                 if push.LAST_STOP_REASON == "fail_limit":
                     self.log(f"推图连续失败达到 {max_failures} 次，停止循环推图。")
+                    break
+                if push.LAST_STOP_REASON == "season_cleared":
+                    # 赛季普通关卡已清完、页面只剩幻灵挑战：继续循环只会在普通推图上
+                    # 空转并被快速轮次熔断，直接按正常完成收尾。
+                    self.log("普通推图本赛季已清完（只剩幻灵挑战），循环推图正常结束。")
                     break
                 if push_result is False:
                     # 单个模式结束/失败不是循环失败，下一轮重新进入幻灵推图

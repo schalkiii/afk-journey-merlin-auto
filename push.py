@@ -33,7 +33,8 @@ from warehouse import (
 # === 模板路径，对应你的文件名 ===
 tpl_advance       = get_template_path("guajiguanqia.png")
 tpl_wanfamulu     = get_template_path("wanfamulu.png")
-tpl_huanlingcha   = get_template_path("tiaozhan.png")
+tpl_tiaozhan      = get_template_path("tiaozhan.png")
+tpl_huanlingcha   = get_template_path("huanlingcha.png")
 tpl_autocha       = get_template_path("autocha.png")
 tpl_fail          = get_template_path("fail.png")
 tpl_repeat        = get_template_path("repeat.png")
@@ -465,6 +466,19 @@ MAX_TRANSITIONS = 500
 LAST_STOP_REASON = ""
 
 
+def _normal_entry_cleared():
+    """普通推图入口不在、但挂机关卡页只剩「幻灵挑战」→ 本阶段普通关卡已清完。
+
+    2026-11-19 实机：赛季普通关卡推完后，页面只保留「幻灵挑战」入口（模板 0.960），
+    旧实现把「等不到 tiaozhan」一律判失败。进度走完属于正常结束，不应记 ✘。
+    """
+    if find_center_silent(tpl_tiaozhan, 0.8, timeout=0):
+        return False
+    if find_center_silent(tpl_tiaozhanonly, 0.8, timeout=0):
+        return False
+    return find_center_silent(tpl_huanlingcha, 0.8, timeout=0) is not None
+
+
 def claim_first_clear_reward():
     """在推图入口界面领取「赛季阶段排名 → 首通」奖励。
 
@@ -747,6 +761,23 @@ class PushFlow:
             print("点击 advance(a) 进入推图失败。")
             return self._done(False)
 
+        # 点完「挂机关卡」卡片必须确认真的切页了：首次点击可能被窗口激活吞掉。
+        # 2026-11-19 实机：advance 命中却仍停在玩法目录，后面在错页面找入口白等 10 秒、
+        # 点奖杯也落空，整项 39.7 秒被判失败（失败现场就是玩法目录卡片）。
+        push_page_anchors = [
+            (tpl_tiaozhan, 0.8), (tpl_tiaozhanonly, 0.8), (tpl_huanlingcha, 0.8),
+        ]
+        if not self._wait_for_any_state(push_page_anchors, timeout=6.0,
+                                        allow_occluder=False):
+            print("advance(a) 后未确认进入挂机关卡页，补点一次。")
+            if not wait_and_click(tpl_advance, "advance(a_retry)", 0.8, timeout=3.0):
+                print("补点时已找不到挂机关卡卡片，推图结束。")
+                return self._done(False)
+            if not self._wait_for_any_state(push_page_anchors, timeout=8.0,
+                                            allow_occluder=False):
+                print("仍未进入挂机关卡页，推图结束。")
+                return self._done(False)
+
         # 首通奖励（赛季阶段排名 → 首通）只能从推图主界面右上角的奖杯进：进了备战界面
         # 就没有这个入口。2026-11-11 实机：旧实现放在「进入模式成功」之后，两次点奖杯都
         # 打不开排名面板（点到了备战页的别处），既没领到奖励，回来还把状态判据弄丢，
@@ -757,6 +788,12 @@ class PushFlow:
         print(f"等待 {self.mode_label} 入口...")
         next_path = self._enter_mode_and_confirm()
         if not next_path:
+            if self.mode == "normal" and _normal_entry_cleared():
+                # 赛季普通关卡已全部推完：页面只剩「幻灵挑战」入口，这属于进度状态，
+                # 不是任务失败（2026-11-19 用户反馈）。
+                print("本阶段普通关卡已清完（页面只剩「幻灵挑战」入口），推图正常结束。")
+                self.stop_reason = "season_cleared"
+                return self._done(True)
             print("未能进入模式备战界面，点击 exit 退出")
             wait_and_click(tpl_exit, "exit(j)", 0.8)
             return self._done(False)
@@ -788,6 +825,10 @@ class PushFlow:
         """end(k) 后回到玩法界面，需要重新点击模式入口。"""
         next_path = self._enter_mode_and_confirm()
         if not next_path:
+            if self.mode == "normal" and _normal_entry_cleared():
+                print("本阶段普通关卡已清完（页面只剩「幻灵挑战」入口），推图正常结束。")
+                self.stop_reason = "season_cleared"
+                return self._done(True)
             print("end(k) 后未能进入模式备战界面，退出推图")
             return self._done(False)
         return STATE_LIMIT if next_path == tpl_guajijixian else STATE_START_BATTLE
