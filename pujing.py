@@ -7,6 +7,8 @@
 import time
 
 from common import (
+    check_stop,
+    dismiss_popup_away_from,
     display_name,
     find_center_silent,
     get_template_path,
@@ -36,6 +38,45 @@ tpl_dianjikongbaichuguanbi = get_template_path("dianjikongbaichuguanbi.png")
 
 # 一场战斗最长等待多久（秒）
 MAX_BATTLE_TIME = 180
+
+# 等战斗信号时的轮询节奏与「战斗」补点上限。
+# 2026-11-20 实机 08:05:07：点「战斗」被吞，界面停在备战页整整 180 秒；失败现场里
+# 绿色「战斗」按钮仍是 0.991 分。只等不补点，等于把一次吞点击放大成整轮 3 分半失败。
+OUTCOME_POLL = 5.0
+BATTLE_CLICK_RETRY = 3
+
+
+def _wait_battle_outcome():
+    """点过「战斗」之后等「跳过 / 结算」；看到「战斗」仍在就补点，返回命中项或 None。
+
+    每轮先短轮询两种信号（吞点击时不会再有任何信号），再按
+    「补点战斗 → 关「点击空白处关闭」弹窗」的顺序做一次实质补救。
+    补点次数封顶，避免把备用重试变成连点。
+    """
+    deadline = time.time() + MAX_BATTLE_TIME
+    retries = 0
+    while time.time() < deadline:
+        check_stop()
+        outcome = wait_for_any(
+            [(tpl_tiaoguo, "tiaoguo"), (tpl_pujingjieshu, "pujingjieshu")],
+            threshold=0.8,
+            timeout=OUTCOME_POLL,
+            interval=0.5,
+        )
+        if outcome is not None:
+            return outcome
+        if retries < BATTLE_CLICK_RETRY:
+            pos = find_center_silent(tpl_zhandou, 0.8, timeout=0)
+            if pos:
+                retries += 1
+                print(f"「战斗」仍在屏上，补点一次（第 {retries}/{BATTLE_CLICK_RETRY} 次）。")
+                send_coord(pos[0], pos[1])
+                time.sleep(1.0)
+                continue
+        if find_center_silent(tpl_dianjikongbaichuguanbi, 0.8, timeout=0):
+            dismiss_popup_away_from()
+            continue
+    return None
 
 # 等待某张图出现
 def wait_for_appearance(template_path, name, threshold=0.8, timeout=MAX_BATTLE_TIME, interval=0.5):
@@ -347,13 +388,9 @@ def execute_battle_flow(battle_tpl, battle_name, battle_pos):
 
     # 战斗开始后会先出现「跳过」，也可能因战斗自动结束/加载较慢而直接出结算。
     # 旧实现只等 tiaoguo 15 秒，等不到就中止整轮（实测打到第 3 场停在 2/5 次），
-    # 这里改为「跳过 / 结算谁先出现就按谁走」，并把等待上限放宽到整场战斗时长。
-    outcome = wait_for_any(
-        [(tpl_tiaoguo, "tiaoguo"), (tpl_pujingjieshu, "pujingjieshu")],
-        threshold=0.8,
-        timeout=MAX_BATTLE_TIME,
-        interval=0.5,
-    )
+    # 这里改为「跳过 / 结算谁先出现就按谁走」，并把等待上限放宽到整场战斗时长；
+    # 等待期间「战斗」仍在屏上说明这一击被吞，由 _wait_battle_outcome 补点。
+    outcome = _wait_battle_outcome()
     if outcome is None:
         print("跳过/结算都未出现，普晶流程结束。")
         return False

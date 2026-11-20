@@ -458,6 +458,11 @@ RIGHT_RETRY_TIMEOUT = 1.0
 # repeat(e) 的首次点击同样可能被窗口激活/结算动画吞掉，与模式入口一致重试一次
 REPEAT_CLICK_RETRY = 2
 
+# 「一键采用」的总点击次数：首次之外最多再补 2 次。
+# 2026-11-20 实机 08:48:15：面板上「数据统计中」还没算完，点「一键采用」被吞，
+# 旧实现一次点击后等 10 秒没切页就把整轮 19 分钟的推图判成失败。
+ADOPT_CLICK_ATTEMPTS = 3
+
 # 整个推图流程最多允许的状态切换次数（安全阀）
 MAX_TRANSITIONS = 500
 
@@ -548,6 +553,9 @@ class PushFlow:
         self.lineup_index = -1
         self.lineup_fail = 0
         self.lineup_start = 0
+        # 本轮是否已经推过关卡（end(k)）。用于「中途点击被吞」时区分正常收尾与真失败：
+        # 已经推过关说明进度是有效的，不该因为一次没生效的点击被记成 ✘。
+        self.stage_cleared = False
         # 连续失败计数跨阵容累计：换阵容后的失败同样计入，成功推图（end）时清零
         self.consecutive_failures = 0
 
@@ -907,6 +915,7 @@ class PushFlow:
         self.lineup_index = -1
         self.have_lineup = False
         self.lineup_start = 0
+        self.stage_cleared = True
         print("检测到 end(k)：推图成功，重置阵容编号和失败次数，重新进入模式1。")
         if not wait_and_click(tpl_end, "end(k)_click", 0.8):
             print("点击 end(k) 失败，退出推图。")
@@ -1018,14 +1027,31 @@ class PushFlow:
                 hero_levels = _load_warehouse_levels()
                 lineup_heroes, _debug_path = _recognize_lineup_with_levels()
                 if _is_lineup_acceptable(hero_levels, lineup_heroes):
-                    if not wait_and_click(tpl_oneclick, f"oneclick(i) 采用阵容 {current}", 0.8):
-                        return STATE_EXIT
-
                     # 点击一键采用后，必须确认进入推图界面或出现未拥有提示。
-                    post_adopt = self._wait_for_any_state(
-                        [(tpl_not_owned, 0.8), (tpl_autocha, 0.8)],
-                        timeout=10.0,
-                    )
+                    # 单次点击可能被吞（2026-11-20 实机：面板还在「数据统计中」时点
+                    # 「一键采用」无效，界面纹丝不动），所以补点重试，而不是一次定生死。
+                    post_adopt = None
+                    for attempt in range(1, ADOPT_CLICK_ATTEMPTS + 1):
+                        if attempt == 1:
+                            action_name = f"oneclick(i) 采用阵容 {current}"
+                        else:
+                            action_name = f"oneclick(i) 采用阵容 {current}(补点{attempt - 1})"
+                            print(f"「一键采用」未生效，补点一次（第 {attempt}/{ADOPT_CLICK_ATTEMPTS} 次）。")
+                        if not wait_and_click(tpl_oneclick, action_name, 0.8):
+                            # 找不到「一键采用」通常说明面板已经关掉、采用生效了，
+                            # 这时再等一次页面切换，别把成功当失败。
+                            post_adopt = self._wait_for_any_state(
+                                [(tpl_not_owned, 0.8), (tpl_autocha, 0.8)],
+                                timeout=10.0,
+                            )
+                            break
+                        post_adopt = self._wait_for_any_state(
+                            [(tpl_not_owned, 0.8), (tpl_autocha, 0.8)],
+                            timeout=10.0,
+                        )
+                        if post_adopt:
+                            break
+
                     if post_adopt == tpl_not_owned:
                         print(f"阵容 {current} 检测到未拥有标志，点击取消并跳过。")
                         if not wait_and_click(tpl_quxiao, "quxiao(m) 取消当前阵容", 0.8):
@@ -1042,6 +1068,12 @@ class PushFlow:
                         continue
 
                     if post_adopt != tpl_autocha:
+                        # 补点仍无效。本轮已经推过关卡时按正常收尾：进度是有效的，
+                        # 一次没生效的点击不该把整轮推图记成失败（同迷梦「已打仍报失败」）。
+                        if self.stage_cleared:
+                            print("「一键采用」多次点击仍未生效，但本轮已推过关卡，推图正常结束。")
+                            self.stop_reason = "adopt_unconfirmed"
+                            return self._done(True)
                         print("点击 oneclick 后未确认进入推图界面。")
                         return self._done(False)
 
