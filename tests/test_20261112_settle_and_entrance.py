@@ -38,6 +38,9 @@ def test_settle_reclicks_skip_while_battle_continues(monkeypatch):
     monkeypatch.setattr(df, "find_center_silent", lambda *_a, **_k: (1344, 765))
     monkeypatch.setattr(df, "dismiss_popup_away_from", lambda: None)
     monkeypatch.setattr(df, "is_loading_screen", lambda: False)
+    # 本用例只关心「跳过 / 结算」信号；不桩 at_main_interface 会去截真实屏幕，
+    # 游戏恰好在主界面时会被判成「已回主界面」，用例随环境漂移（2026-11-21 实测）。
+    monkeypatch.setattr(df, "at_main_interface", lambda *a, **k: False)
 
     # 第 3 轮时战斗结束（跳过消失）→ 走「无进度」分支累计到上限退出
     state = {"round": 0}
@@ -69,6 +72,7 @@ def test_settle_gives_up_after_stall_limit(monkeypatch):
     monkeypatch.setattr(df, "is_loading_screen", lambda: False)
     monkeypatch.setattr(df, "capture_failure_context",
                         lambda *a, **_k: saved.append(a))
+    monkeypatch.setattr(df, "at_main_interface", lambda *a, **k: False)
 
     assert df._settle_after_skip((1, 2)) is None
     assert len(polls) == df.OUTCOME_STALL_LIMIT, "只允许空转 OUTCOME_STALL_LIMIT 轮"
@@ -94,6 +98,7 @@ def test_settle_dismisses_known_popup_instead_of_waiting(monkeypatch):
 
     monkeypatch.setattr(df, "find_center_silent", fake_find)
     monkeypatch.setattr(df, "capture_failure_context", lambda *a, **_k: None)
+    monkeypatch.setattr(df, "at_main_interface", lambda *a, **k: False)
 
     df._settle_after_skip((1, 2))
     assert dismissed, "提示模板命中时必须调用 dismiss_popup_away_from"

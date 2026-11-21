@@ -68,6 +68,8 @@ def test_battle_outcome_reclicks_zhandou(monkeypatch):
     monkeypatch.setattr(df, "_wait_for_any", lambda *_a, **_k: polls.append(1))
     monkeypatch.setattr(df, "is_loading_screen", lambda: False)
     monkeypatch.setattr(df, "capture_failure_context", lambda *_a, **_k: None)
+    # 只关心补点逻辑；不桩 at_main_interface 会截真实屏幕，游戏在主界面时用例随环境漂移。
+    monkeypatch.setattr(df, "at_main_interface", lambda *a, **k: False)
 
     def fake_find(tpl, *_a, **_k):
         if tpl == df.tpl_zhandou:
@@ -97,6 +99,7 @@ def test_battle_outcome_waits_through_full_battle(monkeypatch):
     monkeypatch.setattr(df, "is_loading_screen", lambda: False)
     monkeypatch.setattr(df, "capture_failure_context",
                         lambda *_a, **_k: saved.append(1))
+    monkeypatch.setattr(df, "at_main_interface", lambda *a, **k: False)
 
     def fake_wait(*_a, **_k):
         polls.append(1)

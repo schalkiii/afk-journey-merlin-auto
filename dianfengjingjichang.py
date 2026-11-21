@@ -41,6 +41,11 @@ tpl_bianji = get_template_path("dianfengbianji.png")
 tpl_zhandou = get_template_path("dianfengzhandou.png")
 tpl_tiaoguo = get_template_path("tiaoguo.png")
 tpl_fail = get_template_path("fail.png")
+# 胜利结算页：「战斗胜利」横幅（同屏 0.981，主界面 0.199）与底部「点击空白处关闭」
+# （同屏 0.971，主界面 0.325）。2026-11-21 实机：跳过之后出现的是胜利页，旧实现
+# 只等 fail / 继续挑战，认不出它，把一场 3:0 的胜利记成「完成 0 场」并判失败。
+tpl_shengli = get_template_path("jieshengli.png")
+tpl_jiesuan = get_template_path("pujingjieshu.png")
 tpl_exitck = get_template_path("exitck.png")
 tpl_meirijiesuan = get_template_path("dianfengmeirijiesuan.png")
 tpl_catalog_title = get_template_path("wanfamulubiaoti.png")
@@ -275,7 +280,8 @@ def _poll_until_outcome(signals, phase, retry_template, retry_pos=None,
 def _settle_after_skip(skip_pos):
     """点过「跳过」之后等结算信号；返回 (template_path, pos) 或 None。"""
     return _poll_until_outcome(
-        [(tpl_fail, "fail"), (tpl_jixutiaozhan, "jixutiaozhan")],
+        [(tpl_fail, "fail"), (tpl_jixutiaozhan, "jixutiaozhan"),
+         (tpl_shengli, "shengli"), (tpl_jiesuan, "jiesuan")],
         phase="「跳过」后", retry_template=tpl_tiaoguo, retry_pos=skip_pos,
         also_main=True,
     )
@@ -291,7 +297,8 @@ def _wait_for_battle_outcome():
     """
     return _poll_until_outcome(
         [(tpl_tiaoguo, "tiaoguo"), (tpl_fail, "fail"),
-         (tpl_jixutiaozhan, "jixutiaozhan")],
+         (tpl_jixutiaozhan, "jixutiaozhan"),
+         (tpl_shengli, "shengli"), (tpl_jiesuan, "jiesuan")],
         phase="「战斗」后", retry_template=tpl_zhandou,
         stall_limit=BATTLE_STALL_LIMIT, also_main=True,
     )
@@ -347,22 +354,28 @@ def _fight_once(index):
             dismiss_popup_away_from()
             return True
 
-    if outcome_tpl == tpl_fail:
-        # 失败页的「点击空白处关闭」提示模板在这里只有 0.41 分（实测），通用关弹窗无效；
-        # 直接点面板外的左上方空白，该点位在失败页与「每日结算」页都避开所有按钮。
+    if outcome_tpl in (tpl_fail, tpl_shengli, tpl_jiesuan):
+        # 失败页 / 胜利结算页都靠点空白关闭。失败页的「点击空白处关闭」提示模板在这里
+        # 只有 0.41 分（实测），通用关弹窗无效；命中结算页底部提示时直接点它，
+        # 否则点面板外的左上方空白——该点位在失败页与「每日结算」页都避开所有按钮。
         x0, y0, _w, _h = game_client_region()
-        click_position((x0 + SETTLEMENT_DISMISS_POS[0], y0 + SETTLEMENT_DISMISS_POS[1]),
-                       wait=1.5, twice=False)
+        blank_pos = (x0 + SETTLEMENT_DISMISS_POS[0], y0 + SETTLEMENT_DISMISS_POS[1])
+        dismiss_pos = outcome_pos if outcome_tpl == tpl_jiesuan else blank_pos
+        click_position(dismiss_pos, wait=1.5, twice=False)
         if not _wait_panel(15.0):
             # 首次点击可能被吞（2026-11-08 实跑：失败页关不掉导致第 2 场后整轮提前结束、
             # 挑战次数有残留）：补点一次空白，仍不行再走「回到挑战主页」兜底。
-            click_position((x0 + SETTLEMENT_DISMISS_POS[0], y0 + SETTLEMENT_DISMISS_POS[1]),
-                           wait=1.5, twice=False)
-            if not _wait_panel(10.0) and not _back_to_challenge_view():
-                log("关闭失败页后未回到挑战界面，结束。")
-                return False
+            click_position(blank_pos, wait=1.5, twice=False)
+            if not _wait_panel(10.0):
+                if at_main_interface():
+                    # 胜利结算关掉后直接被带回主界面：本场已经打完，下一场会重新进场。
+                    log("关闭结算页后已回到主界面，本场按完成处理。")
+                    return True
+                if not _back_to_challenge_view():
+                    log("关闭结算页后未回到挑战界面，结束。")
+                    return False
     else:
-        # 胜利会直接回到挑战界面；清掉可能残留的奖励/段位变化弹窗
+        # 已经回到挑战界面（继续挑战可见）：清掉可能残留的奖励/段位变化弹窗
         dismiss_popup_away_from()
     return True
 
