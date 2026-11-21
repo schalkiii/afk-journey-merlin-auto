@@ -361,6 +361,23 @@
 
 ### 判据与流程修正（实机修复）
 
+#### 2026-11-21：README 补齐「相对上游的增强」
+
+- **问题**：README 的「本仓库相较于上游的增强」只列了 12 条，漏掉红点领取、巅峰竞技场、
+  翻翻乐、英雄厅堂、定时开始与冷启动、拖拽排序/状态色/跑完自动收摊、失败现场等
+  fork 独有能力；想看「这个 fork 到底多了什么」仍要自己翻功能表。
+- **做法**：对照 `upstream/main` 源码逐项核实后重写。模块差集显示本仓新增 14 个 `.py`
+  （`dianfengjingjichang` / `fanfanle` / `hongbaolingqu` / `jieshezhanxian` / `lieshouxunshang` /
+  `yingxiongtingtang` / `yuanwangdan` / `flow_enter` / `flow_gonghui` / `bot_runtime` /
+  `log_format` / `proc_util` / `template_names` / `launch_game`）；关键字核查确认
+  `wait_for_game_ready` / `FIRE_GUARD_SECONDS` / `close_game_after_run` / `_ToggleBox` /
+  `windows_capture` 等上游均无，而上游仍在用 AHK 注入器（`click_from_file`）。
+- **结构调整**：「一览」表从 5 行扩为 6 行（新增玩法模块 / 流程健壮性 / 定时与冷启动 /
+  运行控制与交互 / 可观测性 / 工程化）；新增第 13–16 节——新增日常任务、定时与冷启动可靠性、
+  运行控制与交互改进、实机判据修复（11-13~11-21 日期表格 + 三条硬规则）。
+  详细功能仍以「功能特性」表为单一权威，新章节只做定位与判据摘要。
+- **门禁**：markdownlint 零 error。
+
 #### 2026-11-21 实机复盘：巅峰竞技场把「战斗胜利」页当未知界面，一场胜局记成 0 场
 
 - **现象**：早间 20 项任务仅巅峰竞技场 ✘（85.9 秒），用户反馈「只打了一场」。
