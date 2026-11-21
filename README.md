@@ -493,7 +493,7 @@ python Goldenhandmaidens.py
 打包、门禁与清理统一走 `build.ps1`（需要 PowerShell 7+）：
 
 ```bash
-pwsh -NoProfile -File build.ps1 build    # 打包为单文件 exe（输出到仓库根，等价于 pyinstaller 命令）
+pwsh -NoProfile -File build.ps1 build    # 打包为单文件 exe（输出到 dist/goldenhandmaidens.exe）
 pwsh -NoProfile -File build.ps1 check    # compileall + pytest + ruff 逐文件基线比对
 pwsh -NoProfile -File build.ps1 clean    # 清理 build/dist/__pycache__/.pytest_cache/.ruff_cache
 pwsh -NoProfile -File build.ps1 check -Python "C:\path\to\python.exe"   # 多版本共存时显式指定 3.13
@@ -502,7 +502,8 @@ pwsh -NoProfile -File build.ps1 check -Python "C:\path\to\python.exe"   # 多版
 `check` / `build` 会校验解释器为 **Python 3.13**（依赖按此版本实盘 pin），不符即失败；
 用 `-Python` 参数指定其它路径的解释器。
 
-`clean` 只删可再生的缓存与中间目录，**不会删除**根目录的 `goldenhandmaidens.exe` 与 `templates/`。
+`clean` 只删可再生的缓存与中间目录（`build/`、`.pytest_cache/`、`.ruff_cache/`、`__pycache__/`），
+**不会删除** `dist/` 下的成品与 `templates/`。
 
 跑回归测试（不需要开游戏，全部在模块级接缝打桩）：
 
@@ -516,9 +517,12 @@ python -m pytest -q
 `debug/failures/<时间>_<任务名>/`（`frame_00.jpg…`、`client.jpg`、`meta.txt`），只保留最近 5 个现场。
 F9 主动停止不保存。排查「卡在哪一屏」时先看这里，再对照日志。
 
-A: 请确保 shared 文件夹已创建，启动时需要当前界面可以看到玩法目录四个字，在其他界面无法顺利运行。
+## 常见问题（FAQ）
 
-A: 手动退出到玩法目录界面，重新启动程序。
+Q: 启动后任务一直失败 / 提示找不到界面？
+
+A: 确认游戏客户区为 1600×900、窗口标题含「剑与远征：启程」，且启动时停在能看到「玩法目录」的主界面；
+停在其它界面请先手动退回主界面再重新运行。
 
 Q: 识别不到按钮？
 
@@ -548,27 +552,27 @@ Q: 女神塔遇到「一键碾压」按钮不会点？
 
 A: 把该按钮截图保存为 `templates/yijiannianya.png` 即可自动识别；未提供时程序只等待普通「战斗」按钮，会在日志中提示一次。
 
-### 7.开发相关
+## 开发计划
 
 已完成家园愿望单、公会玩法日常（结社战线 / 狩猎悬赏）。计划更新荣誉对决。
 
-### 8.致谢
+## 致谢
 
 - **异界迷宫烙印选择策略来自** B站 若隐寒星/frosty（<https://space.bilibili.com/401793216）>
 
 - **异界迷宫阵容参考来自** B站 千秋月（<https://space.bilibili.com/3546777955338480）>
 
-### 9.赞助
+## 赞助
 
 - **如果你觉得这个工具具有帮助，欢迎赞助支持❤️**
 
 ![赞助二维码](sponsor_qrcode.png)
 
-### 10.免责声明
+## 免责声明
 
 - **本工具仅供学习交流使用，请勿用于任何商业用途。使用本工具产生的任何后果由用户自行承担。**
 
-### 许可证
+## 许可证
 
 MIT License
 
