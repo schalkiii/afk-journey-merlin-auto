@@ -18,6 +18,7 @@
 """
 
 import contextlib
+import ctypes
 import json
 import os
 import queue
@@ -2807,7 +2808,43 @@ class GameBotGUI:
         if messagebox.askyesno("下载完成", "更新已下载，是否立即重启应用？"):
             updater.install_and_restart(new_path)
 
+# 单实例护栏：同一时刻只允许一个实例操作游戏窗口。
+# 2026-11-23 实机：08:01:03 定时触发与 08:01:06 的第二次启动同时在跑，点击互相打断，
+# 女神塔 / 英雄厅堂 / 爬塔 / 红点领取连环失败；08:23 第三个实例又在第一轮未结束时启动。
+# 用命名互斥体拦住第二个实例：直接提示并退出，避免两份脚本抢同一个游戏窗口。
+# 用 Local\ 前缀（限当前登录会话），跨会话运行不同账号时不互相误伤。
+INSTANCE_MUTEX_NAME = "Local\\AFKJourneyMerlinAuto_SingleInstance"
+_instance_mutex = None
+
+
+def _acquire_instance_mutex():
+    """尝试获取单实例互斥体；已有实例在运行时返回 False。
+
+    句柄保留到进程退出（Windows 自动释放），因此不要手动关闭。
+    创建失败（权限等异常）时不拦截，避免误伤正常启动。
+    """
+    global _instance_mutex
+    kernel32 = ctypes.windll.kernel32
+    kernel32.CreateMutexW.restype = ctypes.c_void_p
+    handle = kernel32.CreateMutexW(None, False, INSTANCE_MUTEX_NAME)
+    if not handle:
+        return True
+    if kernel32.GetLastError() == 183:      # ERROR_ALREADY_EXISTS
+        kernel32.CloseHandle(ctypes.c_void_p(handle))
+        return False
+    _instance_mutex = handle
+    return True
+
+
 def main():
+    if not _acquire_instance_mutex():
+        ctypes.windll.user32.MessageBoxW(
+            None,
+            "检测到「梅林初号机」已在运行。\n"
+            "同一时刻只允许一个实例操作游戏窗口——两个实例会互相抢点击，"
+            "导致任务连环失败。\n请先关闭另一个窗口再启动。",
+            "已有实例在运行", 0x40)
+        return
     # 窗口模式下 sys.stdout 初始为 None，必须尽早接管 print，避免启动期写入 None 崩溃；
     # 早期日志先缓冲，待 GUI 实例创建后灌入面板。
     sys.stdout = _StdoutTee(_early_stdout_sink)

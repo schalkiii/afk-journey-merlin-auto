@@ -1163,8 +1163,11 @@ def recover_to_main_interface(max_tries=8):
     tpl_exitck = get_template_path("exitck.png")
     tpl_promo = get_template_path("dianfengliansai.png")
     tpl_trigger_event = get_template_path("chufashijian.png")
-    # 退出按钮尝试顺序：先关弹窗（空白关闭 / 退出礼包 / exitck），再返回上一层
-    exit_templates = [tpl_close, tpl_tuichulibao, tpl_exitck, tpl_exit]
+    tpl_xuyuan_tuichu = get_template_path("xuyuantuichu.png")
+    # 退出按钮尝试顺序：先关弹窗（空白关闭 / 退出礼包 / 许愿活动「退出」/ exitck），再返回上一层
+    # 2026-11-23 实机：家园「许愿」活动页盖住主界面且没有任何 exit/exitck 模板，
+    # 旧列表全落空后 20 秒判「没有可用的退出入口」，连续 3 项被跳过并触发熔断。
+    exit_templates = [tpl_close, tpl_tuichulibao, tpl_xuyuan_tuichu, tpl_exitck, tpl_exit]
     promo_outside_tried = False
 
     for _ in range(max_tries):

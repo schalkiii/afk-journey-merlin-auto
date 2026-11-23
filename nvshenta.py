@@ -92,6 +92,43 @@ def wait_for_appearance(template_path, name, threshold=0.8, timeout=MAX_BATTLE_T
 
         time.sleep(interval)
 
+def _crush_and_exit(pos):
+    """新版女神塔：点「一键碾压」把当日层数一次碾掉，关结算后退出。
+
+    与旧界面的「扫荡」不同，一键碾压不需要选次数，点完按钮会短暂消失（结算/连续战斗），
+    回到页面即算完成。这里只等「消失后再出现」这一件事，最多 40 秒；期间出现的
+    「点击空白处关闭」顺手关掉，超时也照常尝试退出，不把整项判失败。
+    """
+    print("检测到「一键碾压」，点击后等待本轮结束...")
+    send_coord(pos[0], pos[1])
+    random_sleep()
+    seen = False          # 是否见过按钮消失
+    gone_polls = 0        # 按钮持续不可见的轮数（0.5 秒一轮）
+    deadline = time.time() + 40
+    while time.time() < deadline:
+        if _yijiannianya_visible() is None:
+            if not seen:
+                seen = True
+            else:
+                gone_polls += 1
+                if gone_polls > 20:     # 连续 10 秒没回来：多半已切页/结算完成
+                    break
+        else:
+            if seen:
+                break                   # 消失后又出现 = 本轮碾压结束
+            gone_polls = 0
+        wait_and_click(tpl_dianjikongbaichuguanbi, "dianjikongbaichuguanbi(碾压)", 0.8,
+                       timeout=0)
+        time.sleep(0.5)
+    if not seen:
+        print("点击「一键碾压」后 40 秒内未确认本轮结束，直接尝试退出。")
+    wait_and_click(tpl_exitck, "exitck(女神塔)", 0.8, timeout=5.0)
+    print("开始检测礼包弹窗...")
+    check_and_handle_libao()
+    print("礼包弹窗检测完成")
+    return True
+
+
 def do_saodang_and_exit():
     """
     功能：执行扫荡并退出女神塔（复用函数）
@@ -179,15 +216,28 @@ def _wait_saodang(timeout):
     return find_center_silent(tpl_nvshentasaodang, 0.8, timeout=timeout) is not None
 
 
+def _yijiannianya_visible(threshold=0.8):
+    """新版女神塔页面（本赛季「迅疾秘藏」样式）没有挑战 / 扫荡长条按钮，只有「一键碾压」。
+
+    该模板是可选的（用户/实机补图），文件不存在时直接返回 None，不影响旧界面。
+    """
+    if not os.path.exists(tpl_yijiannianya):
+        return None
+    return find_center_silent(tpl_yijiannianya, threshold)
+
+
 def _tower_page_open():
     """已在女神塔页面：扫荡按钮（已通关）或挑战按钮（未通关）任一可见。
 
-    加载中两者都不在，直接判 False，等加载结束再确认。
+    加载中两者都不在，直接判 False，等加载结束再确认。新版「迅疾秘藏」样式
+    两个按钮都不存在（层卡片 + 「一键碾压」），必须把一键碾压也算作页面标志，
+    否则点击明明已经进塔却一律判「未确认进入」。
     """
     if is_loading_screen():
         return False
     return (find_center_silent(tpl_nvshentasaodang, 0.8) is not None
-            or find_center_silent(tpl_nvshentiaozhan, 0.8) is not None)
+            or find_center_silent(tpl_nvshentiaozhan, 0.8) is not None
+            or _yijiannianya_visible() is not None)
 
 
 def _tower_page_open_stable(settle=0.8):
@@ -328,6 +378,11 @@ def flow_nvshenta(auto_configure_lineup=False):
             print("礼包弹窗检测完成")
             return True
     
+    # 2.6 新版「迅疾秘藏」样式：层卡片 + 「一键碾压」，没有挑战/扫荡长条按钮
+    pos_nianya = _yijiannianya_visible()
+    if pos_nianya:
+        return _crush_and_exit(pos_nianya)
+
     # 3. 循环挑战
     challenge_count = 0
     

@@ -149,5 +149,8 @@ def test_main_caps_rounds_before_burning(monkeypatch):
         return 0
 
     monkeypatch.setattr(ff, "burn_keys", fake_burn)
+    # 收尾会调 _handle_trigger_event 截图找选择页；不桩掉会去截真实屏幕，
+    # 锁屏 / RDP 断开时 ImageGrab 直接抛「screen grab failed」（2026-11-23 门禁实测）。
+    monkeypatch.setattr(ff, "_handle_trigger_event", lambda: None)
     assert ff.main(max_rounds=9999) is True
     assert asked == [ff.MAX_ROUNDS_LIMIT]

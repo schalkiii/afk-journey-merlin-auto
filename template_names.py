@@ -160,8 +160,10 @@ TEMPLATE_CN = {
     'xk': '虚空',
     'yaoguangzhita': '光辉之塔',
     'yg': '耀光',
+    'xuyuantuichu': '许愿退出',
     'yijiancaiyong': '一键采用',
     'yijianlingqu': '一键领取',
+    'yijiannianya': '一键碾压',
     'yijianxuanze': '一键选择',
     'yijianzengli': '一键赠礼',
     'yingxiongtingtang_tab': '英雄厅堂页签',
@@ -196,7 +198,6 @@ ACTION_CN = {
     'tower': '爬塔',
     'towerjixian': '爬塔极限',
     'warehouse': '仓库',
-    'yijiannianya': '一键碾压',  # 可选模板：用户按实机界面补图，缺失时女神塔走普通战斗按钮
     'yingxiongtingtang': '英雄厅堂',
     'youyishangcheng': '友谊商城',
 }
