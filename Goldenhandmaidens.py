@@ -1428,9 +1428,9 @@ class GameBotGUI:
         self._hero_rows = {}   # hero_name → ttk.Frame (整行)
 
         for i, hero_name in enumerate(ALL_HERO_NAMES):
-            # 快照里没有的英雄必须显示「未拥有」：旧实现默认「高」，面板上看着是
-            # 巅峰+，磁盘上却没有这条记录，推图照样按未拥有拒绝（2026-11-24 用户误判）。
-            level = hero_levels.get(hero_name, "未拥有")
+            # 快照里没有的英雄默认显示「巅峰+」（2026-11-24 用户约定）：新英雄常因
+            # 快照过期缺席，按未拥有显示会让人误以为「配了却仍被判未拥有」。
+            level = hero_levels.get(hero_name, "高")
             var = tk.StringVar(value=level)
             self._hero_vars[hero_name] = var
 
@@ -1489,14 +1489,13 @@ class GameBotGUI:
     def _write_warehouse_txt(self):
         """将当前英雄练度写入 warehouse_heroes.txt
 
-        快照里没有的英雄一律写「未拥有」：默认「高」会把没拥有/没配过的英雄当成
-        巅峰+，推图会接受根本打不了的推荐阵容（2026-11-24 复查发现方向性错误）。
+        快照里没有的英雄写「巅峰+」：与面板显示、推图读取口径一致（2026-11-24 用户约定）。
         """
         hero_levels = getattr(self, '_hero_levels', {})
         try:
             with open(WAREHOUSE_TXT_PATH, 'w', encoding='utf-8') as f:
                 for hero_name in ALL_HERO_NAMES:
-                    level = hero_levels.get(hero_name, "未拥有")
+                    level = hero_levels.get(hero_name, "高")
                     f.write(f"{hero_name},{level}\n")
         except (OSError, ValueError) as e:
             _notify_file_write_error(WAREHOUSE_TXT_PATH)
@@ -2253,14 +2252,13 @@ class GameBotGUI:
             self._write_warehouse_txt()
         missing = self._warehouse_missing_heroes()
         if missing:
-            # 2026-11-24 实机：快照是三个月前的，埃德加/塞涅根本不在文件里，
-            # 推图把每一套带它们推荐阵容都判「未拥有」，168 轮一步没推进。
-            # 原实现只在文件缺失时写一次，日常任务等于空转；至少要把这件事说出来。
+            # 2026-11-24 实机：快照是三个月前的，埃德加/塞涅根本不在文件里。
+            # 现在推图对缺失英雄按「巅峰+」兜底，但快照过期仍值得点名，方便补配。
             shown = "、".join(HERO_CN_NAMES.get(name, name) for name in missing[:5])
             more = f" 等 {len(missing)} 个" if len(missing) > 5 else ""
             self.log(
-                f"仓库快照缺少 {len(missing)} 个英雄（{shown}{more}），推图会按「未拥有」处理；"
-                "请在「仓库管理」里补配，或让游戏停在仓库界面运行 python warehouse.py 重新扫描。"
+                f"仓库快照缺少 {len(missing)} 个英雄（{shown}{more}），推图按「巅峰+」处理；"
+                "如需精确判定，请在「仓库管理」里补配，或让游戏停在仓库界面运行 python warehouse.py 重新扫描。"
             )
         self.log("仓库英雄数据已就绪")
         return True

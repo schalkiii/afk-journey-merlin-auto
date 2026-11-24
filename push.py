@@ -25,6 +25,7 @@ from common import (
     is_lineup_acceptable as _is_lineup_acceptable_impl,
 )
 from warehouse import (
+    ALL_HERO_NAMES,
     WAREHOUSE_TXT_PATH,
     _match_best_hero,
     init_templates_from_dir,
@@ -220,20 +221,29 @@ def _load_warehouse_levels():
     """
     读取仓库扫描结果文本，生成 {hero_name: level_str} 字典。
     文本每行格式为：名字,高/低/未拥有
+
+    快照里没有记录的英雄按「巅峰+」处理（2026-11-24 用户约定）：他的号几乎全英雄
+    巅峰+，而新英雄（埃德加/塞涅）常因快照过期缺席，按「未拥有」会把每一套带新
+    英雄的推荐阵容都拒掉。缺记录不等于没拥有，这是用户明确要求的口径。
     """
     hero_levels = {}
     if not os.path.exists(WAREHOUSE_TXT_PATH):
-        print(f"未找到仓库练度文件：{WAREHOUSE_TXT_PATH}，将视为全部未拥有。")
-        return hero_levels
+        print(f"未找到仓库练度文件：{WAREHOUSE_TXT_PATH}，按「全部巅峰+」处理。")
+    else:
+        with open(WAREHOUSE_TXT_PATH, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or "," not in line:
+                    continue
+                name, lvl = line.split(",", 1)
+                hero_levels[name.strip()] = lvl.strip()
+        print(f"已读取仓库练度信息，共 {len(hero_levels)} 条。")
 
-    with open(WAREHOUSE_TXT_PATH, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or "," not in line:
-                continue
-            name, lvl = line.split(",", 1)
-            hero_levels[name.strip()] = lvl.strip()
-    print(f"已读取仓库练度信息，共 {len(hero_levels)} 条。")
+    missing = [name for name in ALL_HERO_NAMES if name not in hero_levels]
+    for name in missing:
+        hero_levels[name] = "高"
+    if missing:
+        print(f"快照缺少 {len(missing)} 个英雄，按「巅峰+」补全。")
     return hero_levels
 
 
