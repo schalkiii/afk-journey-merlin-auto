@@ -1428,7 +1428,9 @@ class GameBotGUI:
         self._hero_rows = {}   # hero_name → ttk.Frame (整行)
 
         for i, hero_name in enumerate(ALL_HERO_NAMES):
-            level = hero_levels.get(hero_name, "高")
+            # 快照里没有的英雄必须显示「未拥有」：旧实现默认「高」，面板上看着是
+            # 巅峰+，磁盘上却没有这条记录，推图照样按未拥有拒绝（2026-11-24 用户误判）。
+            level = hero_levels.get(hero_name, "未拥有")
             var = tk.StringVar(value=level)
             self._hero_vars[hero_name] = var
 
@@ -1485,12 +1487,16 @@ class GameBotGUI:
         self._write_warehouse_txt()
 
     def _write_warehouse_txt(self):
-        """将当前英雄练度写入 warehouse_heroes.txt"""
+        """将当前英雄练度写入 warehouse_heroes.txt
+
+        快照里没有的英雄一律写「未拥有」：默认「高」会把没拥有/没配过的英雄当成
+        巅峰+，推图会接受根本打不了的推荐阵容（2026-11-24 复查发现方向性错误）。
+        """
         hero_levels = getattr(self, '_hero_levels', {})
         try:
             with open(WAREHOUSE_TXT_PATH, 'w', encoding='utf-8') as f:
                 for hero_name in ALL_HERO_NAMES:
-                    level = hero_levels.get(hero_name, "高")
+                    level = hero_levels.get(hero_name, "未拥有")
                     f.write(f"{hero_name},{level}\n")
         except (OSError, ValueError) as e:
             _notify_file_write_error(WAREHOUSE_TXT_PATH)
@@ -2245,8 +2251,31 @@ class GameBotGUI:
     def _run_warehouse(self, script):
         if not os.path.exists(WAREHOUSE_TXT_PATH):
             self._write_warehouse_txt()
+        missing = self._warehouse_missing_heroes()
+        if missing:
+            # 2026-11-24 实机：快照是三个月前的，埃德加/塞涅根本不在文件里，
+            # 推图把每一套带它们推荐阵容都判「未拥有」，168 轮一步没推进。
+            # 原实现只在文件缺失时写一次，日常任务等于空转；至少要把这件事说出来。
+            shown = "、".join(HERO_CN_NAMES.get(name, name) for name in missing[:5])
+            more = f" 等 {len(missing)} 个" if len(missing) > 5 else ""
+            self.log(
+                f"仓库快照缺少 {len(missing)} 个英雄（{shown}{more}），推图会按「未拥有」处理；"
+                "请在「仓库管理」里补配，或让游戏停在仓库界面运行 python warehouse.py 重新扫描。"
+            )
         self.log("仓库英雄数据已就绪")
         return True
+
+    @staticmethod
+    def _warehouse_missing_heroes():
+        """仓库快照里没有记录的英雄（推图会按「未拥有」处理）。"""
+        if not os.path.exists(WAREHOUSE_TXT_PATH):
+            return []
+        try:
+            with open(WAREHOUSE_TXT_PATH, encoding="utf-8") as f:
+                recorded = {line.split(",", 1)[0].strip() for line in f if "," in line}
+        except OSError:
+            return []
+        return [name for name in ALL_HERO_NAMES if name not in recorded]
 
     def _run_youjian(self, script):
         import youjian
