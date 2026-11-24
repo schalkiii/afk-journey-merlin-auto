@@ -470,6 +470,11 @@ MAX_TRANSITIONS = 500
 # "fail_limit"=连续失败达到配置上限。供「循环推图」判断是否应停止整个循环。
 LAST_STOP_REASON = ""
 
+# 最近一次运行是否真的推掉了关卡（end(k) 置位）。「循环推图」用它识别
+# 「跑得动但一步没推进」的空转：2026-11-24 实机从 08:41 跑到 20:05、168 轮
+# 没有一次 end(k)，每轮都是换阵容后「阵容用尽」正常结束，原有停止条件全部不触发。
+LAST_STAGE_CLEARED = False
+
 
 def _normal_entry_cleared():
     """普通推图入口不在、但挂机关卡页只剩「幻灵挑战」→ 本阶段普通关卡已清完。
@@ -1124,9 +1129,10 @@ def flow_push_mode1(mode="normal", skip_manual=True, retry_count=3,
     max_consecutive_failures: 连续失败达到该次数后结束本轮推图（1-99）
     claim_first_clear: 进入推图界面后是否先领取赛季阶段排名的首通奖励
     """
-    global LAST_STOP_REASON
+    global LAST_STOP_REASON, LAST_STAGE_CLEARED
     # 先清空：若初始化/运行提前抛异常，调用方不会读到上一次运行的停止原因
     LAST_STOP_REASON = ""
+    LAST_STAGE_CLEARED = False
     init_templates_from_dir()
     flow = PushFlow(
         mode=mode,
@@ -1137,6 +1143,7 @@ def flow_push_mode1(mode="normal", skip_manual=True, retry_count=3,
     )
     ok = flow.run()
     LAST_STOP_REASON = flow.stop_reason
+    LAST_STAGE_CLEARED = flow.stage_cleared
     return ok
 
 

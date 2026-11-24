@@ -75,6 +75,12 @@ FIRE_GUARD_SECONDS = 10.0
 # 失败现场挤满，真正需要排查的那一屏反被覆盖。
 MAIN_GATE_CIRCUIT_BREAK = 3
 
+# 连续多少轮「幻灵推图 + 推图都没有推掉任何关卡」就停止循环推图。
+# 2026-11-24 实机：08:41 起连跑 168 轮、11 小时，没有一次 end(k)——每轮都是
+# 阵容练度不足换阵容后「阵容用尽」正常结束。原有停止条件（连续失败上限、
+# 3 轮快速结束）都触发不了，循环只能靠用户按 F9 才停。
+LOOP_NO_PROGRESS_LIMIT = 2
+
 # 自带入口保障的任务：开始前**不**强制要求「已回到主界面」。
 # 「登录」压根没有主界面概念；「家园愿望单」的 `_ensure_panel` 既能从主界面点家园入口，
 # 也能在面板已开着时直接接管（模板 `xinyuandanbiaoti` 实测 0.999）。
@@ -2356,6 +2362,7 @@ class GameBotGUI:
         max_failures = ps.get("max_consecutive_failures", 10)
         loop_count = 0
         fast_rounds = 0
+        no_progress_rounds = 0
         while not self.stop_event.is_set():
             # 幻灵推图失败可能停在「战斗失败」等模态页，不先恢复主界面会导致
             # 本轮普通推图和后续轮次都卡在 wanfamulu 等待上空转（实测踩过）。
@@ -2363,6 +2370,7 @@ class GameBotGUI:
                 break
             loop_count += 1
             round_start = time.time()
+            round_progress = False
             self.log(f"循环推图 第 {loop_count} 轮 - 幻灵推图开始")
             try:
                 huanling_result = flow_push.main(
@@ -2374,6 +2382,8 @@ class GameBotGUI:
                 if flow_push.LAST_STOP_REASON == "fail_limit":
                     self.log(f"幻灵推图连续失败达到 {max_failures} 次，停止循环推图。")
                     break
+                if push.LAST_STAGE_CLEARED:
+                    round_progress = True
                 if huanling_result is False:
                     # 单个模式结束/失败不是循环失败，按设计切换到普通推图继续下一轮
                     self.log("幻灵推图流程结束，切换到普通推图。")
@@ -2400,6 +2410,8 @@ class GameBotGUI:
                 if push.LAST_STOP_REASON == "fail_limit":
                     self.log(f"推图连续失败达到 {max_failures} 次，停止循环推图。")
                     break
+                if push.LAST_STAGE_CLEARED:
+                    round_progress = True
                 if push.LAST_STOP_REASON == "season_cleared":
                     # 赛季普通关卡已清完、页面只剩幻灵挑战：继续循环只会在普通推图上
                     # 空转并被快速轮次熔断，直接按正常完成收尾。
@@ -2427,6 +2439,20 @@ class GameBotGUI:
             if fast_rounds >= 3:
                 self.log("循环推图连续 3 轮在 30 秒内异常结束，判定流程异常，停止循环推图。")
                 break
+
+            # 「跑得动但一步没推进」同样要收：两种模式都正常结束，只是每次都因
+            # 阵容练度不足换到「阵容用尽」，耗时与正常推图无异，快速轮次抓不到。
+            if round_progress:
+                no_progress_rounds = 0
+            else:
+                no_progress_rounds += 1
+                self.log(
+                    f"本轮两种推图都没有推掉任何关卡"
+                    f"（连续 {no_progress_rounds}/{LOOP_NO_PROGRESS_LIMIT} 轮）"
+                )
+                if no_progress_rounds >= LOOP_NO_PROGRESS_LIMIT:
+                    self.log("循环推图连续多轮没有任何推进，判定当前已无可推关卡，停止循环推图。")
+                    break
 
             self.log(f"循环推图 第 {loop_count} 轮完成，继续下一轮...")
             time.sleep(2)

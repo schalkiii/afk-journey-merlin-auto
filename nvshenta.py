@@ -8,6 +8,7 @@ import os
 import time
 
 from common import (
+    at_main_interface,
     click_and_confirm,
     find_center_silent,
     get_template_path,
@@ -24,6 +25,7 @@ from jiance import check_and_handle_libao
 
 # === 模板路径 ===
 tpl_wanfamulu = get_template_path("wanfamulu.png")
+tpl_catalog_title = get_template_path("wanfamulubiaoti.png")
 tpl_nvshenta = get_template_path("nvshenta.png")
 tpl_nvshentiaozhan = get_template_path("nvshentiaozhan.png")
 tpl_zhandou = get_template_path("zhandou.png")
@@ -254,42 +256,79 @@ def _tower_page_open_stable(settle=0.8):
     return _tower_page_open()
 
 
+def _wait_tower_page(timeout=6.0):
+    """等回到女神塔页面：扫荡 / 挑战 / 一键碾压任一可见即可（新版只有一键碾压）。"""
+    deadline = time.time() + timeout
+    while True:
+        if _tower_page_open():
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(0.5)
+
+
+def _ensure_catalog(timeout=8):
+    """确保玩法目录已打开：标题已在就不点底部入口。
+
+    2026-11-24 实机：回退过头落到玩法目录时，`open_wanfamulu` 会在**目录已打开**的
+    情况下再去点底部「玩法目录」图标（目录遮住底栏时直接找不到入口、静默返回 False），
+    于是「重进女神塔」整段被跳过，任务以「未看到扫荡按钮」失败。
+    """
+    if find_center_silent(tpl_catalog_title, 0.8, timeout=1.0):
+        return True
+    return open_wanfamulu(threshold=0.7, timeout=timeout)
+
+
+def _reenter_tower():
+    """从玩法目录（或主界面）重新进入女神塔，并等到塔页面出现。"""
+    if not _ensure_catalog():
+        return False
+    if not click_and_confirm(tpl_nvshenta, "nvshenta(重进)", _tower_page_open_stable,
+                             attempts=2, find_timeout=6.0, confirm_timeout=10.0):
+        print("重进女神塔未生效（仍停在玩法目录）")
+        return False
+    return _wait_tower_page(8.0)
+
+
 def _back_to_tower_page(max_attempts=3):
-    """登顶后回退到女神塔页面（该页面才有一键扫荡按钮）。
+    """登顶后回退到女神塔页面（该页面才有一键扫荡 / 一键碾压）。
 
     挑战到顶后没有下一层，只会出现「再次挑战」，直接找扫荡按钮必然失败。
     先确认当前是否已在女神塔页面；否则逐层点 exit / exitck 退出，每层退出后
-    重新确认扫荡按钮是否出现。全部尝试后仍看不到则返回 False。
+    重新确认塔页面。全部尝试后仍看不到则返回 False。
     2026-11-09 实机：回退过程中会经过「加载中…」画面（现场截图近似全黑），
     旧实现等 1 秒就判「未看到扫荡按钮」而失败；改为等加载结束 + 带超时轮询。
+    2026-11-24 实机：页面标志只看扫荡会漏掉新版「一键碾压」；退到玩法目录后又因
+    `open_wanfamulu` 找不到底栏入口而无法重进——两处都已在下面修正。
     """
-    if _wait_saodang(6.0):
+    if _wait_tower_page(6.0):
         return True
 
     for attempt in range(1, max_attempts + 1):
+        # 已经在玩法目录 / 主界面：直接重进。此时再点 exit 会把界面退到更外层
+        # （2026-11-24 实机就是在目录页连点 exit/exitck，越退越远）。
+        if (find_center_silent(tpl_catalog_title, 0.8, timeout=0) is not None
+                or at_main_interface()):
+            if _reenter_tower():
+                return True
+            continue
+
         wait_and_click(tpl_exit, "exit", 0.8, timeout=2.0)
         wait_until_loaded(10.0)
-        if _wait_saodang(6.0):
+        if _wait_tower_page(6.0):
             return True
 
         wait_and_click(tpl_exitck, "exitck", 0.8, timeout=2.0)
         wait_until_loaded(10.0)
-        if _wait_saodang(6.0):
+        if _wait_tower_page(6.0):
             return True
 
         # 2026-11-09 实机：层内页面连续退两次会退过头到主界面（此时 caidan 可见），
-        # 扫荡按钮在女神塔页面里，再退只会越走越远——重新进一次女神塔再判。
+        # 扫荡按钮在女神塔页面里，再退只会越走越远——下一轮开头会重新进入。
         # 2026-11-10 实机：重进的这一次点击同样被吞过，代码却当成已进去，随后在玩法目录
-        # 里找扫荡按钮失败 → 整任务判失败。改为点击后校验「塔页面已打开」再判扫荡。
-        if attempt == 2 and open_wanfamulu(threshold=0.7, timeout=8):
-            print("回退后已到主界面，重新进入女神塔确认扫荡按钮")
-            if not click_and_confirm(tpl_nvshenta, "nvshenta(重进)", _tower_page_open_stable,
-                                     attempts=2, find_timeout=6.0, confirm_timeout=10.0):
-                print("重进女神塔未生效（仍停在玩法目录）")
-            elif _wait_saodang(8.0):
-                return True
+        # 里找扫荡按钮失败 → 整任务判失败。`_reenter_tower` 会校验塔页面已打开。
 
-    print(f"回退 {max_attempts} 次后仍未确认女神塔页面（未看到扫荡按钮）")
+    print(f"回退 {max_attempts} 次后仍未确认女神塔页面")
     return False
 
 
@@ -514,7 +553,12 @@ def flow_nvshenta(auto_configure_lineup=False):
         print("登顶后未能回到女神塔页面，无法执行扫荡")
         return False
     random_sleep()
-    
+
+    # 4.5 新版界面只有「一键碾压」：直接碾压，不走旧扫荡流程
+    pos_nianya = _yijiannianya_visible()
+    if pos_nianya:
+        return _crush_and_exit(pos_nianya)
+
     # 5-10. 执行扫荡并退出
     if not do_saodang_and_exit():
         return False

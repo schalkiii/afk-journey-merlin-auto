@@ -33,6 +33,11 @@ def _stub_back(monkeypatch, saodang_hits, clicks):
     # 这里桩成重进失败，保持「只试 exit/exitck」的断言语义。
     monkeypatch.setattr(nt, "open_wanfamulu", lambda *a, **k: False)
     monkeypatch.setattr(nt, "wait_until_loaded", lambda *a, **k: True)
+    # 页面判定改成「扫荡 / 挑战 / 一键碾压任一可见」，并会先看加载态与主界面；
+    # 这几个接缝不打桩会去截真实屏幕（且会把 6 秒轮询拖成真实等待）。
+    monkeypatch.setattr(nt, "is_loading_screen", lambda: False)
+    monkeypatch.setattr(nt, "at_main_interface", lambda *a, **k: False)
+    monkeypatch.setattr(nt, "_wait_tower_page", lambda timeout=6.0: nt._tower_page_open())
     monkeypatch.setattr(nt, "time", types.SimpleNamespace(time=time.time,
                                                           sleep=lambda _seconds: None))
     return probes

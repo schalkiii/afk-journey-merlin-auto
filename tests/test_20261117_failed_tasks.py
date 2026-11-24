@@ -26,8 +26,12 @@ def test_tower_stable_confirm_accepts_persistent(monkeypatch):
 
 
 def test_reentry_uses_stable_confirm():
-    """重进女神塔的 click_and_confirm 必须用稳定判据，不能用单帧判据。"""
-    source = inspect.getsource(nvshenta._back_to_tower_page)
+    """重进女神塔的 click_and_confirm 必须用稳定判据，不能用单帧判据。
+
+    2026-11-24 起重进动作抽到 `_reenter_tower()`（回退与重进共用），
+    断言改查这个函数的源码；契约本身不变：必须用 `_tower_page_open_stable`。
+    """
+    source = inspect.getsource(nvshenta._reenter_tower)
     assert "click_and_confirm(tpl_nvshenta" in source
     assert "_tower_page_open_stable" in source, "单帧判据会把玩法目录误认成塔页面"
 
