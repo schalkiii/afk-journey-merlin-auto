@@ -247,6 +247,16 @@ def _load_warehouse_levels():
     return hero_levels
 
 
+def _all_levels_high(hero_levels):
+    """快照里所有已知练度都是「高」→ 任何推荐阵容都必然通过练度判定。
+
+    此时逐套识别 5 个英雄（168 张模板 × 9 个尺度 × 5 槽 × 2 套布局，约 1.5 万次
+    模板匹配，实测每套 5~6 秒）纯属浪费，直接跳过。只要出现一个「低 / 未拥有」，
+    就回到完整判定，安全性不变。
+    """
+    return bool(hero_levels) and all(level == "高" for level in hero_levels.values())
+
+
 def _capture_lineup_slots(debug_label="lineup", extra_shift_x_px: int = 0):
     """
     在"通关阵容界面"下：
@@ -1030,6 +1040,11 @@ class PushFlow:
             time.sleep(0.5)
 
         scans = 0
+        # 快照在同一轮里不会变：只读一次；全「高」时练度判定恒真，跳过逐套头像识别。
+        hero_levels = _load_warehouse_levels()
+        skip_level_check = _all_levels_high(hero_levels)
+        if skip_level_check:
+            print("仓库练度全为巅峰+，本轮跳过阵容识别（只检查手动战斗标志）。")
         while scans < MAX_LINEUP_SCAN:
             scans += 1
             if self.skip_manual:
@@ -1039,9 +1054,12 @@ class PushFlow:
                 pos_g = None
 
             if not pos_g:
-                hero_levels = _load_warehouse_levels()
-                lineup_heroes, _debug_path = _recognize_lineup_with_levels()
-                if _is_lineup_acceptable(hero_levels, lineup_heroes):
+                if skip_level_check:
+                    lineup_ok = True
+                else:
+                    lineup_heroes, _debug_path = _recognize_lineup_with_levels()
+                    lineup_ok = _is_lineup_acceptable(hero_levels, lineup_heroes)
+                if lineup_ok:
                     # 点击一键采用后，必须确认进入推图界面或出现未拥有提示。
                     # 单次点击可能被吞（2026-11-20 实机：面板还在「数据统计中」时点
                     # 「一键采用」无效，界面纹丝不动），所以补点重试，而不是一次定生死。
