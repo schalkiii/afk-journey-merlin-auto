@@ -62,6 +62,18 @@ def _in_tower_page():
     return find_center_silent(tpl_patatiaozhan, 0.9) is not None
 
 
+def _any_tower_card_visible(threshold=0.8):
+    """塔选择页上还能看到任意一张塔卡片？用于判断是否已经离开选择页。
+
+    加载中画面同样看不到卡片，此时按「还在选择页」保守处理，避免把加载误判成已进塔。
+    """
+    if is_loading_screen():
+        return True
+    return any(
+        find_center_silent(tower_tpl, threshold) is not None
+        for _name, tower_tpl in TOWER_ORDER
+    )
+
 
 def flow_pata():
     """
@@ -132,8 +144,14 @@ def flow_pata():
         if not click_and_confirm(tower_tpl, f"{tower_name}(进入塔)", _in_tower_page,
                                  attempts=2, threshold=0.9, find_timeout=1.0,
                                  confirm_timeout=10.0):
-            print(f"{tower_name} 点击后未进入塔内，跳过该塔。")
-            continue
+            # 2026-11-25 实机：自然之塔第一次点击其实已经进塔（第 2 次补点「没找到按钮」），
+            # 只是塔内「爬塔挑战」没按 0.9 认出来，整座塔就被跳过；随后其它塔全「未检测到」、
+            # exit 又能点，说明当时确实在塔内。补一条判据：塔卡片全部消失=已离开选择页，
+            # 交给 flow_tower 处理——它在塔内会自己关弹窗、等加载，阈值也更宽（0.8）。
+            if _any_tower_card_visible():
+                print(f"{tower_name} 点击后未进入塔内，跳过该塔。")
+                continue
+            print(f"{tower_name} 未识别到塔内「爬塔挑战」，但塔卡片已消失，按已进塔继续。")
         random_sleep()
         
         # 调用 flow_tower.py

@@ -401,6 +401,13 @@ def check_stop():
 _screenshot_cache = {"img": None, "ts": 0.0}
 SCREENSHOT_CACHE_TTL = 0.05  # 秒；同一帧在极短时间内复用，降低重复截屏开销
 
+# 截图失败重试：锁屏 / 解锁瞬间、切换显示器或分辨率时，WGC 会话与 GDI 截图
+# 都会短时不可用。2026-11-25 实机：08:42 解锁瞬间 pyautogui 抛 "screen grab failed"，
+# 幻灵推图整项被判失败，异常恢复路径再截一次又失败，连带结束整个运行线程。
+# 这种失败是秒级的，短暂重试即可跨过，不必让整轮任务报废。
+SCREENSHOT_RETRY_ATTEMPTS = 6
+SCREENSHOT_RETRY_INTERVAL = 2.0  # 秒
+
 
 # ===== 失败现场逐帧留存 =====
 # 任务失败/超时后最需要看的是「当时屏幕上是什么」，而日志往往只剩一行
@@ -427,6 +434,38 @@ def _remember_frame(image):
         _frame_ring.append((time.time(), image))
 
 
+def _capture_frame_once():
+    """截一帧：优先后台截图，不可用时退回全屏截图（可能抛 OSError）。"""
+    img = _background_screenshot()
+    if img is not None:
+        return img
+    # 后台截图不可用（依赖缺失/初始化失败/长时间无新帧）：退回屏幕截图。
+    # 此时若游戏不在前台/被遮挡，屏幕截图拿到的是错误画面，必须先确保游戏可见。
+    ensure_game_clickable()
+    screenshot = pyautogui.screenshot()
+    return cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+
+
+def _capture_frame_with_retry():
+    """截图失败时短暂重试；每次都先丢弃旧 WGC 会话，让下一轮重新初始化。
+
+    Pillow 的 grab 在锁屏 / 远程桌面切换分辨率时会抛 `OSError: screen grab failed`，
+    而这类环境变化同样会让旧 WGC 会话收不到新帧（_background_client_frame 判定超时
+    后返回 None）。因此重试前必须释放会话，否则重试只会一遍遍落到同一个失败路径。
+    """
+    for attempt in range(1, SCREENSHOT_RETRY_ATTEMPTS + 1):
+        try:
+            return _capture_frame_once()
+        except OSError as exc:
+            if attempt >= SCREENSHOT_RETRY_ATTEMPTS:
+                raise
+            log(f"截图失败（{exc}），第 {attempt}/{SCREENSHOT_RETRY_ATTEMPTS} 次重试…")
+            _stop_background_capture()
+            _screenshot_cache["img"] = None
+            _screenshot_cache["ts"] = 0.0
+            _sleep_interruptible(SCREENSHOT_RETRY_INTERVAL)
+
+
 def screenshot_bgr():
     """截取游戏画面并返回 BGR 格式 numpy 数组（OpenCV 标准色彩顺序）；短 TTL 内复用缓存帧。
 
@@ -441,13 +480,7 @@ def screenshot_bgr():
     if _screenshot_cache["img"] is not None and (now - _screenshot_cache["ts"]) < SCREENSHOT_CACHE_TTL:
         _remember_frame(_screenshot_cache["img"])
         return _screenshot_cache["img"]
-    img = _background_screenshot()
-    if img is None:
-        # 后台截图不可用（依赖缺失/初始化失败）：退回屏幕截图。
-        # 此时若游戏不在前台/被遮挡，屏幕截图拿到的是错误画面，必须先确保游戏可见。
-        ensure_game_clickable()
-        screenshot = pyautogui.screenshot()
-        img = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+    img = _capture_frame_with_retry()
     _screenshot_cache["img"] = img
     _screenshot_cache["ts"] = now
     _remember_frame(img)

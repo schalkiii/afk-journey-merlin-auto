@@ -2672,7 +2672,10 @@ class GameBotGUI:
                     # 界面（如家园生产页）恢复不了。恢复结果只记录，不改变失败结论。
                     if not self.stop_event.is_set():
                         self.log("任务失败，尝试恢复到主界面…")
-                        common.ensure_main_interface()
+                        try:
+                            common.ensure_main_interface()
+                        except OSError as recover_error:
+                            self.log(f"恢复到主界面失败：{recover_error!s}")
                     
             except common.StopRequested:
                 script.status = "已停止"
@@ -2687,7 +2690,13 @@ class GameBotGUI:
                 common.capture_failure_context(script.name, f"任务执行异常: {e!s}")
                 if not self.stop_event.is_set():
                     self.log("任务异常，尝试恢复到主界面…")
-                    common.ensure_main_interface()
+                    # 恢复动作本身也可能再抛（2026-11-25 实机：截图失败的异常在恢复路径
+                    # 再抛一次，直接结束整个运行线程，剩余任务全部没跑）。这里兜住截图类
+                    # 异常，让队列继续往下走；F9 的 StopRequested 不在此列，必须继续上抛。
+                    try:
+                        common.ensure_main_interface()
+                    except OSError as recover_error:
+                        self.log(f"恢复到主界面失败：{recover_error!s}")
                 # 完整堆栈写入日志文件便于定位；逐行加时间戳并归到当前任务下，
                 # 面板仍只显示上面那条首行，避免刷屏
                 for stack_line in log_format.format_multiline(traceback.format_exc()):
