@@ -190,6 +190,11 @@ def test_find_all_instances_vectorized_within_budget(clean_state, monkeypatch):
     0.053–0.085 ms，向量化 0.010–0.023 ms。审计预估的「旧实现 1–3 ms」在本
     尺寸不成立，单靠 `< 1 ms` 无法让旧实现失败；因此另加一条对参考实现的
     2 倍加速断言，负验证（换回双层循环）时它才会真正变红。
+
+    计时口径改用「多次测量取最小值」：两者都在 0.05 ms 量级，均值很容易被
+    调度抖动抬高——2026-11-25 push 门禁实测向量化 0.0443 ms 对旧实现 0.0814 ms
+    （差 1.84 倍）就被判红，而同一台机器空载时是 3 倍以上。最小值只反映
+    「最快能做到多快」，对抖动不敏感，负验证照旧会红。
     """
     res = np.zeros((20, 24), np.float32)
     res[0, 0] = 0.9
@@ -203,21 +208,25 @@ def test_find_all_instances_vectorized_within_budget(clean_state, monkeypatch):
 
     flow_migong.find_all_instances_mg("x", **kwargs)  # 预热 argwhere / 桩调用
 
-    def _average(func):
-        start = time.perf_counter()
-        for _ in range(50):
-            func()
-        return (time.perf_counter() - start) / 50
+    def _best(func, repeats=5, inner=50):
+        """重复多轮、每轮 inner 次取平均，再取各轮最小值（抗调度抖动）。"""
+        best = float("inf")
+        for _ in range(repeats):
+            start = time.perf_counter()
+            for _ in range(inner):
+                func()
+            best = min(best, (time.perf_counter() - start) / inner)
+        return best
 
-    vector_avg = _average(lambda: flow_migong.find_all_instances_mg("x", **kwargs))
-    reference_avg = _average(
+    vector_best = _best(lambda: flow_migong.find_all_instances_mg("x", **kwargs))
+    reference_best = _best(
         lambda: _find_all_instances_reference(res, (5, 5), 0.5, 6)
     )
 
-    assert vector_avg < 0.001, f"向量化平均 {vector_avg * 1000:.4f} ms，超过 1 ms 门槛"
-    assert vector_avg * 2 < reference_avg, (
-        f"向量化 {vector_avg * 1000:.4f} ms 未显著快于旧实现 "
-        f"{reference_avg * 1000:.4f} ms"
+    assert vector_best < 0.001, f"向量化最快 {vector_best * 1000:.4f} ms，超过 1 ms 门槛"
+    assert vector_best * 2 < reference_best, (
+        f"向量化 {vector_best * 1000:.4f} ms 未显著快于旧实现 "
+        f"{reference_best * 1000:.4f} ms"
     )
 
 
