@@ -96,31 +96,36 @@ def _handle_trigger_event():
     return True
 
 
-def _enter_fanfanle():
-    """主界面 → 菜单 → 任务 → 翻翻乐页签，并用「点击增加进度」按钮确认进来了。"""
-    if not wait_and_click(tpl_menu, "菜单", 0.8, timeout=5.0):
-        log("未找到主界面「菜单」入口。")
-        return False
-    if not wait_and_click(tpl_task_tab, "任务", 0.8, timeout=5.0):
-        log("菜单里没有「任务」入口。")
-        recover_to_main_interface()
-        return False
+def _open_task_panel(attempts=2):
+    """主界面 → 菜单 → 任务，并用底部页签栏确认任务面板真的打开。
 
-    # 2026-11-10 实机：点完「任务」后面板可能根本没打开（点击被弹框吞掉 / 加载慢），
-    # 旧实现直接找页签，找不到就误报「任务面板里没有翻翻乐页签」（现场截图停在主界面）。
-    # 先用底部页签栏确认面板打开，未打开则补点一次「任务」。
+    2026-11-26 实机：菜单项刚出现在 0.1 秒（面板还在动画）时就点「任务」，点击落到了
+    菜单遮罩上，把菜单一起关掉——随后补点「任务」自然一直找不到（失败现场停在主界面），
+    整项 15 秒判失败。所以每一轮都从「菜单」重新开始：菜单没开就先点菜单入口，
+    再点「任务」，再确认面板；两轮都不成就按失败返回。
+    """
     from hongbaolingqu import _panel_open
 
-    if not _panel_open():
-        log("点「任务」后未确认任务面板打开，补点一次「任务」")
-        if not wait_and_click(tpl_task_tab, "任务(补点)", 0.8, timeout=5.0):
-            log("补点「任务」失败，判定没进入任务面板。")
-            recover_to_main_interface()
+    for attempt in range(1, attempts + 1):
+        menu_closed = find_center_silent(tpl_task_tab, 0.8, timeout=0.5) is None
+        if menu_closed and not wait_and_click(tpl_menu, "菜单", 0.8, timeout=5.0):
+            log("未找到主界面「菜单」入口。")
             return False
-        if not _panel_open():
-            log("补点后任务面板仍未打开，判定没进入。")
-            recover_to_main_interface()
-            return False
+        if not wait_and_click(tpl_task_tab, "任务", 0.8, timeout=5.0):
+            log("菜单里没有「任务」入口，重新打开菜单再试。")
+            continue
+        if _panel_open():
+            return True
+        log(f"第 {attempt} 次点「任务」后未确认任务面板打开，重新打开菜单再试。")
+    return False
+
+
+def _enter_fanfanle():
+    """主界面 → 菜单 → 任务 → 翻翻乐页签，并用「点击增加进度」按钮确认进来了。"""
+    if not _open_task_panel():
+        log("没能打开任务面板，判定没进入翻翻乐。")
+        recover_to_main_interface()
+        return False
 
     # 页签有选中/未选中两套外观，任一命中都点（已选中时重复点无害）。
     # 面板打开有延迟，这里必须带超时重试，否则刚点完「任务」就找页签会扑空。

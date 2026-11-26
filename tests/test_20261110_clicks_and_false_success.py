@@ -78,10 +78,16 @@ def test_friend_reports_false_when_gift_unfinished(monkeypatch):
 # ---------- 面板进入确认 / 滚动不过头 ----------
 
 def test_fanfanle_retries_task_entry():
-    """翻翻乐进面板前必须确认任务面板打开（源码级，避免每次 import GUI 依赖）。"""
+    """翻翻乐进面板前必须确认任务面板打开（源码级，避免每次 import GUI 依赖）。
+
+    2026-11-26 起重试口径升级：不再只补点「任务」，而是每轮先看「任务」在不在、
+    不在就先点「菜单」重新打开（菜单项动画期间点击会把菜单一起点关）。
+    """
     text = _read_source("fanfanle.py")
     assert "from hongbaolingqu import _panel_open" in text
-    assert 'wait_and_click(tpl_task_tab, "任务(补点)"' in text
+    assert "def _open_task_panel(" in text
+    assert "_open_task_panel(" in text.split("def _enter_fanfanle")[1]
+    assert 'wait_and_click(tpl_menu, "菜单"' in text
 
 
 def test_pata_scrolls_one_step_at_a_time():

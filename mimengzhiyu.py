@@ -171,7 +171,11 @@ def _ensure_mimeng_main(timeout=12.0):
         if wait_and_click(tpl_exitck, "exitck(迷梦返回)", 0.8, timeout=0.3):
             time.sleep(0.3)
             continue
-        dismiss_popup_away_from()
+        # 2026-11-26 实机：误点玩家头像弹出的资料卡上，「点击空白处关闭」只到 0.819，
+        # 某帧掉到 0.8 以下时三条分支全不命中，循环里只剩 sleep，12 秒空转后判失败
+        # （失败现场卡片仍在）。兜底点一次左下空白：卡片外的遮罩点击即可关闭。
+        if not dismiss_popup_away_from():
+            click_blank_to_exit()
         time.sleep(0.3)
     return bool(find_center_silent(tpl_tiaozhan, 0.8, timeout=0.5))
 

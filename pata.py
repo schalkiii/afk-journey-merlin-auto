@@ -6,6 +6,7 @@
 import time
 
 from common import (
+    capture_failure_context,
     click_and_confirm,
     find_center_silent,
     get_template_path,
@@ -152,6 +153,14 @@ def flow_pata():
                 print(f"{tower_name} 点击后未进入塔内，跳过该塔。")
                 continue
             print(f"{tower_name} 未识别到塔内「爬塔挑战」，但塔卡片已消失，按已进塔继续。")
+            # 2026-11-24~26 连续三天都停在这一步：卡片确实消失了（=已离开选择页），
+            # 可塔内始终认不出「爬塔挑战」，flow_tower 只好按「已经推完」退出，整塔白跑。
+            # 先留一张现场图，下次复现就能看清塔内到底显示的是什么页面。
+            capture_failure_context(
+                "爬塔_未识别挑战按钮",
+                "塔卡片已消失但塔内未认出「爬塔挑战」",
+                extra=f"塔: {tower_name}",
+            )
         random_sleep()
         
         # 调用 flow_tower.py
