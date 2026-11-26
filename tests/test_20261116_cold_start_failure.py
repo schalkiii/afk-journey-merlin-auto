@@ -15,15 +15,24 @@ import start
 
 
 class _Clock:
-    """每取一次时间就前进固定步长，避免测试因真实 deadline 挂住。"""
+    """可手动推进的假时钟：`time()` 只读当前值，只有 `sleep()` 会推进。
 
-    def __init__(self, step=10.0):
+    旧实现「每取一次时间就 +10 秒」对调用次数敏感：time 是全局模块，同一进程里
+    别的线程（日志、看门狗）也可能调到被替换的 `time.time()`，多一次调用就把
+    30 秒预算吃满——2026-11-26 push 门禁实测偶发 `assert 30.0 < 30` 判红。
+    改成只由 sleep 推进后，「第一轮就识别弹窗」必然停在 0，「没有弹窗要等满」
+    则按 0.5 秒一步步走到 timeout，两条路径都不再依赖调用次数。
+    """
+
+    def __init__(self, step=0.5):
         self.t = 0.0
         self.step = step
 
-    def __call__(self):
-        self.t += self.step
+    def time(self):
         return self.t
+
+    def sleep(self, seconds):
+        self.t += seconds
 
 
 # ---------- 登录判据：可交互弹窗 = 已越过开始界面 ----------
@@ -40,8 +49,8 @@ def test_wait_for_start_skips_when_only_popup(monkeypatch):
     monkeypatch.setattr(start, "_find", fake_find)
     monkeypatch.setattr(start, "at_main_interface", lambda: False)
     monkeypatch.setattr(start, "log", lambda *_a, **_k: None)
-    monkeypatch.setattr(start.time, "time", clock)
-    monkeypatch.setattr(start.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(start.time, "time", clock.time)
+    monkeypatch.setattr(start.time, "sleep", clock.sleep)
 
     assert start._wait_for_start("start", "yueka", "libao", timeout=30) is True
     assert clock.t < 30, "应当在第一轮就识别弹窗，不能循环到超时"
@@ -53,8 +62,8 @@ def test_wait_for_start_still_waits_without_popup(monkeypatch):
     monkeypatch.setattr(start, "_find", lambda *_a, **_k: None)
     monkeypatch.setattr(start, "at_main_interface", lambda: False)
     monkeypatch.setattr(start, "log", lambda *_a, **_k: None)
-    monkeypatch.setattr(start.time, "time", clock)
-    monkeypatch.setattr(start.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(start.time, "time", clock.time)
+    monkeypatch.setattr(start.time, "sleep", clock.sleep)
 
     assert start._wait_for_start("start", "yueka", "libao", timeout=30) is False
 
