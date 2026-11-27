@@ -549,7 +549,17 @@ def claim_first_clear_reward():
     # 面板留在屏上盖住入口，推图 24 秒就判「未检测到 tiaozhan」失败。
     wait_and_click(tpl_exit, "exit(shoutong)", 0.8, timeout=3.0)
     for attempt in range(1, 3):
-        if find_center_silent(tpl_rank_title, 0.8, timeout=1.0) is None:
+        # 面板关闭有约 1 秒动画：标题还在就补点，会把下面一层的返回键也点掉。
+        # 2026-11-27 实机：exit + exitck×2 连点三次直接退回玩法目录，随后 15 秒
+        # 找不到「挑战」、15 秒找不到 exit，推图整项 59 秒判失败（失败现场就是玩法目录）。
+        # 先等标题真的消失，等不到才补点一次。
+        closed = False
+        for _ in range(10):  # 最多等 2 秒
+            if find_center_silent(tpl_rank_title, 0.8, timeout=0) is None:
+                closed = True
+                break
+            time.sleep(0.2)
+        if closed:
             break
         wait_and_click(tpl_exitck, f"exitck(rank)({attempt})", 0.8, timeout=3.0)
     return claimed

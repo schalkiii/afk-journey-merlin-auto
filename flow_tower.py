@@ -681,7 +681,9 @@ def flow_tower():
                 clicked = wait_and_click(tpl_patatiaozhan, "patatiaozhan(关弹窗后)",
                                          0.8, timeout=8)
         if not clicked:
-            print("未找到 patatiaozhan，认为已经推完，尝试点击 exit 退出。")
+            # 2026-11-27 现场截图：塔内可见楼层全部「已通关」、下一层「开启赛季第三阶段
+            # 后解锁」时，本来就没有「挑战」按钮——这是正常终态，不是异常。
+            print("未找到 patatiaozhan（塔内已无可挑战关卡），尝试点击 exit 退出。")
             # 尝试点击 exit 退出（只需要点击一次，因为已经在关卡界面）
             if not wait_and_click(tpl_exit, "exit", 0.8):
                 print("点击 exit 失败，爬塔流程结束。")

@@ -6,8 +6,8 @@
 import time
 
 from common import (
-    capture_failure_context,
     click_and_confirm,
+    dismiss_popup_away_from,
     find_center_silent,
     get_template_path,
     is_loading_screen,
@@ -28,6 +28,9 @@ tpl_ziranzhita = get_template_path("ziranzhita.png")
 tpl_manxuezhita = get_template_path("manxuezhita.png")
 tpl_wanglingzhita = get_template_path("wanglingzhita.png")
 tpl_exit = get_template_path("exit.png")
+
+# 通用「点击空白处关闭」提示：结算/奖励类弹窗压暗塔内界面时，「爬塔挑战」会匹配不到
+tpl_dianjikongbaichuguanbi = get_template_path("dianjikongbaichuguanbi.png")
 
 # 塔的顺序
 TOWER_ORDER = [
@@ -152,15 +155,21 @@ def flow_pata():
             if _any_tower_card_visible():
                 print(f"{tower_name} 点击后未进入塔内，跳过该塔。")
                 continue
-            print(f"{tower_name} 未识别到塔内「爬塔挑战」，但塔卡片已消失，按已进塔继续。")
-            # 2026-11-24~26 连续三天都停在这一步：卡片确实消失了（=已离开选择页），
-            # 可塔内始终认不出「爬塔挑战」，flow_tower 只好按「已经推完」退出，整塔白跑。
-            # 先留一张现场图，下次复现就能看清塔内到底显示的是什么页面。
-            capture_failure_context(
-                "爬塔_未识别挑战按钮",
-                "塔卡片已消失但塔内未认出「爬塔挑战」",
-                extra=f"塔: {tower_name}",
-            )
+            print(f"{tower_name} 卡片已消失但未按 0.9 确认进塔，低阈值复查。")
+            # 2026-11-27 现场截图确认：塔卡片消失、页面停在塔内，但可见楼层（140/139/138）
+            # 全部「已通关」，下一层「开启赛季第三阶段后解锁」——这种塔本来就没有可挑战
+            # 关卡，认不出「爬塔挑战」是正常终态，不是异常（11-24~26 一直按异常空等）。
+            # 先用 flow_tower 同款阈值复查：弹窗遮挡会让匹配失效，所以先关弹窗；
+            # 真有挑战按钮只是 0.9 认不出时，这里 0.8 会命中并照常进 flow_tower。
+            if find_center_silent(tpl_dianjikongbaichuguanbi, 0.8, timeout=0) is not None:
+                dismiss_popup_away_from()
+                time.sleep(1.0)
+            if find_center_silent(tpl_patatiaozhan, 0.8, timeout=6.0) is None:
+                print(f"{tower_name} 塔内没有可挑战关卡（已通关/待赛季解锁），跳过该塔。")
+                wait_and_click(tpl_exit, "exit(塔内无挑战返回)", 0.8, timeout=5.0)
+                time.sleep(0.8)
+                continue
+            print(f"{tower_name} 塔内「爬塔挑战」在低阈值下命中，按已进塔继续。")
         random_sleep()
         
         # 调用 flow_tower.py

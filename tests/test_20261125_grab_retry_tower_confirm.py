@@ -82,9 +82,10 @@ def test_battle_wait_covers_five_minute_fights():
 
 # ===== 3. 爬塔进塔确认 =====
 
-def _stub_pata(monkeypatch, tower_card_persists):
-    """跑一条只有自然之塔的爬塔流程；记录 flow_tower 是否被调用。"""
+def _stub_pata(monkeypatch, tower_card_persists, challenge_at_low_threshold=False):
+    """跑一条只有自然之塔的爬塔流程；记录 flow_tower 是否被调用、exit 点了几次。"""
     called = {"flow_tower": 0}
+    exits = []
     fake_flow = types.ModuleType("flow_tower")
     fake_flow.flow_tower = lambda: called.__setitem__("flow_tower", called["flow_tower"] + 1)
     fake_jiance = types.ModuleType("jiance")
@@ -97,14 +98,16 @@ def _stub_pata(monkeypatch, tower_card_persists):
     monkeypatch.setattr(pata, "random_sleep", lambda: None)
     monkeypatch.setattr(pata, "scroll_in_client_region", lambda *a, **k: None)
     monkeypatch.setattr(pata, "is_loading_screen", lambda: False)
-    monkeypatch.setattr(pata, "wait_and_click", lambda *a, **k: True)
     monkeypatch.setattr(pata, "log", lambda message: None)
-    # 「卡片消失但认不出挑战按钮」现在会顺手存一张现场图，测试里不能去截真实屏幕
-    dumps = []
-    monkeypatch.setattr(pata, "capture_failure_context",
-                        lambda *args, **kwargs: dumps.append(args))
+
+    def fake_wait_click(template_path, name, *args, **kwargs):
+        if template_path == pata.tpl_exit:
+            exits.append(name)
+        return True
+
+    monkeypatch.setattr(pata, "wait_and_click", fake_wait_click)
     monkeypatch.setattr("time.sleep", lambda seconds: None)
-    # 「天穹试炼」入口点击成功，进塔点击一律失败（模拟今天认不出「爬塔挑战」）
+    # 「天穹试炼」入口点击成功，进塔点击一律失败（模拟塔内没有可识别目标）
     monkeypatch.setattr(
         pata, "click_and_confirm",
         lambda path, name, *a, **k: "爬塔入口" in name,
@@ -121,26 +124,38 @@ def _stub_pata(monkeypatch, tower_card_persists):
             if card_hits["count"] == 1 or tower_card_persists:
                 return (640, 300)
             return None
+        if template_path == pata.tpl_patatiaozhan:
+            return (800, 700) if challenge_at_low_threshold else None
         return None
 
     monkeypatch.setattr(pata, "find_center_silent", fake_find)
-    return called, dumps
+    return called, exits
 
 
-def test_pata_enters_tower_when_confirm_failed_but_cards_gone(monkeypatch):
-    """塔卡片已消失=已离开选择页：不能因为没认出「爬塔挑战」就丢掉这座塔。"""
-    called, dumps = _stub_pata(monkeypatch, tower_card_persists=False)
+def test_pata_skips_cleared_tower_without_calling_flow_tower(monkeypatch):
+    """塔卡片已消失、塔内又没有可挑战关卡（已通关/待解锁）：按正常终态退出，
+    不再交给 flow_tower 空等 20 秒，也不再留「失败现场」。"""
+    called, exits = _stub_pata(monkeypatch, tower_card_persists=False)
+
+    assert pata.flow_pata() is True
+    assert called["flow_tower"] == 0
+    # 只该有一次「塔内无挑战返回」；末尾那次是 flow_pata 自己退玩法目录的 exit
+    assert exits.count("exit(塔内无挑战返回)") == 1
+
+
+def test_pata_calls_flow_tower_when_challenge_matches_low_threshold(monkeypatch):
+    """真有「爬塔挑战」、只是 0.9 认不出时，0.8 复查要命中并照常进 flow_tower。"""
+    called, _exits = _stub_pata(monkeypatch, tower_card_persists=False,
+                                challenge_at_low_threshold=True)
 
     assert pata.flow_pata() is True
     assert called["flow_tower"] == 1
-    # 连续三天都卡在这一步，进塔后必须留一张现场图供第二天定位
-    assert len(dumps) == 1
 
 
 def test_pata_skips_tower_when_still_on_select_page(monkeypatch):
     """仍停在选择页（点击真被吞掉）时保持原行为：跳过该塔，不误调 flow_tower。"""
-    called, dumps = _stub_pata(monkeypatch, tower_card_persists=True)
+    called, exits = _stub_pata(monkeypatch, tower_card_persists=True)
 
     assert pata.flow_pata() is True
     assert called["flow_tower"] == 0
-    assert dumps == []
+    assert exits.count("exit(塔内无挑战返回)") == 0
