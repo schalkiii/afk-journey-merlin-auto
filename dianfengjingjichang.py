@@ -206,6 +206,16 @@ def _select_opponent_and_lineup():
             [(tpl_zhandou, "战斗"), (tpl_bianji, "编辑下一场")], timeout=6.0
         )
         if hit is None:
+            # 2026-11-28 实机：点完「挑战他」6 秒内没等到阵容页，直接判「完成 0 场」。
+            # 若「挑战他」还在屏上，说明那一下点击被吞（首次点击常被窗口激活吃掉），
+            # 补点一次；若只是被弹窗压住，先关弹窗再等一轮。
+            if find_center_silent(tpl_tiaozhan, 0.8, timeout=0) is not None:
+                log("阵容页未出现，但「挑战他」仍在，补点一次。")
+                wait_and_click(tpl_tiaozhan, "挑战他(补点)", 0.8, timeout=3.0)
+                continue
+            if dismiss_popup_away_from():
+                log("阵容页被弹窗遮挡，关闭后重试。")
+                continue
             log("阵容页既没有「战斗」也没有「编辑下一场」，结束。")
             return False
         hit_tpl, hit_pos = hit

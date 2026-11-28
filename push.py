@@ -509,6 +509,21 @@ def _normal_entry_cleared():
     return find_center_silent(tpl_huanlingcha, 0.8, timeout=0) is not None
 
 
+def _on_push_page(timeout=1.0):
+    """当前是否已经回到推图页面（「挑战 / 幻灵挑战」三个锚点任一可见）。
+
+    返回阶段要用「目标状态」判断，而不是「某个面板标题消失」：排名面板的标题模板
+    在关闭动画里会间歇命中/丢失。2026-11-28 实机：exit 之后 2 秒没认出标题就以为
+    退完了，其实还停在「赛季阶段排名」面板上，随后 10 秒找不到「挑战」、15 秒找不到
+    exit，推图整项 36 秒判失败（失败现场就是排名面板）。
+    """
+    for tpl_path in (tpl_tiaozhan, tpl_tiaozhanonly, tpl_huanlingcha):
+        if find_center_silent(tpl_path, 0.8, timeout=timeout) is not None:
+            return True
+        timeout = 0
+    return False
+
+
 def claim_first_clear_reward():
     """在推图入口界面领取「赛季阶段排名 → 首通」奖励。
 
@@ -548,18 +563,8 @@ def claim_first_clear_reward():
     # 排名面板那一层必须**确认还开着**再点返回：2026-11-18 实机，这一击被吞后
     # 面板留在屏上盖住入口，推图 24 秒就判「未检测到 tiaozhan」失败。
     wait_and_click(tpl_exit, "exit(shoutong)", 0.8, timeout=3.0)
-    for attempt in range(1, 3):
-        # 面板关闭有约 1 秒动画：标题还在就补点，会把下面一层的返回键也点掉。
-        # 2026-11-27 实机：exit + exitck×2 连点三次直接退回玩法目录，随后 15 秒
-        # 找不到「挑战」、15 秒找不到 exit，推图整项 59 秒判失败（失败现场就是玩法目录）。
-        # 先等标题真的消失，等不到才补点一次。
-        closed = False
-        for _ in range(10):  # 最多等 2 秒
-            if find_center_silent(tpl_rank_title, 0.8, timeout=0) is None:
-                closed = True
-                break
-            time.sleep(0.2)
-        if closed:
+    for attempt in range(1, 4):
+        if _on_push_page():
             break
         wait_and_click(tpl_exitck, f"exitck(rank)({attempt})", 0.8, timeout=3.0)
     return claimed
